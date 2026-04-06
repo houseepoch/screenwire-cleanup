@@ -1,0 +1,5 @@
+#!/usr/bin/env python3
+"""sw_generate_dialogue — STUB (ElevenLabs TTS removed)."""
+import json, sys
+print(json.dumps({"status": "skipped", "reason": "TTS removed"}))
+sys.exit(0)

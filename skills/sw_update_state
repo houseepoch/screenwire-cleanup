@@ -1,0 +1,57 @@
+#!/usr/bin/env python3
+"""sw_update_state — Read/merge/write agent state.json at logs/{agent}/state.json."""
+
+import argparse
+import json
+import os
+import sys
+
+
+PROJECT_DIR_DEFAULT = os.getcwd()
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Update agent state in logs/{agent}/state.json.")
+    parser.add_argument("--agent", required=True, help="Agent ID")
+    parser.add_argument("--status", required=True, help="New status value")
+    parser.add_argument("--sub-phase", default=None, help="Optional sub-phase value")
+    parser.add_argument("--file", default=None, help="Optional output path (overrides default location)")
+    args = parser.parse_args()
+
+    project_dir = os.environ.get("PROJECT_DIR", PROJECT_DIR_DEFAULT)
+
+    if args.file:
+        state_path = args.file if os.path.isabs(args.file) else os.path.join(project_dir, args.file)
+    else:
+        state_path = os.path.join(project_dir, "logs", args.agent, "state.json")
+
+    os.makedirs(os.path.dirname(state_path), exist_ok=True)
+
+    # Read existing state
+    state = {}
+    if os.path.exists(state_path):
+        try:
+            with open(state_path, "r") as f:
+                state = json.load(f)
+        except (json.JSONDecodeError, OSError) as e:
+            print(f"ERROR: Could not read existing state: {e}")
+            sys.exit(1)
+
+    # Merge new fields
+    state["agent"] = args.agent
+    state["status"] = args.status
+    if args.sub_phase is not None:
+        state["sub_phase"] = args.sub_phase
+
+    try:
+        with open(state_path, "w") as f:
+            json.dump(state, f, indent=2)
+    except OSError as e:
+        print(f"ERROR: Could not write state file: {e}")
+        sys.exit(1)
+
+    print(f"SUCCESS: State updated -> {state_path} | agent={args.agent} status={args.status}")
+
+
+if __name__ == "__main__":
+    main()

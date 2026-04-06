@@ -1,0 +1,79 @@
+#!/usr/bin/env python3
+"""graph_continuity — Check continuity and trace provenance.
+
+Usage:
+    python3 graph_continuity --check f_014
+    python3 graph_continuity --check-all
+    python3 graph_continuity --trace cast_001_mei
+    python3 graph_continuity --trace "cast_001_mei@f_014"
+    python3 graph_continuity --prune cast_001_mei --cascade
+"""
+
+import argparse
+import json
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from graph.store import GraphStore
+from graph.api import check_continuity, trace_provenance, prune_and_revert
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Continuity checks and provenance tracing")
+    parser.add_argument("--project-dir", default=os.getcwd())
+    parser.add_argument("--check", help="Check continuity for a specific frame ID")
+    parser.add_argument("--check-all", action="store_true", help="Check all frames in order")
+    parser.add_argument("--trace", help="Trace provenance for a node ID")
+    parser.add_argument("--prune", help="Remove a node and optionally cascade")
+    parser.add_argument("--cascade", action="store_true", help="Cascade removal of dependents")
+    args = parser.parse_args()
+
+    store = GraphStore(args.project_dir)
+    graph = store.load()
+
+    if args.check:
+        conflicts = check_continuity(graph, args.check)
+        if conflicts:
+            print(f"CONFLICTS at {args.check}: {len(conflicts)} found")
+            for c in conflicts:
+                d = c.to_dict()
+                print(f"  [{d['severity'].upper()}] {d['conflict_type']}: {d['reason']}")
+        else:
+            print(f"OK: No continuity conflicts at {args.check}")
+
+    elif args.check_all:
+        total_conflicts = 0
+        for frame_id in graph.frame_order:
+            conflicts = check_continuity(graph, frame_id)
+            if conflicts:
+                total_conflicts += len(conflicts)
+                for c in conflicts:
+                    d = c.to_dict()
+                    print(f"  [{d['severity'].upper()}] {frame_id} — {d['conflict_type']}: {d['reason']}")
+        if total_conflicts == 0:
+            print(f"OK: All {len(graph.frame_order)} frames pass continuity checks")
+        else:
+            print(f"\nTOTAL: {total_conflicts} conflicts across {len(graph.frame_order)} frames")
+
+    elif args.trace:
+        result = trace_provenance(graph, args.trace)
+        if result:
+            print(json.dumps(result, indent=2, default=str))
+        else:
+            print(f"NOT FOUND: No node with ID '{args.trace}' in any registry")
+
+    elif args.prune:
+        removed = prune_and_revert(graph, args.prune, cascade=args.cascade)
+        print(f"PRUNED: {args.prune}")
+        print(f"  Nodes removed: {removed['nodes']}")
+        print(f"  Edges removed: {len(removed['edges'])}")
+        print(f"  States removed: {removed['states']}")
+        store.save(graph)
+
+    else:
+        parser.print_help()
+
+
+if __name__ == "__main__":
+    main()

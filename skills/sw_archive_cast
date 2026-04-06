@@ -1,0 +1,145 @@
+#!/usr/bin/env python3
+"""sw_archive_cast — Archive current cast composites before regeneration.
+
+Copies all cast composite images and state variants into a timestamped
+archive directory. This preserves the previous generation so it can be
+compared, debugged, or rolled back if the new generation is worse.
+
+Archive structure:
+    cast/composites/archive/v{version}_{timestamp}/
+        cast_001_mei_ref.png
+        cast_001_mei/hair_released_ref.png
+        cast_001_mei/hair_wild_barefoot_ref.png
+        cast_002_lin_ref.png
+        ...
+
+The version number is auto-incremented by scanning existing archives.
+
+Usage:
+    python3 sw_archive_cast
+    python3 sw_archive_cast --project-dir /path/to/project
+    python3 sw_archive_cast --reason "pre-regen: fixing period accuracy"
+"""
+
+import argparse
+import json
+import os
+import shutil
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+PROJECT_DIR_DEFAULT = os.environ.get(
+    "PROJECT_DIR",
+    os.getcwd()
+)
+
+
+def get_next_version(archive_dir: Path) -> int:
+    """Scan existing archive folders and return next version number."""
+    if not archive_dir.exists():
+        return 1
+    existing = []
+    for d in archive_dir.iterdir():
+        if d.is_dir() and d.name.startswith("v"):
+            try:
+                # Parse "v3_2026-04-03T..." -> 3
+                version_str = d.name.split("_")[0][1:]
+                existing.append(int(version_str))
+            except (ValueError, IndexError):
+                continue
+    return max(existing, default=0) + 1
+
+
+def archive_cast(project_dir: Path, reason: str = "") -> dict:
+    """Archive all current cast composites and state variants.
+
+    Returns a summary dict with archive path, file count, and details.
+    """
+    composites_dir = project_dir / "cast" / "composites"
+    archive_base = composites_dir / "archive"
+
+    if not composites_dir.exists():
+        print("ERROR: cast/composites/ directory not found")
+        sys.exit(1)
+
+    # Collect all files to archive (excluding archive dir itself)
+    files_to_archive = []
+
+    # Base composites: cast/composites/*_ref.png
+    for f in sorted(composites_dir.glob("*_ref.png")):
+        files_to_archive.append(f)
+
+    # State variants: cast/composites/{castId}/*_ref.png
+    for subdir in sorted(composites_dir.iterdir()):
+        if subdir.is_dir() and subdir.name != "archive":
+            for f in sorted(subdir.glob("*_ref.png")):
+                files_to_archive.append(f)
+
+    if not files_to_archive:
+        print("WARNING: No cast composite images found to archive")
+        return {"archived": 0, "path": None}
+
+    # Create archive directory
+    version = get_next_version(archive_base)
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H%M%SZ")
+    archive_name = f"v{version}_{timestamp}"
+    archive_path = archive_base / archive_name
+    archive_path.mkdir(parents=True, exist_ok=True)
+
+    # Copy files preserving relative structure
+    archived_files = []
+    for src in files_to_archive:
+        # Get path relative to composites_dir
+        rel = src.relative_to(composites_dir)
+        dst = archive_path / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
+        archived_files.append(str(rel))
+
+    # Write archive manifest
+    archive_manifest = {
+        "version": version,
+        "timestamp": timestamp,
+        "reason": reason,
+        "file_count": len(archived_files),
+        "files": archived_files,
+        "source_dir": str(composites_dir),
+    }
+    manifest_path = archive_path / "_archive_manifest.json"
+    manifest_path.write_text(json.dumps(archive_manifest, indent=2))
+
+    return {
+        "archived": len(archived_files),
+        "version": version,
+        "path": str(archive_path),
+        "files": archived_files,
+    }
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Archive cast composites before regeneration.")
+    parser.add_argument("--project-dir", default=None, help="Path to project directory")
+    parser.add_argument("--reason", default="", help="Reason for archiving (logged in archive manifest)")
+    args = parser.parse_args()
+
+    project_dir = Path(args.project_dir) if args.project_dir else Path(
+        os.environ.get("PROJECT_DIR", PROJECT_DIR_DEFAULT)
+    )
+
+    result = archive_cast(project_dir, args.reason)
+
+    if result["archived"] == 0:
+        print("WARNING: No files archived")
+        sys.exit(0)
+
+    print(f"SUCCESS: Archived {result['archived']} files -> {result['path']}")
+    print(f"  version: v{result['version']}")
+    for f in result["files"]:
+        print(f"    {f}")
+    print()
+    print("Previous composites preserved. Safe to regenerate.")
+
+
+if __name__ == "__main__":
+    main()

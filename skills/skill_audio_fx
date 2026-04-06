@@ -1,0 +1,248 @@
+#!/usr/bin/env python3
+"""skill_audio_fx — Apply environmental audio effects to dialogue via ffmpeg.
+
+Transforms clean TTS audio to sound like it was recorded in the scene's
+environment: outdoor jungle, inside a vehicle, over radio, shouting from
+distance, whispering up close, etc.
+
+Usage:
+    python3 skill_audio_fx --input path.mp3 --out path.mp3 --env "outdoor,jungle,close"
+    python3 skill_audio_fx --input path.mp3 --out path.mp3 --env "indoor,small_room,radio"
+    python3 skill_audio_fx --input path.mp3 --out path.mp3 --env "outdoor,open,far,shouting"
+"""
+
+import argparse
+import os
+import subprocess
+import sys
+
+
+# ---------------------------------------------------------------------------
+# Environment tag -> ffmpeg filter chain mapping
+# ---------------------------------------------------------------------------
+
+# Base reverb presets (impulse-free, using aecho/reverb filters)
+REVERB_PRESETS = {
+    "outdoor_open":     "aecho=0.8:0.7:40|60:0.15|0.10",
+    "outdoor_jungle":   "aecho=0.8:0.7:30|50|80:0.20|0.15|0.10",
+    "indoor_large":     "aecho=0.8:0.88:60|100|140:0.30|0.25|0.20",
+    "indoor_small":     "aecho=0.8:0.88:20|40:0.25|0.15",
+    "indoor_concrete":  "aecho=0.8:0.88:30|60|90|120:0.35|0.30|0.25|0.20",
+    "vehicle":          "aecho=0.8:0.88:10|20:0.15|0.10",
+    "helicopter":       "aecho=0.8:0.88:8|15:0.10|0.08",
+}
+
+# Distance simulation (lowpass + volume reduction)
+DISTANCE_FILTERS = {
+    "intimate":   "",  # no change — right at the ear
+    "close":      "lowpass=f=8000",
+    "medium":     "lowpass=f=5000,volume=0.85",
+    "far":        "lowpass=f=3000,volume=0.65",
+    "very_far":   "lowpass=f=2000,volume=0.45,aecho=0.8:0.7:100:0.20",
+}
+
+# Medium / transmission filters
+MEDIUM_FILTERS = {
+    "radio":        "highpass=f=300,lowpass=f=3400,volume=0.9,aecho=0.8:0.5:5:0.05",
+    "phone":        "highpass=f=400,lowpass=f=3000,volume=0.85",
+    "comms":        "highpass=f=300,lowpass=f=3400,volume=0.9,aecho=0.8:0.5:5:0.05",
+    "megaphone":    "highpass=f=500,lowpass=f=4000,volume=1.3,overdrive=gain=3",
+    "muffled":      "lowpass=f=1500,volume=0.8",
+    "underwater":   "lowpass=f=800,volume=0.6,flanger=delay=3:depth=2:speed=0.3",
+}
+
+# Vocal intensity adjustments
+INTENSITY_FILTERS = {
+    "whisper":      "volume=0.7,highpass=f=200",
+    "quiet":        "volume=0.85",
+    "normal":       "",
+    "loud":         "volume=1.2,compand=attacks=0.01:decays=0.3:points=-80/-80|-30/-15|0/-3:soft-knee=6",
+    "shouting":     "volume=1.4,compand=attacks=0.01:decays=0.2:points=-80/-80|-30/-10|0/-2:soft-knee=6,highpass=f=150",
+    "screaming":    "volume=1.5,compand=attacks=0.005:decays=0.15:points=-80/-80|-30/-8|0/-1:soft-knee=6,highpass=f=200",
+}
+
+# Noise floor / atmosphere (mixed very low under dialogue)
+ATMOSPHERE_NOISE = {
+    "wind":         "anoisesrc=a=0.008:c=pink:d=0,lowpass=f=400",
+    "rain":         "anoisesrc=a=0.010:c=white:d=0,lowpass=f=2000",
+    "static":       "anoisesrc=a=0.015:c=white:d=0,bandpass=f=1500:w=2000",
+    "hum":          "aevalsrc=sin(60*2*PI*t)*0.005:d=0",
+    "jungle":       "anoisesrc=a=0.006:c=pink:d=0,lowpass=f=600",
+}
+
+
+def parse_env_tags(env_str: str) -> dict:
+    """Parse comma-separated environment tags into categorized dict."""
+    tags = [t.strip().lower().replace(" ", "_") for t in env_str.split(",")]
+
+    result = {
+        "reverb": None,
+        "distance": "close",  # default
+        "medium": None,
+        "intensity": "normal",  # default
+        "atmosphere": [],
+    }
+
+    for tag in tags:
+        # Location -> reverb
+        if tag in ("outdoor", "outside", "exterior"):
+            result["reverb"] = "outdoor_open"
+        elif tag in ("jungle", "forest", "woods"):
+            result["reverb"] = "outdoor_jungle"
+        elif tag in ("indoor", "inside", "interior", "room"):
+            result["reverb"] = "indoor_small"
+        elif tag in ("large_room", "hall", "warehouse", "hangar"):
+            result["reverb"] = "indoor_large"
+        elif tag in ("concrete", "bunker", "tunnel", "storage"):
+            result["reverb"] = "indoor_concrete"
+        elif tag in ("small_room", "closet", "cockpit", "cab"):
+            result["reverb"] = "indoor_small"
+        elif tag in ("vehicle", "truck", "car"):
+            result["reverb"] = "vehicle"
+        elif tag in ("helicopter", "helo", "chopper", "blackhawk"):
+            result["reverb"] = "helicopter"
+        elif tag in ("open", "field", "clearing", "ridge"):
+            result["reverb"] = "outdoor_open"
+
+        # Distance
+        elif tag in ("intimate", "very_close", "ear"):
+            result["distance"] = "intimate"
+        elif tag in ("close", "near"):
+            result["distance"] = "close"
+        elif tag in ("medium", "mid"):
+            result["distance"] = "medium"
+        elif tag in ("far", "distant"):
+            result["distance"] = "far"
+        elif tag in ("very_far", "remote"):
+            result["distance"] = "very_far"
+
+        # Medium
+        elif tag in ("radio", "comms", "over_radio"):
+            result["medium"] = "radio"
+        elif tag in ("phone", "over_phone"):
+            result["medium"] = "phone"
+        elif tag in ("megaphone", "loudspeaker", "pa"):
+            result["medium"] = "megaphone"
+        elif tag in ("muffled", "through_wall", "through_door"):
+            result["medium"] = "muffled"
+
+        # Intensity
+        elif tag in ("whisper", "whispering", "whispered"):
+            result["intensity"] = "whisper"
+        elif tag in ("quiet", "soft", "hushed", "low"):
+            result["intensity"] = "quiet"
+        elif tag in ("loud", "raised"):
+            result["intensity"] = "loud"
+        elif tag in ("shouting", "shout", "yelling", "yell"):
+            result["intensity"] = "shouting"
+        elif tag in ("screaming", "scream"):
+            result["intensity"] = "screaming"
+
+        # Atmosphere
+        elif tag in ("wind", "windy"):
+            result["atmosphere"].append("wind")
+        elif tag in ("rain", "raining"):
+            result["atmosphere"].append("rain")
+        elif tag in ("static", "radio_static"):
+            result["atmosphere"].append("static")
+        elif tag in ("hum", "generator", "electrical"):
+            result["atmosphere"].append("hum")
+        elif tag in ("jungle_ambient", "insects", "jungle_sounds"):
+            result["atmosphere"].append("jungle")
+
+    return result
+
+
+def build_filter_chain(env: dict) -> str:
+    """Build the ffmpeg -af filter chain from parsed environment tags."""
+    filters = []
+
+    # 1. Intensity first (affects the voice itself)
+    intensity = INTENSITY_FILTERS.get(env["intensity"], "")
+    if intensity:
+        filters.append(intensity)
+
+    # 2. Medium filter (radio, phone, etc.) — applied before reverb
+    if env["medium"]:
+        medium = MEDIUM_FILTERS.get(env["medium"], "")
+        if medium:
+            filters.append(medium)
+
+    # 3. Reverb (environment acoustics)
+    if env["reverb"]:
+        reverb = REVERB_PRESETS.get(env["reverb"], "")
+        if reverb:
+            filters.append(reverb)
+
+    # 4. Distance (lowpass + volume)
+    distance = DISTANCE_FILTERS.get(env["distance"], "")
+    if distance:
+        filters.append(distance)
+
+    # Final normalize to prevent clipping
+    filters.append("loudnorm=I=-16:TP=-1.5:LRA=11")
+
+    return ",".join(f for f in filters if f)
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Apply environmental audio FX to dialogue audio via ffmpeg.")
+    parser.add_argument("--input", required=True, help="Input audio file path")
+    parser.add_argument("--out", required=True, help="Output audio file path")
+    parser.add_argument("--env", required=True,
+                        help="Comma-separated environment tags: "
+                             "outdoor,jungle,close,shouting,wind")
+    args = parser.parse_args()
+
+    project_dir = os.environ.get("PROJECT_DIR", ".")
+
+    def resolve(p):
+        return p if os.path.isabs(p) else os.path.join(project_dir, p)
+
+    input_path = resolve(args.input)
+    output_path = resolve(args.out)
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+    if not os.path.exists(input_path):
+        print(f"ERROR: Input file not found: {input_path}")
+        sys.exit(1)
+
+    # Parse environment tags
+    env = parse_env_tags(args.env)
+
+    # Build filter chain
+    filter_chain = build_filter_chain(env)
+
+    print(f"  Environment: {args.env}")
+    print(f"  Parsed: reverb={env['reverb']}, distance={env['distance']}, "
+          f"medium={env['medium']}, intensity={env['intensity']}")
+    print(f"  Filter chain: {filter_chain}")
+
+    # Apply via ffmpeg
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", input_path,
+        "-af", filter_chain,
+        "-ar", "44100",
+        "-ac", "1",
+        output_path,
+    ]
+
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+
+    if result.returncode != 0:
+        print(f"ERROR: ffmpeg failed: {result.stderr[:500]}")
+        sys.exit(1)
+
+    # Verify output
+    if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
+        print(f"ERROR: Output file missing or empty: {output_path}")
+        sys.exit(1)
+
+    size_kb = os.path.getsize(output_path) / 1024
+    print(f"SUCCESS: Audio FX applied -> {output_path} ({size_kb:.1f}KB)")
+
+
+if __name__ == "__main__":
+    main()

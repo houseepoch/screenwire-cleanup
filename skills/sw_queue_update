@@ -1,0 +1,111 @@
+#!/usr/bin/env python3
+"""sw_queue_update — Write a manifest micro-update JSON to the dispatch queue (no HTTP call)."""
+
+import argparse
+import json
+import os
+import re
+import sys
+import time
+
+
+PROJECT_DIR_DEFAULT = os.getcwd()
+
+
+def strip_fences(text: str) -> str:
+    return re.sub(r'^```\w*\n|\n```$', '', text.strip())
+
+
+# Entity key -> target name + ID field for auto-wrapping
+_ENTITY_MAP = {
+    "cast": ("cast", "castId"),
+    "locations": ("location", "locationId"),
+    "props": ("prop", "propId"),
+    "frames": ("frame", "frameId"),
+}
+
+
+def _auto_wrap_updates(payload: dict) -> dict:
+    """Auto-detect and fix payloads that don't use the {"updates": [...]} format.
+
+    The manifest reconciler ONLY processes {"updates": [{"target": ..., "set": {...}}]}.
+    Agents sometimes send raw arrays like {"cast": [...], "frames": [...]}.
+    This function detects that pattern and auto-wraps into the correct format.
+    """
+    # Already correct format
+    if "updates" in payload and isinstance(payload["updates"], list):
+        return payload
+
+    updates = []
+    converted = False
+
+    for key, (target, id_field) in _ENTITY_MAP.items():
+        if key in payload and isinstance(payload[key], list):
+            for item in payload[key]:
+                if isinstance(item, dict):
+                    entity_id = item.pop(id_field, None)
+                    if entity_id:
+                        updates.append({
+                            "target": target,
+                            id_field: entity_id,
+                            "set": item,
+                        })
+                    else:
+                        print(f"WARNING: {key} item missing {id_field}, skipping",
+                              file=sys.stderr)
+            converted = True
+
+    # Handle dialoguePath at project level
+    if "dialoguePath" in payload:
+        updates.append({
+            "target": "project",
+            "set": {"dialoguePath": payload["dialoguePath"]},
+        })
+        converted = True
+
+    if converted and updates:
+        print(f"AUTO-FIX: Converted raw entity payload to updates[] format "
+              f"({len(updates)} updates)", file=sys.stderr)
+        return {"updates": updates}
+
+    # If we couldn't convert, return as-is (may be a different valid format)
+    return payload
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Queue a manifest micro-update JSON file.")
+    parser.add_argument("--payload", required=True, help="JSON string payload (markdown fences will be stripped)")
+    args = parser.parse_args()
+
+    project_dir = os.environ.get("PROJECT_DIR", PROJECT_DIR_DEFAULT)
+
+    raw = strip_fences(args.payload)
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as e:
+        print(f"ERROR: Invalid JSON payload: {e}")
+        sys.exit(1)
+
+    # Auto-fix: convert raw entity arrays to proper {"updates": [...]} format
+    # The reconciler ONLY processes {"updates": [...]} — anything else is silently dropped
+    payload = _auto_wrap_updates(payload)
+
+    queue_dir = os.path.join(project_dir, "dispatch", "manifest_queue")
+    os.makedirs(queue_dir, exist_ok=True)
+
+    timestamp = int(time.time() * 1000)
+    filename = f"micro-update_{timestamp}.json"
+    out_path = os.path.join(queue_dir, filename)
+
+    try:
+        with open(out_path, "w") as f:
+            json.dump(payload, f, indent=2)
+    except OSError as e:
+        print(f"ERROR: Could not write file: {e}")
+        sys.exit(1)
+
+    print(f"SUCCESS: Queued update -> {out_path}")
+
+
+if __name__ == "__main__":
+    main()

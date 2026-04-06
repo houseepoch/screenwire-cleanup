@@ -1,0 +1,29 @@
+#!/usr/bin/env python3
+"""graph_materialize — Export graph to flat files for downstream skills."""
+
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from graph.store import GraphStore
+from graph.materializer import materialize_all
+
+
+def main():
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--project-dir", default=os.getcwd())
+    args = parser.parse_args()
+
+    store = GraphStore(args.project_dir)
+    graph = store.load()
+
+    counts = materialize_all(graph, args.project_dir)
+
+    print(f"SUCCESS: Graph materialized")
+    for k, v in counts.items():
+        print(f"  {k}: {v}")
+
+
+if __name__ == "__main__":
+    main()

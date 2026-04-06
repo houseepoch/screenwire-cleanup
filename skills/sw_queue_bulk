@@ -1,0 +1,168 @@
+#!/usr/bin/env python3
+"""sw_queue_bulk — Build and queue a bulk manifest update from entity JSON files.
+
+Reads entity JSON files from disk (cast/*.json, locations/*.json, props/*.json)
+and a frames JSON array, then constructs the correct sw_queue_update payload
+format automatically. Eliminates the risk of agents building the payload wrong.
+
+Usage:
+    python3 sw_queue_bulk --cast cast/*.json --locations locations/*.json --props props/*.json --frames frames_array.json --dialogue dialogue.json
+    python3 sw_queue_bulk --frames-inline '[{"frameId":"f_001","sceneId":"scene_01",...}]'
+"""
+
+import argparse
+import glob
+import json
+import os
+import re
+import sys
+import time
+
+
+PROJECT_DIR_DEFAULT = os.getcwd()
+
+
+def _read_json(path: str) -> dict:
+    text = open(path).read()
+    text = re.sub(r'^```\w*\n|\n```$', '', text.strip())
+    return json.loads(text)
+
+
+def _build_updates(cast_files, loc_files, prop_files, frames, dialogue_path):
+    updates = []
+
+    for f in cast_files:
+        try:
+            data = _read_json(f)
+            cast_id = data.get("castId", os.path.splitext(os.path.basename(f))[0])
+            updates.append({
+                "target": "cast",
+                "castId": cast_id,
+                "set": {
+                    "name": data.get("name", cast_id),
+                    "role": data.get("role", "supporting"),
+                    "profilePath": os.path.relpath(f, os.environ.get("PROJECT_DIR", PROJECT_DIR_DEFAULT)),
+                    "compositePath": None,
+                    "voiceProfilePath": None,
+                }
+            })
+        except Exception as e:
+            print(f"WARNING: Skipping cast file {f}: {e}", file=sys.stderr)
+
+    for f in loc_files:
+        try:
+            data = _read_json(f)
+            loc_id = data.get("locationId", os.path.splitext(os.path.basename(f))[0])
+            updates.append({
+                "target": "location",
+                "locationId": loc_id,
+                "set": {
+                    "name": data.get("name", loc_id),
+                    "profilePath": os.path.relpath(f, os.environ.get("PROJECT_DIR", PROJECT_DIR_DEFAULT)),
+                    "primaryImagePath": None,
+                }
+            })
+        except Exception as e:
+            print(f"WARNING: Skipping location file {f}: {e}", file=sys.stderr)
+
+    for f in prop_files:
+        try:
+            data = _read_json(f)
+            prop_id = data.get("propId", os.path.splitext(os.path.basename(f))[0])
+            updates.append({
+                "target": "prop",
+                "propId": prop_id,
+                "set": {
+                    "name": data.get("name", prop_id),
+                    "profilePath": os.path.relpath(f, os.environ.get("PROJECT_DIR", PROJECT_DIR_DEFAULT)),
+                    "imagePath": None,
+                }
+            })
+        except Exception as e:
+            print(f"WARNING: Skipping prop file {f}: {e}", file=sys.stderr)
+
+    for frame in frames:
+        frame_id = frame.pop("frameId", None)
+        if not frame_id:
+            print(f"WARNING: Frame missing frameId, skipping", file=sys.stderr)
+            continue
+        updates.append({
+            "target": "frame",
+            "frameId": frame_id,
+            "set": frame,
+        })
+
+    if dialogue_path:
+        updates.append({
+            "target": "project",
+            "set": {"dialoguePath": dialogue_path}
+        })
+
+    return updates
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Build and queue a bulk manifest update.")
+    parser.add_argument("--cast", nargs="*", default=[], help="Cast profile JSON files")
+    parser.add_argument("--locations", nargs="*", default=[], help="Location profile JSON files")
+    parser.add_argument("--props", nargs="*", default=[], help="Prop profile JSON files")
+    parser.add_argument("--frames", default=None, help="Path to JSON file containing frames array")
+    parser.add_argument("--frames-inline", default=None, help="Inline JSON array of frame objects")
+    parser.add_argument("--dialogue", default=None, help="Dialogue JSON path to set on project")
+    parser.add_argument("--dry-run", action="store_true", help="Print payload without queuing")
+    args = parser.parse_args()
+
+    project_dir = os.environ.get("PROJECT_DIR", PROJECT_DIR_DEFAULT)
+
+    # Expand globs
+    cast_files = []
+    for p in args.cast:
+        cast_files.extend(glob.glob(p))
+    cast_files = [f for f in cast_files if f.endswith(".json") and "composites" not in f]
+
+    loc_files = []
+    for p in args.locations:
+        loc_files.extend(glob.glob(p))
+    loc_files = [f for f in loc_files if f.endswith(".json")]
+
+    prop_files = []
+    for p in args.props:
+        prop_files.extend(glob.glob(p))
+    prop_files = [f for f in prop_files if f.endswith(".json")]
+
+    # Frames
+    frames = []
+    if args.frames and os.path.exists(args.frames):
+        frames = json.loads(open(args.frames).read())
+    elif args.frames_inline:
+        raw = re.sub(r'^```\w*\n|\n```$', '', args.frames_inline.strip())
+        frames = json.loads(raw)
+
+    if not cast_files and not loc_files and not prop_files and not frames:
+        print("ERROR: No entities to update. Provide --cast, --locations, --props, or --frames.")
+        sys.exit(1)
+
+    updates = _build_updates(cast_files, loc_files, prop_files, frames, args.dialogue)
+    payload = {"updates": updates}
+
+    print(f"Built payload: {len(updates)} updates ({len(cast_files)} cast, {len(loc_files)} locs, {len(prop_files)} props, {len(frames)} frames)")
+
+    if args.dry_run:
+        print(json.dumps(payload, indent=2))
+        return
+
+    # Write to queue
+    queue_dir = os.path.join(project_dir, "dispatch", "manifest_queue")
+    os.makedirs(queue_dir, exist_ok=True)
+    timestamp = int(time.time() * 1000)
+    filename = f"bulk-update_{timestamp}.json"
+    out_path = os.path.join(queue_dir, filename)
+
+    with open(out_path, "w") as f:
+        json.dump(payload, f, indent=2)
+
+    print(f"SUCCESS: Queued bulk update -> {out_path}")
+
+
+if __name__ == "__main__":
+    main()

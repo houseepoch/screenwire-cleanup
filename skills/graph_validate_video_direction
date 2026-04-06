@@ -1,0 +1,122 @@
+#!/usr/bin/env python3
+"""graph_validate_video_direction — Validate that all frames have video direction data.
+
+Checks every FrameNode for:
+  - suggested_duration is set and in range 3-15
+  - action_summary is non-empty
+  - Dialogue frames have dialogue_ids linked
+  - Duration is reasonable for the formula tag
+
+Prints a structured report. Exits 0 if all pass, 1 if any fail.
+
+Usage:
+    python3 graph_validate_video_direction --project-dir .
+    python3 graph_validate_video_direction --project-dir . --fix  # auto-fix missing durations with heuristics
+"""
+
+import argparse
+import json
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from graph.store import GraphStore
+
+
+# Formula tag → recommended duration range (min, max)
+DURATION_RANGES = {
+    "F01": (4, 6), "F02": (4, 6), "F03": (5, 8), "F04": (4, 6),
+    "F05": (4, 6), "F07": (6, 10), "F08": (3, 4), "F10": (5, 8),
+    "F11": (3, 4), "F12": (8, 15), "F17": (8, 15), "F18": (6, 10),
+}
+
+# Default fallback durations per formula tag
+DEFAULT_DURATION = {
+    "F01": 5, "F02": 5, "F03": 6, "F04": 5, "F05": 5,
+    "F07": 8, "F08": 4, "F10": 5, "F11": 4, "F12": 10,
+    "F17": 10, "F18": 8,
+}
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Validate video direction data on all frames.")
+    parser.add_argument("--project-dir", default=os.getcwd())
+    parser.add_argument("--fix", action="store_true",
+                        help="Auto-fix missing durations with formula-based heuristics")
+    args = parser.parse_args()
+
+    store = GraphStore(args.project_dir)
+    graph = store.load()
+
+    errors = []
+    warnings = []
+    fixed = 0
+    total = len(graph.frame_order)
+
+    for frame_id in graph.frame_order:
+        frame = graph.frames.get(frame_id)
+        if not frame:
+            errors.append(f"{frame_id}: FrameNode not found in graph")
+            continue
+
+        tag = frame.formula_tag or "F07"
+
+        # Check suggested_duration
+        if frame.suggested_duration is None:
+            if args.fix:
+                frame.suggested_duration = DEFAULT_DURATION.get(tag, 5)
+                fixed += 1
+            else:
+                errors.append(f"{frame_id}: suggested_duration is missing")
+        elif not (3 <= frame.suggested_duration <= 15):
+            errors.append(f"{frame_id}: suggested_duration={frame.suggested_duration} out of range 3-15")
+        else:
+            # Check against formula range
+            lo, hi = DURATION_RANGES.get(tag, (3, 15))
+            if frame.suggested_duration < lo or frame.suggested_duration > hi:
+                warnings.append(
+                    f"{frame_id}: suggested_duration={frame.suggested_duration} "
+                    f"outside typical range {lo}-{hi} for {tag}"
+                )
+
+        # Check action_summary
+        if not frame.action_summary or len(frame.action_summary.strip()) < 10:
+            if frame.action_summary:
+                errors.append(f"{frame_id}: action_summary too short ({len(frame.action_summary)} chars): '{frame.action_summary}'")
+            else:
+                errors.append(f"{frame_id}: action_summary is missing")
+
+        # Check dialogue linkage
+        if frame.is_dialogue and not frame.dialogue_ids:
+            errors.append(f"{frame_id}: is_dialogue=True but no dialogue_ids linked")
+
+    # Save fixes if any
+    if args.fix and fixed > 0:
+        store.save(graph)
+        print(f"FIXED: Auto-set suggested_duration on {fixed} frames using formula heuristics")
+
+    # Report
+    print(f"VIDEO DIRECTION VALIDATION: {total} frames checked")
+    print(f"  errors: {len(errors)}")
+    print(f"  warnings: {len(warnings)}")
+
+    if errors:
+        print(f"\nERRORS:")
+        for e in errors:
+            print(f"  - {e}")
+
+    if warnings:
+        print(f"\nWARNINGS:")
+        for w in warnings:
+            print(f"  - {w}")
+
+    if not errors:
+        print(f"\nSUCCESS: All frames have valid video direction data")
+        sys.exit(0)
+    else:
+        print(f"\nFAILED: {len(errors)} frame(s) missing required video direction data")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

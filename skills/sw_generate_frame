@@ -1,0 +1,114 @@
+#!/usr/bin/env python3
+"""sw_generate_frame — POST to /internal/generate-frame (google/nano-banana-2) for composed scene frames.
+
+Supports --ref-images for character/location consistency via nano-banana-2's image_input (up to 14 refs).
+On safety filter failure, prints structured error with rephrase hints.
+"""
+
+import argparse
+import json
+import os
+import sys
+import httpx
+
+
+PROJECT_DIR_DEFAULT = os.getcwd()
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Generate a high-quality frame via nano-banana-2.")
+    parser.add_argument("--prompt", required=True, help="Frame composition prompt")
+    parser.add_argument("--out", required=True, help="Output file path (relative or absolute)")
+    parser.add_argument("--size", default="landscape_16_9", help="Image size preset (default: landscape_16_9)")
+    parser.add_argument("--seed", type=int, default=None, help="Seed for reproducibility")
+    parser.add_argument("--ref-images", default="", help="Comma-separated paths to reference images (cast composites, location refs)")
+    args = parser.parse_args()
+
+    project_dir = os.environ.get("PROJECT_DIR", PROJECT_DIR_DEFAULT)
+    out_abs = args.out if os.path.isabs(args.out) else os.path.join(project_dir, args.out)
+    os.makedirs(os.path.dirname(out_abs), exist_ok=True)
+
+    # Resolve reference image paths
+    ref_images = []
+    if args.ref_images:
+        for ref in args.ref_images.split(","):
+            ref = ref.strip()
+            if not ref:
+                continue
+            ref_abs = ref if os.path.isabs(ref) else os.path.join(project_dir, ref)
+            if os.path.exists(ref_abs):
+                ref_images.append(ref_abs)
+            else:
+                print(f"WARNING: Reference image not found: {ref_abs}", file=sys.stderr)
+
+    body = {
+        "prompt": args.prompt,
+        "image_size": args.size,
+        "output_path": out_abs,
+        "output_format": "png",
+        "reference_images": ref_images,
+    }
+    if args.seed is not None:
+        body["seed"] = args.seed
+
+    try:
+        resp = httpx.post("http://localhost:8000/internal/generate-frame", json=body, timeout=180)
+        if resp.status_code == 502:
+            _handle_prediction_failure(resp, args.prompt, out_abs)
+            return
+        resp.raise_for_status()
+        data = resp.json()
+    except httpx.HTTPError as e:
+        print(f"ERROR: HTTP request failed: {e}")
+        sys.exit(1)
+    except Exception as e:
+        print(f"ERROR: {e}")
+        sys.exit(1)
+
+    print(f"SUCCESS: Frame generated -> {out_abs}")
+    if ref_images:
+        print(f"  reference_images: {len(ref_images)}")
+    if isinstance(data, dict):
+        for k, v in data.items():
+            if k != "output_path":
+                print(f"  {k}: {v}")
+
+
+def _handle_prediction_failure(resp, prompt, out_path):
+    """Parse structured error from server and print actionable info for the agent."""
+    try:
+        error_data = resp.json().get("detail", {})
+        if isinstance(error_data, str):
+            error_data = json.loads(error_data) if error_data.startswith("{") else {"error": error_data}
+    except Exception:
+        error_data = {"error": resp.text}
+
+    failure_type = error_data.get("failure_type", "UNKNOWN")
+    error_code = error_data.get("error_code", "UNKNOWN")
+    is_retryable = error_data.get("is_retryable", False)
+    hints = error_data.get("rephrase_hints", [])
+    prediction_id = error_data.get("prediction_id", "")
+
+    print(f"FAILED: Frame generation failed")
+    print(f"  failure_type: {failure_type}")
+    print(f"  error_code: {error_code}")
+    print(f"  prediction_id: {prediction_id}")
+    print(f"  output_path: {out_path}")
+    print(f"  original_prompt: {prompt}")
+    print(f"  is_retryable: {is_retryable}")
+
+    if hints:
+        print(f"  rephrase_hints:")
+        for hint in hints:
+            print(f"    - {hint}")
+
+    if is_retryable:
+        print(f"  ACTION_REQUIRED: Rephrase the prompt using the hints above, then call sw_generate_frame again with the new prompt.")
+    else:
+        print(f"  ACTION_REQUIRED: This error is not retryable. Skip this frame and log the failure.")
+
+    sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

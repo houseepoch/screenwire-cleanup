@@ -1,0 +1,128 @@
+#!/usr/bin/env python3
+"""graph_run — Execute a Python script with the graph API pre-loaded.
+
+Morpheus can write .py scripts that use the graph API directly and run
+them through this skill. The graph is loaded, the script runs, and the
+graph is saved automatically.
+
+Usage:
+    python3 $SKILLS_DIR/graph_run --script my_script.py --project-dir .
+
+The script has these variables pre-loaded in its namespace:
+    graph     — the loaded NarrativeGraph object
+    store     — the GraphStore instance
+    api       — the graph.api module (query_graph, upsert_node, etc.)
+    schema    — the graph.schema module (all node types, enums)
+    Path      — pathlib.Path
+    json      — json module
+    PROJECT_DIR — path string to project directory
+
+After the script runs, the graph is automatically saved.
+"""
+
+import argparse
+import json
+import os
+import sys
+import traceback
+from pathlib import Path
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from graph.store import GraphStore
+from graph import api
+from graph import schema
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Run Python script with graph API")
+    parser.add_argument("--script", required=True, help="Path to .py script")
+    parser.add_argument("--project-dir", default=os.getcwd())
+    args = parser.parse_args()
+
+    script_path = args.script
+    if not os.path.isabs(script_path):
+        script_path = os.path.join(args.project_dir, script_path)
+
+    if not os.path.exists(script_path):
+        print(f"ERROR: Script not found: {script_path}")
+        sys.exit(1)
+
+    with open(script_path, "r", encoding="utf-8") as f:
+        script_code = f.read()
+
+    store = GraphStore(args.project_dir)
+    graph = store.load()
+
+    # Build execution namespace with all graph tools pre-loaded
+    namespace = {
+        "graph": graph,
+        "store": store,
+        "api": api,
+        "schema": schema,
+        "Path": Path,
+        "json": json,
+        "os": os,
+        "PROJECT_DIR": args.project_dir,
+        # Convenience shortcuts
+        "query_graph": api.query_graph,
+        "upsert_node": api.upsert_node,
+        "upsert_frame_state": api.upsert_frame_state,
+        "create_edge": api.create_edge,
+        "close_temporal_edge": api.close_temporal_edge,
+        "check_continuity": api.check_continuity,
+        "trace_provenance": api.trace_provenance,
+        "prune_and_revert": api.prune_and_revert,
+        "propagate_cast_state": api.propagate_cast_state,
+        "propagate_prop_state": api.propagate_prop_state,
+        "propagate_location_state": api.propagate_location_state,
+        "get_frame_context": api.get_frame_context,
+        # Schema types
+        "NarrativeGraph": schema.NarrativeGraph,
+        "CastNode": schema.CastNode,
+        "CastIdentity": schema.CastIdentity,
+        "CastVoice": schema.CastVoice,
+        "CastFrameState": schema.CastFrameState,
+        "LocationNode": schema.LocationNode,
+        "LocationFrameState": schema.LocationFrameState,
+        "PropNode": schema.PropNode,
+        "PropFrameState": schema.PropFrameState,
+        "SceneNode": schema.SceneNode,
+        "FrameNode": schema.FrameNode,
+        "DialogueNode": schema.DialogueNode,
+        "GraphEdge": schema.GraphEdge,
+        "Provenance": schema.Provenance,
+        "FormulaTag": schema.FormulaTag,
+        "EdgeType": schema.EdgeType,
+        "CastFrameRole": schema.CastFrameRole,
+        "PropFrameRole": schema.PropFrameRole,
+        "TimeOfDay": schema.TimeOfDay,
+        "Posture": schema.Posture,
+        "EmotionalArc": schema.EmotionalArc,
+        "FrameEnvironment": schema.FrameEnvironment,
+        "FrameLighting": schema.FrameLighting,
+        "FrameAtmosphere": schema.FrameAtmosphere,
+        "FrameComposition": schema.FrameComposition,
+    }
+
+    try:
+        exec(compile(script_code, script_path, "exec"), namespace)
+    except Exception as e:
+        print(f"ERROR: Script failed: {e}")
+        traceback.print_exc()
+        # Still save graph in case partial work was done
+        store.save(graph)
+        print(f"  Graph saved (partial) -> {store.graph_path}")
+        sys.exit(1)
+
+    # Save graph after successful execution
+    store.save(graph)
+    print(f"SUCCESS: Script executed, graph saved -> {store.graph_path}")
+    print(f"  Graph: {len(graph.cast)} cast, {len(graph.locations)} locations, "
+          f"{len(graph.props)} props, {len(graph.scenes)} scenes, "
+          f"{len(graph.frames)} frames, {len(graph.dialogue)} dialogue, "
+          f"{len(graph.edges)} edges")
+
+
+if __name__ == "__main__":
+    main()

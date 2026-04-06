@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+watchdog
+tenacity
+python-dotenv
+httpx
+aiofiles
+pydantic

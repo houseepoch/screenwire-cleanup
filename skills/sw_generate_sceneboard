@@ -1,0 +1,94 @@
+#!/usr/bin/env python3
+"""Generate a scene storyboard image using NanoBanana 2 (4K).
+
+Reads the storyboard prompt JSON for a scene, calls the generation API,
+and saves the multi-panel storyboard image.
+
+Usage:
+    python3 sw_generate_sceneboard --scene-id scene_01 --project-dir .
+    python3 sw_generate_sceneboard --all --project-dir .
+"""
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+
+def generate_storyboard(prompt_data: dict, project_dir: Path) -> str:
+    """Generate a single storyboard image from prompt data."""
+    out_path = project_dir / prompt_data["out_path"]
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Build ref images args
+    ref_args = []
+    for ref in prompt_data.get("ref_images", []):
+        ref_path = project_dir / ref
+        if ref_path.exists():
+            ref_args.extend(["--ref-images", str(ref_path)])
+
+    # Use sw_fresh_generation (NanoBanana 2) for high-quality storyboard
+    skills_dir = Path(os.environ.get("SKILLS_DIR", Path(__file__).parent))
+    cmd = [
+        sys.executable, str(skills_dir / "sw_fresh_generation"),
+        "--prompt", prompt_data["prompt"],
+        "--size", prompt_data.get("size", "landscape_16_9"),
+        "--out", str(out_path),
+    ]
+    if ref_args:
+        # Join all ref images into comma-separated for --ref-images flag
+        ref_paths = [str(project_dir / r) for r in prompt_data.get("ref_images", [])
+                     if (project_dir / r).exists()]
+        if ref_paths:
+            cmd.extend(["--ref-images", ",".join(ref_paths)])
+
+    result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(project_dir))
+
+    if result.returncode != 0:
+        print(f"ERROR: Storyboard generation failed for {prompt_data['scene_id']}: {result.stderr}", file=sys.stderr)
+        return ""
+
+    print(f"SUCCESS: Storyboard generated → {out_path}")
+    return str(out_path)
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Generate scene storyboard images")
+    parser.add_argument("--scene-id", help="Generate storyboard for a specific scene")
+    parser.add_argument("--all", action="store_true", help="Generate storyboards for all scenes")
+    parser.add_argument("--project-dir", default=".", help="Project directory")
+    args = parser.parse_args()
+
+    project_dir = Path(args.project_dir).resolve()
+    prompt_dir = project_dir / "frames" / "storyboard_prompts"
+
+    if not prompt_dir.exists():
+        print("ERROR: No storyboard prompts found. Run graph_assemble_prompts first.")
+        sys.exit(1)
+
+    if args.scene_id:
+        prompt_file = prompt_dir / f"{args.scene_id}_storyboard.json"
+        if not prompt_file.exists():
+            print(f"ERROR: No storyboard prompt for {args.scene_id}")
+            sys.exit(1)
+        data = json.loads(prompt_file.read_text(encoding="utf-8"))
+        generate_storyboard(data, project_dir)
+
+    elif args.all:
+        generated = 0
+        for f in sorted(prompt_dir.glob("*_storyboard.json")):
+            data = json.loads(f.read_text(encoding="utf-8"))
+            result = generate_storyboard(data, project_dir)
+            if result:
+                generated += 1
+        print(f"SUCCESS: Generated {generated} storyboards")
+
+    else:
+        parser.print_help()
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,18 @@
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.pyc
+
+# Project data (all generated content lives inside projects/)
+projects/*/
+!projects/_template/
+!projects/.gitkeep
+
+# Runtime artifacts
+logs/
+dispatch/
+
+# Prompt verifier outputs (runtime generated)
+prompt_composition_verifier_*.md

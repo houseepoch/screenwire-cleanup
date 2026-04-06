@@ -1,0 +1,73 @@
+#!/usr/bin/env python3
+"""graph_upsert — Insert or update nodes in the narrative graph.
+
+Usage:
+    python3 graph_upsert --type cast --payload '{...}'
+    python3 graph_upsert --type frame --payload '{...}'
+    python3 graph_upsert --state cast_frame_state --payload '{...}'
+    python3 graph_upsert --type cast --payload-file cast_001_mei.json
+
+Provenance is REQUIRED in every payload. Payloads without
+source_prose_chunk will be rejected.
+"""
+
+import argparse
+import json
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from graph.store import GraphStore
+from graph.api import upsert_node, upsert_frame_state
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Upsert graph nodes")
+    parser.add_argument("--project-dir", default=os.getcwd())
+    parser.add_argument("--type", help="Node type: cast, location, prop, scene, frame, dialogue")
+    parser.add_argument("--state", help="State type: cast_frame_state, prop_frame_state, location_frame_state")
+    parser.add_argument("--payload", help="JSON payload string")
+    parser.add_argument("--payload-file", help="Path to JSON payload file")
+    args = parser.parse_args()
+
+    if not args.type and not args.state:
+        print("ERROR: Must specify --type or --state")
+        sys.exit(1)
+
+    # Load payload
+    if args.payload_file:
+        with open(args.payload_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    elif args.payload:
+        data = json.loads(args.payload)
+    else:
+        print("ERROR: Must specify --payload or --payload-file")
+        sys.exit(1)
+
+    # Extract provenance from payload
+    provenance = data.pop("provenance", None)
+    if provenance is None:
+        print("ERROR: Payload must include 'provenance' with source_prose_chunk.")
+        print("REJECTED: All graph mutations must be traceable to source text.")
+        sys.exit(1)
+
+    store = GraphStore(args.project_dir)
+    graph = store.load()
+
+    try:
+        if args.type:
+            node_id = upsert_node(graph, args.type, data, provenance)
+            print(f"SUCCESS: Upserted {args.type} -> {node_id}")
+        elif args.state:
+            state_key = upsert_frame_state(graph, args.state, data, provenance)
+            print(f"SUCCESS: Upserted {args.state} -> {state_key}")
+    except ValueError as e:
+        print(f"REJECTED: {e}")
+        sys.exit(1)
+
+    store.save(graph)
+    print(f"  Graph saved -> {store.graph_path}")
+
+
+if __name__ == "__main__":
+    main()

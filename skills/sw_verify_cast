@@ -1,0 +1,317 @@
+#!/usr/bin/env python3
+"""sw_verify_cast — Programmatic quality gate for cast composite images.
+
+Runs automated checks on all cast composites and state variants before
+the agent performs visual review. Catches objective failures (wrong format,
+missing files, baked-in text) so the agent only needs to verify subjective
+quality (wardrobe accuracy, period correctness, likeness).
+
+Checks performed:
+  1. COVERAGE   — Every castId in manifest has a composite image on disk
+  2. FILE_SIZE  — Image is > minimum threshold (not 0-byte or corrupt)
+  3. DIMENSIONS — Image is 9:16 portrait orientation (height > width)
+  4. OCR_TEXT   — No baked-in text detected outside the tagger overlay zone
+                  (requires tesseract; skipped gracefully if unavailable)
+  5. STATE_VARS — State variant files referenced in manifest exist on disk
+
+Usage:
+    python3 sw_verify_cast
+    python3 sw_verify_cast --project-dir /path/to/project
+    python3 sw_verify_cast --cast-id cast_001_mei   # check single cast member
+"""
+
+import argparse
+import json
+import os
+import sys
+from pathlib import Path
+
+try:
+    from PIL import Image
+except ImportError:
+    print("ERROR: Pillow (PIL) is required. Install with: pip install Pillow")
+    sys.exit(1)
+
+# Try to import OCR — optional
+OCR_AVAILABLE = False
+try:
+    import pytesseract
+    # Test that the binary is actually reachable
+    pytesseract.get_tesseract_version()
+    OCR_AVAILABLE = True
+except Exception:
+    pass
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+
+MIN_FILE_SIZE_KB = 10          # Minimum file size in KB (anything below is suspect)
+EXPECTED_PORTRAIT_RATIO = 0.6  # width/height ratio must be below this for portrait
+TAGGER_ZONE_FRACTION = 0.15   # Upper-right 15% of image is the tagger overlay zone
+
+# The image_tagger puts a yellow label in the upper-right corner.
+# We exclude that zone from OCR text detection.
+TAGGER_CORNER_X_START = 0.70   # Right 30% of image width
+TAGGER_CORNER_Y_END = 0.15    # Top 15% of image height
+
+PROJECT_DIR_DEFAULT = os.environ.get(
+    "PROJECT_DIR",
+    os.getcwd()
+)
+
+
+# ---------------------------------------------------------------------------
+# Check functions
+# ---------------------------------------------------------------------------
+
+def check_file_exists(path: Path) -> tuple[bool, str]:
+    """Check if file exists on disk."""
+    if path.exists() and path.is_file():
+        return True, f"exists ({path.stat().st_size // 1024}KB)"
+    return False, f"MISSING: {path}"
+
+
+def check_file_size(path: Path) -> tuple[bool, str]:
+    """Check file is above minimum size threshold."""
+    if not path.exists():
+        return False, "file missing"
+    size_kb = path.stat().st_size / 1024
+    if size_kb < MIN_FILE_SIZE_KB:
+        return False, f"TOO_SMALL: {size_kb:.1f}KB (min {MIN_FILE_SIZE_KB}KB)"
+    return True, f"{size_kb:.0f}KB"
+
+
+def check_portrait_orientation(path: Path) -> tuple[bool, str]:
+    """Check image is portrait (height > width)."""
+    if not path.exists():
+        return False, "file missing"
+    try:
+        img = Image.open(path)
+        w, h = img.size
+        ratio = w / h
+        if h > w:
+            return True, f"{w}x{h} portrait (ratio {ratio:.2f})"
+        else:
+            return False, f"LANDSCAPE: {w}x{h} (ratio {ratio:.2f}) — expected portrait (h > w)"
+    except Exception as e:
+        return False, f"OPEN_ERROR: {e}"
+
+
+def check_ocr_text(path: Path) -> tuple[bool, str]:
+    """Check for baked-in text outside the tagger overlay zone."""
+    if not OCR_AVAILABLE:
+        return True, "SKIPPED (tesseract not available)"
+    if not path.exists():
+        return False, "file missing"
+
+    try:
+        img = Image.open(path).convert("RGB")
+        w, h = img.size
+
+        # Define the tagger exclusion zone (upper-right corner)
+        tagger_x_start = int(w * TAGGER_CORNER_X_START)
+        tagger_y_end = int(h * TAGGER_CORNER_Y_END)
+
+        # Mask out the tagger zone by painting it neutral gray
+        masked = img.copy()
+        for x in range(tagger_x_start, w):
+            for y in range(0, tagger_y_end):
+                masked.putpixel((x, y), (128, 128, 128))
+
+        # Run OCR on the masked image
+        text = pytesseract.image_to_string(masked, config="--psm 11").strip()
+
+        # Filter out very short results (noise)
+        # Only flag if we detect actual readable words (3+ chars)
+        words = [word for word in text.split() if len(word) >= 3 and word.isalpha()]
+
+        if words:
+            detected = ", ".join(words[:5])
+            return False, f"TEXT_DETECTED: '{detected}' (may be hallucinated text baked into image)"
+        return True, "clean (no text detected)"
+
+    except Exception as e:
+        return True, f"OCR_ERROR (non-blocking): {e}"
+
+
+# ---------------------------------------------------------------------------
+# Main verification logic
+# ---------------------------------------------------------------------------
+
+def verify_cast_member(cast_entry: dict, project_dir: Path) -> dict:
+    """Run all checks on a single cast member. Returns results dict."""
+    cast_id = cast_entry["castId"]
+    name = cast_entry.get("name", cast_id)
+    composite_path = project_dir / cast_entry.get("compositePath", "")
+
+    results = {
+        "castId": cast_id,
+        "name": name,
+        "compositePath": str(composite_path),
+        "checks": {},
+        "passed": True,
+        "failures": [],
+    }
+
+    # Run checks on base composite
+    checks = [
+        ("file_exists", check_file_exists(composite_path)),
+        ("file_size", check_file_size(composite_path)),
+        ("portrait_orientation", check_portrait_orientation(composite_path)),
+        ("ocr_text", check_ocr_text(composite_path)),
+    ]
+
+    for check_name, (passed, detail) in checks:
+        results["checks"][check_name] = {"passed": passed, "detail": detail}
+        if not passed:
+            results["passed"] = False
+            results["failures"].append(f"{check_name}: {detail}")
+
+    # Check state variants if present
+    state_images = cast_entry.get("stateImages", {})
+    if state_images:
+        results["stateVariants"] = {}
+        for state_name, state_info in state_images.items():
+            state_path = project_dir / state_info.get("imagePath", "")
+            sv_checks = {
+                "file_exists": check_file_exists(state_path),
+                "file_size": check_file_size(state_path),
+                "portrait_orientation": check_portrait_orientation(state_path),
+            }
+            sv_passed = True
+            sv_failures = []
+            sv_results = {}
+            for ck_name, (ck_pass, ck_detail) in sv_checks.items():
+                sv_results[ck_name] = {"passed": ck_pass, "detail": ck_detail}
+                if not ck_pass:
+                    sv_passed = False
+                    sv_failures.append(f"{ck_name}: {ck_detail}")
+                    results["passed"] = False
+                    results["failures"].append(f"state_variant[{state_name}].{ck_name}: {ck_detail}")
+
+            results["stateVariants"][state_name] = {
+                "imagePath": str(state_path),
+                "checks": sv_results,
+                "passed": sv_passed,
+                "failures": sv_failures,
+            }
+
+    return results
+
+
+def verify_all(project_dir: Path, single_cast_id: str = None) -> list[dict]:
+    """Verify all cast members (or a single one). Returns list of result dicts."""
+    manifest_path = project_dir / "project_manifest.json"
+    if not manifest_path.exists():
+        print(f"ERROR: Manifest not found: {manifest_path}")
+        sys.exit(1)
+
+    manifest = json.loads(manifest_path.read_text())
+    cast_list = manifest.get("cast", [])
+
+    if not cast_list:
+        print("ERROR: No cast entries in manifest")
+        sys.exit(1)
+
+    if single_cast_id:
+        cast_list = [c for c in cast_list if c["castId"] == single_cast_id]
+        if not cast_list:
+            print(f"ERROR: castId '{single_cast_id}' not found in manifest")
+            sys.exit(1)
+
+    results = []
+    for cast_entry in cast_list:
+        result = verify_cast_member(cast_entry, project_dir)
+        results.append(result)
+
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Output formatting
+# ---------------------------------------------------------------------------
+
+def print_results(results: list[dict]) -> int:
+    """Print results in agent-parseable format. Returns count of failures."""
+    total_pass = 0
+    total_fail = 0
+    failure_details = []
+
+    print("=" * 70)
+    print("CAST COMPOSITE VERIFICATION REPORT")
+    print("=" * 70)
+    if not OCR_AVAILABLE:
+        print("NOTE: OCR check skipped (tesseract not installed)")
+    print()
+
+    for r in results:
+        status = "PASS" if r["passed"] else "FAIL"
+        icon = "✓" if r["passed"] else "✗"
+
+        if r["passed"]:
+            total_pass += 1
+        else:
+            total_fail += 1
+
+        print(f"  {icon} {r['castId']} ({r['name']}) — {status}")
+
+        # Print check details
+        for check_name, check_result in r["checks"].items():
+            ck_icon = "  ✓" if check_result["passed"] else "  ✗"
+            print(f"    {ck_icon} {check_name}: {check_result['detail']}")
+
+        # Print state variant details
+        for sv_name, sv_result in r.get("stateVariants", {}).items():
+            sv_status = "PASS" if sv_result["passed"] else "FAIL"
+            sv_icon = "  ✓" if sv_result["passed"] else "  ✗"
+            print(f"    {sv_icon} state_variant[{sv_name}] — {sv_status}")
+            if not sv_result["passed"]:
+                for f in sv_result["failures"]:
+                    print(f"      ✗ {f}")
+
+        if not r["passed"]:
+            for f in r["failures"]:
+                failure_details.append(f"{r['castId']}: {f}")
+
+        print()
+
+    # Summary
+    print("-" * 70)
+    total = total_pass + total_fail
+    print(f"RESULT: {total_pass}/{total} passed, {total_fail}/{total} failed")
+    print()
+
+    if total_fail > 0:
+        print("FAILURES REQUIRING ACTION:")
+        for fd in failure_details:
+            print(f"  ✗ {fd}")
+        print()
+        print("ACTION_REQUIRED: Regenerate failed images, then re-run sw_verify_cast to confirm fixes.")
+    else:
+        print("ALL CHECKS PASSED — proceed to visual review for wardrobe/period accuracy.")
+        print("(Programmatic checks cannot verify wardrobe correctness — agent must visually inspect)")
+
+    return total_fail
+
+
+# ---------------------------------------------------------------------------
+# CLI entry point
+# ---------------------------------------------------------------------------
+
+def main():
+    parser = argparse.ArgumentParser(description="Verify cast composite images (programmatic quality gate).")
+    parser.add_argument("--project-dir", default=None, help="Path to project directory")
+    parser.add_argument("--cast-id", default=None, help="Verify a single cast member by ID")
+    args = parser.parse_args()
+
+    project_dir = Path(args.project_dir) if args.project_dir else Path(os.environ.get("PROJECT_DIR", PROJECT_DIR_DEFAULT))
+
+    results = verify_all(project_dir, args.cast_id)
+    fail_count = print_results(results)
+
+    sys.exit(1 if fail_count > 0 else 0)
+
+
+if __name__ == "__main__":
+    main()

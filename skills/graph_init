@@ -1,0 +1,36 @@
+#!/usr/bin/env python3
+"""graph_init — Initialize a new narrative graph for the project."""
+
+import argparse
+import json
+import os
+import sys
+
+# Add project root to path for graph imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from graph.store import GraphStore
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Initialize narrative graph")
+    parser.add_argument("--project-id", required=True)
+    parser.add_argument("--title", default="")
+    parser.add_argument("--project-dir", default=os.getcwd())
+    args = parser.parse_args()
+
+    store = GraphStore(args.project_dir)
+
+    if store.exists():
+        print(f"Graph already exists at {store.graph_path}")
+        print("Use graph_query to inspect it.")
+        sys.exit(0)
+
+    graph = store.initialize(args.project_id, title=args.title)
+    print(f"SUCCESS: Graph initialized -> {store.graph_path}")
+    print(f"  project_id: {args.project_id}")
+    print(f"  title: {args.title}")
+    print(f"  nodes: 0 cast, 0 locations, 0 props, 0 scenes, 0 frames")
+
+
+if __name__ == "__main__":
+    main()

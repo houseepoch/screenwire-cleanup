@@ -1,0 +1,67 @@
+#!/usr/bin/env python3
+"""sw_read_manifest — GET current project manifest and print condensed summary."""
+
+import argparse
+import os
+import sys
+import httpx
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Read the current project manifest from the ScreenWire API.")
+    parser.parse_args()
+
+    server_url = os.environ.get("SW_SERVER_URL", "http://localhost:8000")
+
+    try:
+        resp = httpx.get(f"{server_url}/api/project/current", timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+    except httpx.HTTPError as e:
+        print(f"ERROR: HTTP request failed: {e}")
+        sys.exit(1)
+    except Exception as e:
+        print(f"ERROR: {e}")
+        sys.exit(1)
+
+    project = data.get("project", data)
+    name = project.get("name", project.get("project_name", "unknown"))
+    status = project.get("status", "unknown")
+
+    print(f"SUCCESS: Project: {name} | Status: {status}")
+
+    # Phase statuses
+    phases = project.get("phases", {})
+    if phases:
+        print("  Phases:")
+        for phase_name, phase_data in phases.items():
+            if isinstance(phase_data, dict):
+                p_status = phase_data.get("status", "unknown")
+            else:
+                p_status = str(phase_data)
+            print(f"    {phase_name}: {p_status}")
+
+    # Cast / location / prop / frame counts
+    cast = project.get("cast", [])
+    locations = project.get("locations", [])
+    props = project.get("props", [])
+    frames = project.get("frames", [])
+
+    print(f"  Cast: {len(cast)} | Locations: {len(locations)} | Props: {len(props)} | Frames: {len(frames)}")
+
+    # Frame status breakdown
+    if frames:
+        status_counts = {}
+        for frame in frames:
+            if isinstance(frame, dict):
+                fs = frame.get("status", "unknown")
+            else:
+                fs = "unknown"
+            status_counts[fs] = status_counts.get(fs, 0) + 1
+        print("  Frame status breakdown:")
+        for fs, count in status_counts.items():
+            print(f"    {fs}: {count}")
+
+
+if __name__ == "__main__":
+    main()

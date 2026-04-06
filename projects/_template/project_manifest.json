@@ -1,0 +1,27 @@
+{
+  "projectId": "__PROJECT_ID__",
+  "projectName": "__PROJECT_NAME__",
+  "slug": "__SLUG__",
+  "status": "scaffold",
+  "version": 1,
+  "phases": {
+    "phase_0": { "status": "complete", "completedAt": "__CREATED_AT__" },
+    "phase_1": { "status": "ready" },
+    "phase_2": { "status": "pending" },
+    "phase_3": { "status": "pending" },
+    "phase_4": { "status": "pending" },
+    "phase_5": { "status": "pending" },
+    "phase_6": { "status": "pending" }
+  },
+  "cast": [],
+  "locations": [],
+  "props": [],
+  "frames": [],
+  "dialoguePath": "dialogue.json",
+  "cost": {
+    "estimate": { "llm": 0, "imageGen": 0, "videoGen": 0, "tts": 0, "total": 0 },
+    "actual": { "llm": 0, "imageGen": 0, "videoGen": 0, "tts": 0, "total": 0 },
+    "budget_cap": null,
+    "warnings": []
+  }
+}

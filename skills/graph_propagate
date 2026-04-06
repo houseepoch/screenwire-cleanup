@@ -1,0 +1,56 @@
+#!/usr/bin/env python3
+"""graph_propagate — Copy-and-mutate state snapshots between frames.
+
+Usage:
+    python3 graph_propagate --cast cast_001_mei --from f_013 --to f_014 --mutations '{"emotion": "fearful", "action": "grips_railing"}'
+    python3 graph_propagate --prop prop_003_letter --from f_013 --to f_014 --mutations '{"condition": "crumpled"}'
+    python3 graph_propagate --location loc_001_bedroom --from f_013 --to f_014 --mutations '{"condition_modifiers": ["candle_extinguished"]}'
+"""
+
+import argparse
+import json
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from graph.store import GraphStore
+from graph.api import propagate_cast_state, propagate_prop_state, propagate_location_state
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Propagate state snapshots between frames")
+    parser.add_argument("--project-dir", default=os.getcwd())
+    parser.add_argument("--cast", help="Cast ID to propagate")
+    parser.add_argument("--prop", help="Prop ID to propagate")
+    parser.add_argument("--location", help="Location ID to propagate")
+    parser.add_argument("--from", dest="from_frame", required=True, help="Source frame ID")
+    parser.add_argument("--to", dest="to_frame", required=True, help="Target frame ID")
+    parser.add_argument("--mutations", default="{}", help="JSON dict of field mutations")
+    args = parser.parse_args()
+
+    mutations = json.loads(args.mutations) if args.mutations else None
+
+    store = GraphStore(args.project_dir)
+    graph = store.load()
+
+    if args.cast:
+        state = propagate_cast_state(graph, args.cast, args.from_frame, args.to_frame, mutations)
+        print(f"SUCCESS: Propagated cast state -> {args.cast}@{args.to_frame}")
+        print(f"  deltas: {state.delta_fields}")
+    elif args.prop:
+        state = propagate_prop_state(graph, args.prop, args.from_frame, args.to_frame, mutations)
+        print(f"SUCCESS: Propagated prop state -> {args.prop}@{args.to_frame}")
+        print(f"  deltas: {state.delta_fields}")
+    elif args.location:
+        state = propagate_location_state(graph, args.location, args.from_frame, args.to_frame, mutations)
+        print(f"SUCCESS: Propagated location state -> {args.location}@{args.to_frame}")
+        print(f"  deltas: {state.delta_fields}")
+    else:
+        print("ERROR: Must specify --cast, --prop, or --location")
+        sys.exit(1)
+
+    store.save(graph)
+
+
+if __name__ == "__main__":
+    main()

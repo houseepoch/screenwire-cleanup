@@ -1,0 +1,60 @@
+#!/usr/bin/env python3
+"""sw_generate_video — POST to /internal/generate-video to generate a video clip via grok-video."""
+
+import argparse
+import os
+import sys
+import httpx
+
+
+PROJECT_DIR_DEFAULT = os.getcwd()
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Generate a video via the ScreenWire internal API.")
+    parser.add_argument("--api", default="grok-video", help="Video API (default: grok-video)")
+    parser.add_argument("--image", default=None, help="Input image path (relative or absolute)")
+    parser.add_argument("--prompt", required=True, help="Video generation prompt")
+    parser.add_argument("--out", required=True, help="Output file path (relative or absolute)")
+    parser.add_argument("--duration", type=int, default=5, help="Duration in seconds (3-15, default: 5)")
+    args = parser.parse_args()
+
+    project_dir = os.environ.get("PROJECT_DIR", PROJECT_DIR_DEFAULT)
+
+    def resolve(p):
+        return p if os.path.isabs(p) else os.path.join(project_dir, p)
+
+    out_abs = resolve(args.out)
+    os.makedirs(os.path.dirname(out_abs), exist_ok=True)
+
+    body = {
+        "model": "xai/grok-imagine-video",
+        "prompt": args.prompt,
+        "output_path": out_abs,
+        "duration": min(max(args.duration, 3), 15),
+    }
+
+    if args.image is not None:
+        body["image_path"] = resolve(args.image)
+
+    try:
+        resp = httpx.post("http://localhost:8000/internal/generate-video", json=body, timeout=300)
+        resp.raise_for_status()
+        data = resp.json()
+    except httpx.HTTPError as e:
+        print(f"ERROR: HTTP request failed: {e}")
+        sys.exit(1)
+    except Exception as e:
+        print(f"ERROR: {e}")
+        sys.exit(1)
+
+    print(f"SUCCESS: Video generated -> {out_abs}")
+    print(f"  duration: {args.duration}s")
+    if isinstance(data, dict):
+        for k, v in data.items():
+            if k != "output_path":
+                print(f"  {k}: {v}")
+
+
+if __name__ == "__main__":
+    main()

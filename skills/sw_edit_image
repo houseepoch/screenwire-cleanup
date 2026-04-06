@@ -1,0 +1,114 @@
+#!/usr/bin/env python3
+"""sw_edit_image — POST to /internal/edit-image (google/nano-banana-2) for image editing.
+
+Takes an existing image as input and applies edits described in the prompt.
+Uses nano-banana-2's image_input to pass the source image, then generates
+a modified version based on the prompt instructions.
+
+On safety filter failure, prints structured error with rephrase hints.
+"""
+
+import argparse
+import json
+import os
+import sys
+import httpx
+
+
+PROJECT_DIR_DEFAULT = os.getcwd()
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Edit an existing image via nano-banana-2.")
+    parser.add_argument("--input", required=True, help="Source image path to edit (relative or absolute)")
+    parser.add_argument("--prompt", required=True, help="Edit instruction prompt (describe the changes)")
+    parser.add_argument("--out", required=True, help="Output file path (relative or absolute)")
+    parser.add_argument("--size", default="landscape_16_9", help="Image size preset (default: landscape_16_9)")
+    parser.add_argument("--seed", type=int, default=None, help="Seed for reproducibility")
+    parser.add_argument("--image-search", action="store_true", default=False, help="Enable Google Image Search grounding for visual context")
+    parser.add_argument("--google-search", action="store_true", default=False, help="Enable Google Web Search grounding for real-time info")
+    args = parser.parse_args()
+
+    project_dir = os.environ.get("PROJECT_DIR", PROJECT_DIR_DEFAULT)
+
+    input_abs = args.input if os.path.isabs(args.input) else os.path.join(project_dir, args.input)
+    out_abs = args.out if os.path.isabs(args.out) else os.path.join(project_dir, args.out)
+    os.makedirs(os.path.dirname(out_abs), exist_ok=True)
+
+    if not os.path.exists(input_abs):
+        print(f"ERROR: Source image not found: {input_abs}")
+        sys.exit(1)
+
+    body = {
+        "input_path": input_abs,
+        "prompt": args.prompt,
+        "image_size": args.size,
+        "output_path": out_abs,
+        "output_format": "png",
+        "image_search": args.image_search,
+        "google_search": args.google_search,
+    }
+    if args.seed is not None:
+        body["seed"] = args.seed
+
+    try:
+        resp = httpx.post("http://localhost:8000/internal/edit-image", json=body, timeout=180)
+        if resp.status_code == 502:
+            _handle_prediction_failure(resp, args.prompt, out_abs, input_abs)
+            return
+        resp.raise_for_status()
+        data = resp.json()
+    except httpx.HTTPError as e:
+        print(f"ERROR: HTTP request failed: {e}")
+        sys.exit(1)
+    except Exception as e:
+        print(f"ERROR: {e}")
+        sys.exit(1)
+
+    print(f"SUCCESS: Image edited -> {out_abs}")
+    print(f"  source: {input_abs}")
+    if isinstance(data, dict):
+        for k, v in data.items():
+            if k not in ("output_path", "path", "source"):
+                print(f"  {k}: {v}")
+
+
+def _handle_prediction_failure(resp, prompt, out_path, input_path):
+    """Parse structured error from server and print actionable info for the agent."""
+    try:
+        error_data = resp.json().get("detail", {})
+        if isinstance(error_data, str):
+            error_data = json.loads(error_data) if error_data.startswith("{") else {"error": error_data}
+    except Exception:
+        error_data = {"error": resp.text}
+
+    failure_type = error_data.get("failure_type", "UNKNOWN")
+    error_code = error_data.get("error_code", "UNKNOWN")
+    is_retryable = error_data.get("is_retryable", False)
+    hints = error_data.get("rephrase_hints", [])
+    prediction_id = error_data.get("prediction_id", "")
+
+    print(f"FAILED: Image edit failed")
+    print(f"  failure_type: {failure_type}")
+    print(f"  error_code: {error_code}")
+    print(f"  prediction_id: {prediction_id}")
+    print(f"  source: {input_path}")
+    print(f"  output_path: {out_path}")
+    print(f"  original_prompt: {prompt}")
+    print(f"  is_retryable: {is_retryable}")
+
+    if hints:
+        print(f"  rephrase_hints:")
+        for hint in hints:
+            print(f"    - {hint}")
+
+    if is_retryable:
+        print(f"  ACTION_REQUIRED: Rephrase the prompt using the hints above, then call sw_edit_image again with the new prompt and same --input.")
+    else:
+        print(f"  ACTION_REQUIRED: This error is not retryable. Skip this edit and log the failure.")
+
+    sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,74 @@
+#!/usr/bin/env python3
+"""graph_query — Query the narrative graph.
+
+Usage:
+    python3 graph_query --type cast
+    python3 graph_query --type cast --filter '{"name": "Mei"}'
+    python3 graph_query --type cast_frame_state --filter '{"cast_id": "cast_001_mei", "frame_id": "f_014"}'
+    python3 graph_query --frame-context f_014
+    python3 graph_query --stats
+"""
+
+import argparse
+import json
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from graph.store import GraphStore
+from graph.api import query_graph, get_frame_context
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Query the narrative graph")
+    parser.add_argument("--project-dir", default=os.getcwd())
+    parser.add_argument("--type", help="Node type to query")
+    parser.add_argument("--filter", help="JSON filter dict", default=None)
+    parser.add_argument("--frame-context", help="Get full context packet for a frame ID")
+    parser.add_argument("--stats", action="store_true", help="Print graph stats")
+    args = parser.parse_args()
+
+    store = GraphStore(args.project_dir)
+    if not store.exists():
+        print("ERROR: No graph found. Run graph_init first.")
+        sys.exit(1)
+
+    graph = store.load()
+
+    if args.stats:
+        print(f"Graph Stats:")
+        print(f"  cast: {len(graph.cast)}")
+        print(f"  locations: {len(graph.locations)}")
+        print(f"  props: {len(graph.props)}")
+        print(f"  scenes: {len(graph.scenes)}")
+        print(f"  frames: {len(graph.frames)}")
+        print(f"  dialogue: {len(graph.dialogue)}")
+        print(f"  cast_frame_states: {len(graph.cast_frame_states)}")
+        print(f"  prop_frame_states: {len(graph.prop_frame_states)}")
+        print(f"  location_frame_states: {len(graph.location_frame_states)}")
+        print(f"  edges: {len(graph.edges)}")
+        print(f"  frame_order: {len(graph.frame_order)} frames in sequence")
+        print(f"  seeded_domains: {json.dumps(graph.seeded_domains, indent=2)}")
+        return
+
+    if args.frame_context:
+        try:
+            ctx = get_frame_context(graph, args.frame_context)
+            print(json.dumps(ctx, indent=2, default=str))
+        except KeyError as e:
+            print(f"ERROR: {e}")
+            sys.exit(1)
+        return
+
+    if args.type:
+        filters = json.loads(args.filter) if args.filter else None
+        results = query_graph(graph, args.type, filters)
+        print(json.dumps(results, indent=2, default=str))
+        print(f"\n({len(results)} results)")
+        return
+
+    parser.print_help()
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,61 @@
+#!/usr/bin/env python3
+"""skill_verify_media — Run ffprobe on a media file and print formatted results."""
+
+import argparse
+import json
+import subprocess
+import sys
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Verify a media file using ffprobe and print formatted metadata.")
+    parser.add_argument("--file", required=True, help="Media file path to inspect")
+    args = parser.parse_args()
+
+    cmd = [
+        "ffprobe",
+        "-v", "error",
+        "-show_entries", "format=duration,size,bit_rate",
+        "-show_entries", "stream=codec_name,width,height,r_frame_rate",
+        "-of", "json",
+        args.file,
+    ]
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True)
+    except FileNotFoundError:
+        print("ERROR: ffprobe not found. Please install ffmpeg/ffprobe.")
+        sys.exit(1)
+
+    if result.returncode != 0:
+        print(f"ERROR: ffprobe failed: {result.stderr.strip()}")
+        sys.exit(1)
+
+    try:
+        data = json.loads(result.stdout)
+    except json.JSONDecodeError as e:
+        print(f"ERROR: Could not parse ffprobe output: {e}")
+        sys.exit(1)
+
+    fmt = data.get("format", {})
+    streams = data.get("streams", [])
+
+    print(f"SUCCESS: Media verified -> {args.file}")
+    print("  Format:")
+    print(f"    duration:  {fmt.get('duration', 'N/A')}s")
+    print(f"    size:      {fmt.get('size', 'N/A')} bytes")
+    print(f"    bit_rate:  {fmt.get('bit_rate', 'N/A')} bps")
+
+    for i, stream in enumerate(streams):
+        print(f"  Stream {i}:")
+        print(f"    codec:     {stream.get('codec_name', 'N/A')}")
+        if stream.get("width"):
+            print(f"    width:     {stream.get('width')}")
+        if stream.get("height"):
+            print(f"    height:    {stream.get('height')}")
+        if stream.get("r_frame_rate"):
+            print(f"    framerate: {stream.get('r_frame_rate')}")
+
+
+if __name__ == "__main__":
+    main()
