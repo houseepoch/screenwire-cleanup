@@ -76,17 +76,6 @@ After each batch:
 ]}
 ```
 
-### Step 6: Build Timeline
-
-After all frames are composed, read `dialogue.json` and the frame prompt files to build `logs/composition_verifier/timeline.json`:
-
-For each frame in sequence:
-- If dialogue frame: estimate duration from all audible dialogue text in that frame. Rule: ~3 words per second. If the spoken dialogue is over 1 sentence, use the maximum duration of 15 seconds to guarantee the full dialogue is captured without cutoff. Include delivery tempo (fast/measured/slow) from the dialogue performance_direction in the duration estimate — a "whispered, measured" delivery takes longer than a "rapid, urgent" one.
-- If non-dialogue: use `suggested_duration` from the frame prompt if available, otherwise fall back to formula tag defaults (F07=8s, F18=8s, F08=4s, F10=5s, F12=10s, default=5s)
-- Start time = sum of all previous durations
-
-**NOTE:** There are no separate audio files. grok-video generates audio natively from the dialogue text embedded in the video prompt. Duration estimation is based on text length and delivery tempo, not audio file measurement.
-
 ---
 
 ## State JSON

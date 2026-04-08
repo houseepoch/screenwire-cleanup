@@ -117,14 +117,14 @@ Agents call these from the command line. Scripts are at $APP_DIR/skills/
   - Dialogue frames: duration = audio duration + 0.3s padding
   - Non-dialogue frames: duration from formula tag defaults
   - Generate silence segments for non-dialogue frames
-  - Build timeline.json
+  - Verify all composed frames exist
 - Update manifest with all timing data
 - Include the formula tag → composition strategy table
 - Include the formula tag → duration defaults table
 
 ### video_agent.md
 - Role: Video prompt crafter + generator for Phase 5
-- Reads manifest, timeline, visual_analysis, dialogue.json
+- Reads manifest, visual_analysis, dialogue.json
 - For each frame:
   1. Craft motion prompt using the structured format: STYLE_PREFIX + SHOT_TYPE + CAMERA_MOTION + SUBJECT_ACTION + BACKGROUND_EVENTS + ENVIRONMENTAL_MOTION + AUDIO (grok only)
   2. Write prompt to video/prompts/

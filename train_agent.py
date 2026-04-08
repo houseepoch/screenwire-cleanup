@@ -13,6 +13,8 @@ Usage:
 
 import argparse
 import os
+import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -28,17 +30,41 @@ PROJECTS_DIR = APP_DIR / "projects"
 
 DEFAULT_MODEL = "claude-opus-4-6"
 
+_INCLUDE_RE = re.compile(r'\{\{include:(.+?)\}\}')
+
+
+def _expand_includes(text: str, base_dir: Path) -> str:
+    """Replace {{include:path}} markers with file contents."""
+    def _replacer(match: re.Match) -> str:
+        inc_path = base_dir / match.group(1)
+        if inc_path.exists():
+            return inc_path.read_text()
+        print(f"{YELLOW}WARN: Include file not found: {inc_path}{RESET}")
+        return match.group(0)
+    return _INCLUDE_RE.sub(_replacer, text)
+
+
+def _deploy_shared_conventions(project_dir: Path) -> None:
+    """Copy shared_conventions.md → project_dir/CLAUDE.md if stale or missing."""
+    source = APP_DIR / "shared_conventions.md"
+    target = project_dir / "CLAUDE.md"
+    if not source.exists():
+        return
+    if target.exists() and target.stat().st_mtime >= source.stat().st_mtime:
+        return
+    shutil.copy2(source, target)
+
 # ---------------------------------------------------------------------------
 # Agent registry — order follows the pipeline phases
 # ---------------------------------------------------------------------------
 
 AGENTS = [
     ("director",                "Director — orchestrates project lifecycle & reviews gates"),
-    ("creative_coordinator",    "Creative Coordinator — narrative, story writing, prose"),
-    ("decomposer",              "Decomposer — breaks scenes into frame-level shot lists"),
-    ("scene_coordinator",       "Scene Coordinator — visual staging, locations, props, cast"),
-    ("production_coordinator",  "Production Coordinator — asset scheduling & work plans"),
-    ("video_agent",             "Video Agent — image/video generation & quality checks"),
+    ("creative_coordinator",    "Creative Coordinator — narrative contracts, skeleton, assembly"),
+    ("morpheus",                "Morpheus — narrative graph builder, prompt assembly, materialization"),
+    # image_verifier, composition_verifier, video_verifier — REMOVED (phases 3-5 fully programmatic)
+
+    ("voice_director",          "Voice Director — (DEPRECATED) voice profiling, now VoiceNode"),
 ]
 
 AGENT_IDS = [a[0] for a in AGENTS]
@@ -157,7 +183,13 @@ def spawn_session(agent_id: str, project_dir: Path, model: str) -> int:
         print(f"{RED}Prompt file not found: {prompt_path}{RESET}")
         return 1
 
-    system_prompt = build_training_preamble(agent_id) + prompt_path.read_text()
+    raw_prompt = prompt_path.read_text()
+    # Expand {{include:path}} markers relative to prompt directory
+    raw_prompt = _expand_includes(raw_prompt, prompt_path.parent)
+    system_prompt = build_training_preamble(agent_id) + raw_prompt
+
+    # Deploy shared conventions as CLAUDE.md if needed
+    _deploy_shared_conventions(project_dir)
 
     env = {
         **os.environ,

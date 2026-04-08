@@ -61,6 +61,12 @@ class GraphStore:
         g = graph or self._graph
         if g is None:
             raise ValueError("No graph to save. Load or initialize first.")
+        if not isinstance(g, NarrativeGraph):
+            raise TypeError(f"Expected NarrativeGraph, got {type(g).__name__}")
+
+        # Re-validate before writing so direct in-memory mutations cannot bypass
+        # the canonical graph contract.
+        g = NarrativeGraph.model_validate(g.model_dump())
 
         self.ensure_dirs()
 

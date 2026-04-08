@@ -78,7 +78,7 @@ SIMPLER APPROACH: Spawn CC with a prompt that tells it to do all 3 sub-phases in
 #### Phase 4 — Production Coordination
 1. Spawn Production Coordinator
 2. Wait for completion
-3. Verify: all dialogue has audio, all frames have composed images, timeline.json exists
+3. Verify: all frames have composed images
 4. Update manifest: phase_4 complete, phase_5 ready
 
 #### Phase 5 — Video Generation
@@ -88,7 +88,7 @@ SIMPLER APPROACH: Spawn CC with a prompt that tells it to do all 3 sub-phases in
 4. Update manifest: phase_5 complete, phase_6 ready
 
 #### Phase 6 — Export (Programmatic, No Agent)
-1. Read manifest frames in timeline order
+1. Read manifest frames in sequenceIndex order
 2. Normalize all clips via ffmpeg (libx264, 24fps, 1280x720, aac 48khz stereo)
 3. Write concat_list.txt
 4. ffmpeg concat demuxer with -c copy

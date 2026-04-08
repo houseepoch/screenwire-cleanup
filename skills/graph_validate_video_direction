@@ -2,10 +2,12 @@
 """graph_validate_video_direction — Validate that all frames have video direction data.
 
 Checks every FrameNode for:
-  - suggested_duration is set and in range 3-15
+  - suggested_duration is set (minimum 3)
   - action_summary is non-empty
   - Dialogue frames have dialogue_ids linked
-  - Duration is reasonable for the formula tag
+  - Duration is reasonable for the formula tag (dialogue frames may exceed formula range)
+  - Directorial intent fields are populated
+  - Repetitive shot coverage is flagged at scene level
 
 Prints a structured report. Exits 0 if all pass, 1 if any fail.
 
@@ -37,6 +39,8 @@ DEFAULT_DURATION = {
     "F17": 10, "F18": 8,
 }
 
+REQUIRED_DIRECTING_FIELDS = ("dramatic_purpose", "beat_turn", "camera_motivation")
+
 
 def main():
     parser = argparse.ArgumentParser(description="Validate video direction data on all frames.")
@@ -52,6 +56,7 @@ def main():
     warnings = []
     fixed = 0
     total = len(graph.frame_order)
+    scene_sequences = {}
 
     for frame_id in graph.frame_order:
         frame = graph.frames.get(frame_id)
@@ -60,6 +65,7 @@ def main():
             continue
 
         tag = frame.formula_tag or "F07"
+        scene_sequences.setdefault(frame.scene_id, []).append(frame)
 
         # Check suggested_duration
         if frame.suggested_duration is None:
@@ -68,15 +74,22 @@ def main():
                 fixed += 1
             else:
                 errors.append(f"{frame_id}: suggested_duration is missing")
-        elif not (3 <= frame.suggested_duration <= 15):
-            errors.append(f"{frame_id}: suggested_duration={frame.suggested_duration} out of range 3-15")
+        elif frame.suggested_duration < 3:
+            errors.append(f"{frame_id}: suggested_duration={frame.suggested_duration} below minimum 3")
         else:
-            # Check against formula range
-            lo, hi = DURATION_RANGES.get(tag, (3, 15))
-            if frame.suggested_duration < lo or frame.suggested_duration > hi:
+            # Check against formula range — dialogue frames may legitimately exceed
+            # the formula range to accommodate longer lines, so only warn
+            lo, hi = DURATION_RANGES.get(tag, (3, 30))
+            is_dialogue = frame.is_dialogue or bool(frame.dialogue_ids)
+            if frame.suggested_duration < lo:
                 warnings.append(
                     f"{frame_id}: suggested_duration={frame.suggested_duration} "
-                    f"outside typical range {lo}-{hi} for {tag}"
+                    f"below typical minimum {lo} for {tag}"
+                )
+            elif frame.suggested_duration > hi and not is_dialogue:
+                warnings.append(
+                    f"{frame_id}: suggested_duration={frame.suggested_duration} "
+                    f"above typical maximum {hi} for {tag}"
                 )
 
         # Check action_summary
@@ -89,6 +102,81 @@ def main():
         # Check dialogue linkage
         if frame.is_dialogue and not frame.dialogue_ids:
             errors.append(f"{frame_id}: is_dialogue=True but no dialogue_ids linked")
+
+        # Check directorial intent block
+        directing = frame.directing
+        for field_name in REQUIRED_DIRECTING_FIELDS:
+            value = getattr(directing, field_name, None)
+            if not value or len(str(value).strip()) < 4:
+                errors.append(f"{frame_id}: directing.{field_name} is missing")
+
+        visible_cast = [
+            cs for cs in frame.cast_states
+            if getattr(getattr(cs, "frame_role", None), "value", getattr(cs, "frame_role", None)) != "referenced"
+        ]
+        if visible_cast and not getattr(directing, "pov_owner", None):
+            errors.append(f"{frame_id}: directing.pov_owner is missing for character-driven frame")
+        if len(visible_cast) >= 2 and not getattr(directing, "power_dynamic", None):
+            errors.append(f"{frame_id}: directing.power_dynamic is missing for multi-character frame")
+        if frame.visual_flow_element == "reaction" and not getattr(directing, "reaction_target", None):
+            warnings.append(f"{frame_id}: reaction frame missing directing.reaction_target")
+
+        comp = frame.composition
+        if comp.movement and comp.movement not in ("static", "Static"):
+            if not getattr(directing, "movement_path", None):
+                warnings.append(f"{frame_id}: moving shot missing directing.movement_path")
+
+        if tag in ("F07", "F09", "F12", "F17"):
+            has_bg_life = bool(getattr(directing, "background_life", None))
+            has_bg_action = bool(frame.background.background_action)
+            has_ambient_motion = bool(frame.environment.atmosphere.ambient_motion)
+            if not (has_bg_life or has_bg_action or has_ambient_motion):
+                warnings.append(f"{frame_id}: environment/transition frame has no background life or ambient motion")
+
+    # Scene-level monotony checks
+    for scene_id, frames in scene_sequences.items():
+        movement_streak = 1
+        angle_streak = 1
+        facing_streak = 1
+        prev_movement = None
+        prev_angle = None
+        prev_facing = None
+
+        for frame in frames:
+            movement = (frame.composition.movement or "unset").strip()
+            angle = (frame.composition.angle or "unset").strip()
+            facing = (frame.background.camera_facing or "unset").strip()
+
+            if prev_movement == movement:
+                movement_streak += 1
+            else:
+                movement_streak = 1
+                prev_movement = movement
+
+            if prev_angle == angle:
+                angle_streak += 1
+            else:
+                angle_streak = 1
+                prev_angle = angle
+
+            if prev_facing == facing:
+                facing_streak += 1
+            else:
+                facing_streak = 1
+                prev_facing = facing
+
+            if movement_streak >= 4 and movement not in ("unset", ""):
+                warnings.append(
+                    f"{scene_id}: {movement_streak} consecutive frames share movement='{movement}' ending at {frame.frame_id}"
+                )
+            if angle_streak >= 4 and angle not in ("unset", ""):
+                warnings.append(
+                    f"{scene_id}: {angle_streak} consecutive frames share angle='{angle}' ending at {frame.frame_id}"
+                )
+            if facing_streak >= 4 and facing not in ("unset", ""):
+                warnings.append(
+                    f"{scene_id}: {facing_streak} consecutive frames share camera_facing='{facing}' ending at {frame.frame_id}"
+                )
 
     # Save fixes if any
     if args.fix and fixed > 0:

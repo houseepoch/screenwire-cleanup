@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
-"""graph_init — Initialize a new narrative graph for the project."""
+"""graph_init — Initialize a new narrative graph for the project.
+
+Seeds the ProjectNode from onboarding_config.json so media_style,
+media_style_prefix, and all onboarding fields are set PROGRAMMATICALLY
+at graph creation — never left for the LLM to populate.
+"""
 
 import argparse
 import json
 import os
 import sys
+from pathlib import Path
 
 # Add project root to path for graph imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -18,17 +24,50 @@ def main():
     parser.add_argument("--project-dir", default=os.getcwd())
     args = parser.parse_args()
 
-    store = GraphStore(args.project_dir)
+    project_dir = Path(args.project_dir)
+    store = GraphStore(project_dir)
 
     if store.exists():
         print(f"Graph already exists at {store.graph_path}")
         print("Use graph_query to inspect it.")
         sys.exit(0)
 
-    graph = store.initialize(args.project_id, title=args.title)
+    # Seed from onboarding config if available
+    onboarding_path = project_dir / "source_files" / "onboarding_config.json"
+    project_kwargs = {"title": args.title}
+
+    if onboarding_path.exists():
+        cfg = json.loads(onboarding_path.read_text(encoding="utf-8"))
+        project_kwargs.update({
+            "title": cfg.get("projectName", args.title),
+            "pipeline": cfg.get("pipeline", "story_upload"),
+            "stickiness_level": cfg.get("stickinessLevel", 3),
+            "stickiness_permission": cfg.get("stickinessPermission", ""),
+            "output_size": cfg.get("outputSize", "short"),
+            "output_size_label": cfg.get("outputSizeLabel", ""),
+            "frame_range": cfg.get("frameRange", [10, 20]),
+            "scene_range": cfg.get("sceneRange", [1, 3]),
+            "media_style": cfg.get("mediaStyle", "live_clear"),
+            "media_style_prefix": cfg.get("mediaStylePrefix", ""),
+            "aspect_ratio": cfg.get("aspectRatio", "16:9"),
+            "style": cfg.get("style", []),
+            "genre": cfg.get("genre", []),
+            "mood": cfg.get("mood", []),
+            "extra_details": cfg.get("extraDetails", ""),
+            "source_files": cfg.get("sourceFiles", []),
+        })
+        print(f"  Seeded from onboarding_config.json:")
+        print(f"    media_style: {project_kwargs['media_style']}")
+        print(f"    media_style_prefix: {project_kwargs['media_style_prefix'][:60]}...")
+        print(f"    output_size: {project_kwargs['output_size']}")
+        print(f"    stickiness: {project_kwargs['stickiness_level']}")
+    else:
+        print(f"  WARNING: No onboarding_config.json at {onboarding_path}")
+        print(f"  Graph initialized with defaults — media_style will need manual setting")
+
+    graph = store.initialize(args.project_id, **project_kwargs)
     print(f"SUCCESS: Graph initialized -> {store.graph_path}")
     print(f"  project_id: {args.project_id}")
-    print(f"  title: {args.title}")
     print(f"  nodes: 0 cast, 0 locations, 0 props, 0 scenes, 0 frames")
 
 

@@ -26,7 +26,8 @@ from .schema import (
     LocationNode, LocationFrameState,
     PropNode, PropFrameState,
     SceneNode, FrameNode, DialogueNode,
-    GraphEdge, EdgeType, Provenance,
+    VoiceNode, ChainedFrameGroup,
+    GraphEdge, EdgeType, Provenance, canonical_edge_id,
 )
 from .store import GraphStore
 
@@ -58,9 +59,11 @@ def query_graph(
         "cast": graph.cast,
         "location": graph.locations,
         "prop": graph.props,
+        "voice": graph.voices,
         "scene": graph.scenes,
         "frame": graph.frames,
         "dialogue": graph.dialogue,
+        "chained_frame_group": graph.chained_frame_groups,
         "cast_frame_state": graph.cast_frame_states,
         "prop_frame_state": graph.prop_frame_states,
         "location_frame_state": graph.location_frame_states,
@@ -139,12 +142,23 @@ def get_frame_context(graph: NarrativeGraph, frame_id: str) -> dict:
     prop_nodes = [graph.props[pid].model_dump() for pid in all_prop_ids if pid in graph.props]
     prop_states = [ps.model_dump() for ps in (frame.prop_states or [])]
 
-    # Dialogue audible during this frame
-    dialogue_nodes = []
+    # Dialogue audible during this frame — union of direct IDs and temporal span
+    dialogue_by_id: dict[str, dict] = {}
+    # 1. Direct dialogue_ids on the frame (Morpheus-assigned)
+    for did in (frame.dialogue_ids or []):
+        dnode = graph.dialogue.get(did)
+        if dnode:
+            dialogue_by_id[did] = dnode.model_dump()
+    # 2. Temporal span scan (catches J-cuts, L-cuts, and multi-frame spans)
     for did, dnode in graph.dialogue.items():
-        # Check if this frame falls within the dialogue's temporal span
-        if _frame_in_span(graph, frame_id, dnode.start_frame, dnode.end_frame):
-            dialogue_nodes.append(dnode.model_dump())
+        if did not in dialogue_by_id:
+            if _frame_in_span(graph, frame_id, dnode.start_frame, dnode.end_frame):
+                dialogue_by_id[did] = dnode.model_dump()
+    # Sort by dialogue order
+    dialogue_nodes = sorted(
+        dialogue_by_id.values(),
+        key=lambda d: d.get("order", 0),
+    )
 
     # Adjacent frames
     prev_frame = graph.frames.get(frame.previous_frame_id) if frame.previous_frame_id else None
@@ -164,8 +178,8 @@ def get_frame_context(graph: NarrativeGraph, frame_id: str) -> dict:
             "previous": prev_frame.model_dump() if prev_frame else None,
             "next": next_frame.model_dump() if next_frame else None,
         },
-        "world": graph.project.world.model_dump(),
-        "visual": graph.project.visual.model_dump(),
+        "world": graph.world.model_dump(),
+        "visual": graph.visual.model_dump(),
     }
 
 
@@ -221,9 +235,11 @@ def upsert_node(
         "cast": (CastNode, graph.cast, "cast_id"),
         "location": (LocationNode, graph.locations, "location_id"),
         "prop": (PropNode, graph.props, "prop_id"),
+        "voice": (VoiceNode, graph.voices, "voice_id"),
         "scene": (SceneNode, graph.scenes, "scene_id"),
         "frame": (FrameNode, graph.frames, "frame_id"),
         "dialogue": (DialogueNode, graph.dialogue, "dialogue_id"),
+        "chained_frame_group": (ChainedFrameGroup, graph.chained_frame_groups, "chain_id"),
     }
 
     if node_type not in type_to_model:
@@ -322,8 +338,18 @@ def create_edge(
     if not prov.source_prose_chunk.strip():
         raise ValueError("REJECTED: edge creation requires provenance.source_prose_chunk.")
 
+    edge_id = canonical_edge_id(source_id, edge_type, target_id)
+    for existing in graph.edges:
+        if existing.edge_id == edge_id:
+            existing.weight = weight
+            existing.start_frame = start_frame
+            existing.end_frame = end_frame
+            existing.metadata = metadata or {}
+            existing.provenance = prov
+            return existing
+
     edge = GraphEdge(
-        edge_id=f"{source_id}__{edge_type}__{target_id}",
+        edge_id=edge_id,
         source_id=source_id,
         target_id=target_id,
         edge_type=EdgeType(edge_type),
@@ -631,6 +657,238 @@ def check_continuity(graph: NarrativeGraph, frame_id: str) -> list[ContinuityCon
                 severity="warning",
             ))
 
+    # 8. Dialogue-to-frame assignment consistency
+    #    a) dialogue_ids on the frame must match temporal span resolution
+    #    b) DIALOGUE_SPANS edges must exist for each dialogue → frame link
+    #    c) SPOKEN_BY edges must exist for each dialogue → cast link
+    for did in (frame.dialogue_ids or []):
+        dnode = graph.dialogue.get(did)
+        if not dnode:
+            conflicts.append(ContinuityConflict(
+                conflict_type="dialogue_id_dangling",
+                node_id=frame_id,
+                conflicting_node_id=did,
+                reason=(
+                    f"{frame_id} references dialogue {did} in dialogue_ids "
+                    f"but that dialogue node does not exist in the graph"
+                ),
+                frame_id=frame_id,
+                severity="error",
+            ))
+            continue
+
+        # Check temporal span includes this frame
+        if not _frame_in_span(graph, frame_id, dnode.start_frame, dnode.end_frame):
+            conflicts.append(ContinuityConflict(
+                conflict_type="dialogue_span_mismatch",
+                node_id=did,
+                conflicting_node_id=frame_id,
+                reason=(
+                    f"Dialogue {did} listed in {frame_id}.dialogue_ids but "
+                    f"frame is outside temporal span "
+                    f"({dnode.start_frame}→{dnode.end_frame})"
+                ),
+                frame_id=frame_id,
+                severity="warning",
+            ))
+
+        # Check DIALOGUE_SPANS edge exists
+        has_spans_edge = any(
+            e.source_id == did
+            and e.target_id == frame_id
+            and e.edge_type == EdgeType.DIALOGUE_SPANS
+            for e in graph.edges
+        )
+        if not has_spans_edge:
+            conflicts.append(ContinuityConflict(
+                conflict_type="missing_dialogue_spans_edge",
+                node_id=did,
+                conflicting_node_id=frame_id,
+                reason=(
+                    f"No DIALOGUE_SPANS edge from {did} → {frame_id} "
+                    f"despite dialogue_ids assignment"
+                ),
+                frame_id=frame_id,
+                severity="warning",
+            ))
+
+        # Check SPOKEN_BY edge exists
+        has_spoken_edge = any(
+            e.source_id == did
+            and e.target_id == dnode.cast_id
+            and e.edge_type == EdgeType.SPOKEN_BY
+            for e in graph.edges
+        )
+        if not has_spoken_edge:
+            conflicts.append(ContinuityConflict(
+                conflict_type="missing_spoken_by_edge",
+                node_id=did,
+                conflicting_node_id=dnode.cast_id,
+                reason=(
+                    f"No SPOKEN_BY edge from {did} → {dnode.cast_id}"
+                ),
+                frame_id=frame_id,
+                severity="warning",
+            ))
+
+    # 9. is_dialogue flag consistency
+    #    If frame has dialogue_ids, is_dialogue should be True.
+    #    If frame has no dialogue_ids but is within a dialogue span, warn.
+    if frame.dialogue_ids and not frame.is_dialogue:
+        conflicts.append(ContinuityConflict(
+            conflict_type="is_dialogue_flag_mismatch",
+            node_id=frame_id,
+            conflicting_node_id=None,
+            reason=(
+                f"{frame_id} has dialogue_ids={frame.dialogue_ids} "
+                f"but is_dialogue=False"
+            ),
+            frame_id=frame_id,
+            severity="warning",
+        ))
+    # Check reverse: frame is within a dialogue span but has no dialogue_ids
+    if not frame.dialogue_ids:
+        for did, dnode in graph.dialogue.items():
+            if _frame_in_span(graph, frame_id, dnode.start_frame, dnode.end_frame):
+                conflicts.append(ContinuityConflict(
+                    conflict_type="dialogue_span_not_linked",
+                    node_id=did,
+                    conflicting_node_id=frame_id,
+                    reason=(
+                        f"Dialogue {did} span ({dnode.start_frame}→"
+                        f"{dnode.end_frame}) covers {frame_id} but "
+                        f"frame has no dialogue_ids set"
+                    ),
+                    frame_id=frame_id,
+                    severity="warning",
+                ))
+                break  # One warning is enough per frame
+
+    # 10. Reaction frame validation
+    #     If this frame is listed as a reaction_frame for a dialogue node,
+    #     the dialogue speaker should NOT be the camera subject here.
+    for did, dnode in graph.dialogue.items():
+        if frame_id in (dnode.reaction_frame_ids or []):
+            for cs in frame.cast_states:
+                if cs.cast_id == dnode.cast_id and cs.frame_role == "subject":
+                    conflicts.append(ContinuityConflict(
+                        conflict_type="reaction_frame_shows_speaker",
+                        node_id=did,
+                        conflicting_node_id=frame_id,
+                        reason=(
+                            f"{frame_id} is a reaction_frame for {did} but "
+                            f"the speaker {dnode.cast_id} is the subject — "
+                            f"reaction frames should show the listener"
+                        ),
+                        frame_id=frame_id,
+                        severity="warning",
+                    ))
+
+    return conflicts
+
+
+def check_dialogue_ordering(graph: NarrativeGraph) -> list[ContinuityConflict]:
+    """Validate dialogue ordering is monotonically consistent with frame order.
+
+    Checks:
+    1. dialogue_order list has monotonically increasing 'order' field
+    2. start_frame of each dialogue is at or after the start_frame of the previous
+    3. Every dialogue's primary_visual_frame, start_frame, end_frame exist in graph
+    """
+    conflicts: list[ContinuityConflict] = []
+
+    prev_order = -1
+    prev_start_idx = -1
+
+    for did in graph.dialogue_order:
+        dnode = graph.dialogue.get(did)
+        if not dnode:
+            conflicts.append(ContinuityConflict(
+                conflict_type="dialogue_order_dangling",
+                node_id=did,
+                conflicting_node_id=None,
+                reason=f"Dialogue {did} in dialogue_order but not in graph.dialogue",
+                frame_id="",
+                severity="error",
+            ))
+            continue
+
+        # 1. Order field monotonic
+        if dnode.order <= prev_order:
+            conflicts.append(ContinuityConflict(
+                conflict_type="dialogue_order_non_monotonic",
+                node_id=did,
+                conflicting_node_id=None,
+                reason=(
+                    f"Dialogue {did} order={dnode.order} is not greater "
+                    f"than previous order={prev_order}"
+                ),
+                frame_id=dnode.primary_visual_frame,
+                severity="error",
+            ))
+        prev_order = dnode.order
+
+        # 2. Temporal ordering vs frame_order
+        try:
+            start_idx = graph.frame_order.index(dnode.start_frame)
+            if start_idx < prev_start_idx:
+                conflicts.append(ContinuityConflict(
+                    conflict_type="dialogue_temporal_regression",
+                    node_id=did,
+                    conflicting_node_id=None,
+                    reason=(
+                        f"Dialogue {did} start_frame={dnode.start_frame} "
+                        f"appears earlier in frame_order than previous dialogue's start"
+                    ),
+                    frame_id=dnode.start_frame,
+                    severity="warning",
+                ))
+            prev_start_idx = start_idx
+        except ValueError:
+            conflicts.append(ContinuityConflict(
+                conflict_type="dialogue_frame_missing",
+                node_id=did,
+                conflicting_node_id=dnode.start_frame,
+                reason=f"Dialogue {did} start_frame={dnode.start_frame} not in frame_order",
+                frame_id=dnode.start_frame,
+                severity="error",
+            ))
+
+        # 3. All referenced frames exist
+        for label, fid in [
+            ("start_frame", dnode.start_frame),
+            ("end_frame", dnode.end_frame),
+            ("primary_visual_frame", dnode.primary_visual_frame),
+        ]:
+            if fid not in graph.frames:
+                conflicts.append(ContinuityConflict(
+                    conflict_type="dialogue_frame_missing",
+                    node_id=did,
+                    conflicting_node_id=fid,
+                    reason=f"Dialogue {did} {label}={fid} does not exist in graph.frames",
+                    frame_id=fid,
+                    severity="error",
+                ))
+
+        # end_frame must be at or after start_frame
+        try:
+            si = graph.frame_order.index(dnode.start_frame)
+            ei = graph.frame_order.index(dnode.end_frame)
+            if ei < si:
+                conflicts.append(ContinuityConflict(
+                    conflict_type="dialogue_span_inverted",
+                    node_id=did,
+                    conflicting_node_id=None,
+                    reason=(
+                        f"Dialogue {did} end_frame={dnode.end_frame} "
+                        f"comes before start_frame={dnode.start_frame}"
+                    ),
+                    frame_id=dnode.start_frame,
+                    severity="error",
+                ))
+        except ValueError:
+            pass  # Already caught above
+
     return conflicts
 
 
@@ -650,9 +908,11 @@ def trace_provenance(graph: NarrativeGraph, node_id: str) -> Optional[dict]:
         ("cast", graph.cast),
         ("location", graph.locations),
         ("prop", graph.props),
+        ("voice", graph.voices),
         ("scene", graph.scenes),
         ("frame", graph.frames),
         ("dialogue", graph.dialogue),
+        ("chained_frame_group", graph.chained_frame_groups),
         ("cast_frame_state", graph.cast_frame_states),
         ("prop_frame_state", graph.prop_frame_states),
         ("location_frame_state", graph.location_frame_states),
@@ -773,6 +1033,7 @@ def propagate_cast_state(
     from_frame_id: str,
     to_frame_id: str,
     mutations: Optional[dict] = None,
+    provenance: Optional[dict] = None,
 ) -> CastFrameState:
     """Copy a cast member's state from one frame to the next, apply mutations.
 
@@ -808,10 +1069,9 @@ def propagate_cast_state(
                 delta_fields.append(field)
             new_data[field] = value
     new_data["delta_fields"] = delta_fields
-
-    new_state = CastFrameState.model_validate(new_data)
-    graph.cast_frame_states[new_key] = new_state
-    return new_state
+    provenance = provenance or {}
+    upsert_frame_state(graph, "cast_frame_state", new_data, provenance)
+    return graph.cast_frame_states[new_key]
 
 
 def propagate_prop_state(
@@ -820,6 +1080,7 @@ def propagate_prop_state(
     from_frame_id: str,
     to_frame_id: str,
     mutations: Optional[dict] = None,
+    provenance: Optional[dict] = None,
 ) -> PropFrameState:
     """Copy a prop's state from one frame to the next, apply mutations."""
     prev_key = f"{prop_id}@{from_frame_id}"
@@ -841,10 +1102,9 @@ def propagate_prop_state(
                 delta_fields.append(field)
             new_data[field] = value
     new_data["delta_fields"] = delta_fields
-
-    new_state = PropFrameState.model_validate(new_data)
-    graph.prop_frame_states[new_key] = new_state
-    return new_state
+    provenance = provenance or {}
+    upsert_frame_state(graph, "prop_frame_state", new_data, provenance)
+    return graph.prop_frame_states[new_key]
 
 
 def propagate_location_state(
@@ -853,6 +1113,7 @@ def propagate_location_state(
     from_frame_id: str,
     to_frame_id: str,
     mutations: Optional[dict] = None,
+    provenance: Optional[dict] = None,
 ) -> LocationFrameState:
     """Copy a location's state from one frame to the next, apply mutations."""
     prev_key = f"{location_id}@{from_frame_id}"
@@ -876,7 +1137,83 @@ def propagate_location_state(
                 delta_fields.append(field)
             new_data[field] = value
     new_data["delta_fields"] = delta_fields
+    provenance = provenance or {}
+    upsert_frame_state(graph, "location_frame_state", new_data, provenance)
+    return graph.location_frame_states[new_key]
 
-    new_state = LocationFrameState.model_validate(new_data)
-    graph.location_frame_states[new_key] = new_state
-    return new_state
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CHAINED FRAME GROUP DETECTION
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+def build_chained_frame_groups(graph: NarrativeGraph) -> list[ChainedFrameGroup]:
+    """Identify and register all chained frame groups in the graph.
+
+    A chain is 2+ consecutive frames sharing the same scene_id AND location_id.
+    Clears existing groups and rebuilds from scratch.
+
+    Returns the list of chains created.
+    """
+    graph.chained_frame_groups.clear()
+    chains: list[ChainedFrameGroup] = []
+
+    if not graph.frame_order:
+        return chains
+
+    chain_idx = 0
+    current_chain_frames: list[str] = []
+    current_scene: str | None = None
+    current_location: str | None = None
+
+    def _flush_chain() -> None:
+        nonlocal chain_idx
+        if len(current_chain_frames) >= 2:
+            chain_id = f"chain_{chain_idx + 1:02d}"
+            # Gather cast/props across all frames in the chain
+            all_cast: set[str] = set()
+            all_props: set[str] = set()
+            for fid in current_chain_frames:
+                frame = graph.frames.get(fid)
+                if frame:
+                    for cs in frame.cast_states:
+                        if cs.frame_role != "referenced":
+                            all_cast.add(cs.cast_id)
+                    for ps in frame.prop_states:
+                        all_props.add(ps.prop_id)
+
+            group = ChainedFrameGroup(
+                chain_id=chain_id,
+                scene_id=current_scene or "",
+                location_id=current_location or "",
+                frame_ids=list(current_chain_frames),
+                frame_count=len(current_chain_frames),
+                cast_present=sorted(all_cast),
+                props_present=sorted(all_props),
+            )
+            graph.chained_frame_groups[chain_id] = group
+            chains.append(group)
+            chain_idx += 1
+
+    for fid in graph.frame_order:
+        frame = graph.frames.get(fid)
+        if not frame:
+            _flush_chain()
+            current_chain_frames = []
+            current_scene = None
+            current_location = None
+            continue
+
+        if (frame.scene_id == current_scene
+                and frame.location_id == current_location):
+            current_chain_frames.append(fid)
+        else:
+            _flush_chain()
+            current_chain_frames = [fid]
+            current_scene = frame.scene_id
+            current_location = frame.location_id
+
+    _flush_chain()
+
+    graph.seeded_domains["chained_frame_groups"] = True
+    return chains

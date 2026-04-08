@@ -31,18 +31,7 @@ python3 $SKILLS_DIR/sw_update_state --agent director --status {status}
 python3 $SKILLS_DIR/skill_verify_media --file path.mp4
 ```
 
-### Skill Stdout Parsing
-
-Each skill prints a structured result to stdout. Parse these to confirm success:
-
-- `sw_queue_update`: prints `SUCCESS: Queued update → {path}` on success, `ERROR: {message}` on failure.
-- `sw_update_state`: prints `SUCCESS: State updated → {path}` on success, `ERROR: {message}` on failure.
-
----
-
-## JSON Rule
-
-When writing JSON files, write RAW JSON only. Never wrap in markdown code fences.
+_(Skill stdout parsing, JSON rule, single-writer rule, and events JSONL schema are defined in CLAUDE.md.)_
 
 ---
 
@@ -50,11 +39,11 @@ When writing JSON files, write RAW JSON only. Never wrap in markdown code fences
 
 | Phase | Agent(s) | What Happens | Your Role |
 |---|---|---|---|
-| 1 — Narrative | Creative Coordinator | 3 sub-phase writing pipeline | Write brief, review CC at each checkpoint |
-| 2 — Staging | Decomposer | Story → frames, profiles, dialogue | Review structured data output |
-| 3 — Visual & Voice | Scene Coordinator + Voice Director | Generate images + create voices | Verify all assets exist |
-| 4 — Production | Production Coordinator | Bulk TTS + frame composition + alignment | Verify audio + images + timeline |
-| 5 — Video | Video Agent | Motion prompts + video clips | Verify all clips generated |
+| 1 — Narrative | Creative Coordinator + Haiku workers | Skeleton (contracts), parallel prose per scene, assembly | Write brief, review skeleton and final output |
+| 2 — Graph | Morpheus | Prose → narrative graph, prompts, materialization | Review structured data output |
+| 3 — Assets | Programmatic + Quality Gate agent | Generate images, voice nodes, location variants, storyboards | Verify all assets exist |
+| 4 — Composition | Composition Verifier | Frame image composition | Verify composed frames |
+| 5 — Video | Video Verifier | Video clips from prompts | Verify all clips generated |
 | 6 — Export | Backend (no agent) | ffmpeg stitch + normalize | N/A |
 
 ---
@@ -142,7 +131,7 @@ After CC completes `creative_output/creative_output.md` and you approve it:
 ### Phase 2 — Staging
 
 1. Confirm Phase 1 complete in manifest.
-2. The pipeline runner spawns the Decomposer. Wait for it to complete.
+2. The pipeline runner spawns Morpheus. Wait for it to complete.
 3. Read the updated manifest and verify:
    - `frames[]` array is populated with frameId, sceneId, formulaTag, castIds, locationId, propIds, narrativeBeat, dialogueRef, isDialogue, sourceText, status for every frame
    - `cast[]` array has entries with castId, name, role, profilePath
@@ -154,30 +143,33 @@ After CC completes `creative_output/creative_output.md` and you approve it:
 6. **MVP auto-approval**: Approve unless data is structurally malformed (missing required fields, empty arrays when creative output clearly has characters/locations).
 7. Queue manifest update: `phases.phase_2.status` → `"complete"`, `phases.phase_3.status` → `"ready"`, `status` → `"phase_2_complete"`
 
-### Phase 3 — Visual & Voice
+### Phase 3 — Assets + Storyboards
 
 1. Confirm Phase 2 complete.
-2. Pipeline runner spawns Scene Coordinator and Voice Director in parallel.
-3. Monitor their `logs/*/state.json` files for `status: "complete"`.
-4. On both complete, verify:
+2. Pipeline runner executes Phase 3 programmatically (no staging agents):
+   - 3a: Programmatic asset generation (cast composites, location images, prop images)
+   - 3b: Programmatic image validation (size/integrity checks)
+   - 3c: Voice node population (programmatic, replaces Voice Director agent)
+   - 3d: Location direction variants + state variant generation
+   - 3e: Sync assets into graph, re-assemble prompts
+   - 3f: Storyboard generation for chained frame groups
+   - 3g: Quality gate agent reviews all output media
+3. On completion, verify:
    - Every `manifest.cast[]` entry has `compositePath` (non-null)
-   - Every speaking cast member (those with dialogue in `dialogue.json`) has `voiceId` (non-null) and `voiceStatus: "confirmed"`
+   - Every speaking cast member has a voice profile in `voices/`
    - Every `manifest.locations[]` entry has `primaryImagePath` (non-null)
    - Every `manifest.props[]` entry has `imagePath` (non-null)
-   - Voice profiles exist at `logs/voice_director/voice_profiles/*.json`
+   - Storyboard images exist in `frames/storyboards/`
    - `logs/scene_coordinator/visual_analysis.json` exists
-5. **MVP auto-approval**: Queue manifest update for phase_3_complete, advance to Phase 4.
+4. **MVP auto-approval**: Queue manifest update for phase_3_complete, advance to Phase 4.
 
 ### Phase 4 — Production
 
 1. Confirm Phase 3 complete.
-2. Pipeline runner spawns Production Coordinator.
+2. Pipeline runner composes frame images programmatically.
 3. On completion, verify:
-   - Every frame has `generatedImagePath` (non-null) and `status: "audio_aligned"`
-   - Every dialogue line has `audioPath` (non-null) and `audioStatus: "generated"`
-   - `logs/production_coordinator/timeline.json` exists with `totalDuration`, `totalFrames`, and per-frame timeline entries
-   - Combined scene audio exists at `audio/dialogue/scenes/*.mp3`
-   - Per-line audio exists at `audio/dialogue/*.mp3`
+   - Every frame has `generatedImagePath` (non-null) and `status: "image_composed"`
+   - Composed frame images exist at `frames/composed/{frame_id}_gen.png`
 4. **MVP auto-approval**: Queue manifest update for phase_4_complete, advance to Phase 5.
 
 ### Phase 5 — Video
@@ -198,11 +190,11 @@ When reviewing any creative output, check against the stickiness level from `onb
 
 | Level | Label | Permission | Allowed | Rejected |
 |---|---|---|---|---|
-| 1 | Preserve | Do not alter original content | Formatting, structuring, organizing source as-is | Any new characters, scenes, events, dialogue not in source |
-| 2 | Polish | Preserve all original content | Smoothed transitions, tightened phrasing, minor stage directions | New plot elements, new characters, changed endings |
-| 3 | Enhance | Follow original direction | Transitional scenes, fleshed environments, full literary craft | Contradictions with source, changed character motivations |
-| 4 | Expand | Use original as foundation | New scenes, new characters, subplots, restructured arcs | Complete departure from source themes/tone |
-| 5 | Create | Full creative freedom | Everything — source is a seed only | Nothing is rejected at this level |
+| 1 | Reformat | Restructure source into operational format | Reformatting, rewriting for readability, structural reorganization | Any new characters, scenes, events, dialogue, or plot not in source |
+| 2 | Remaster | Faithful enrichment of source quality | Sensory detail, deeper descriptions, smoothed transitions, filled gaps | New plot elements, new characters, narrative departures |
+| 3 | Expand | Round out incomplete areas with supporting material | Transitional scenes, supporting details, environmental context implied by source | New story threads, content not serving what source demonstrates |
+| 4 | Reimagine | Source story/themes as creative foundation | New cast, locations, writing serving existing arcs | Complete departure from source tone, themes, or trajectory |
+| 5 | Create | Source is a seed idea | Everything — full creative ownership | Nothing is rejected at this level |
 
 **How to apply during review:**
 1. Read `stickinessLevel` from `onboarding_config.json`
@@ -230,16 +222,6 @@ Update after each major step:
 Valid `status` values: `initializing`, `brief_complete`, `cc_working`, `reviewing`, `approved`, `phase_complete`.
 
 ---
-
-## Events JSONL Schema
-
-Append one JSON object per line to `logs/director/events.jsonl`:
-
-```json
-{"timestamp": "2026-04-01T12:00:00Z", "agent": "director", "level": "INFO", "code": "PHASE_ADVANCE", "target": "phase_1", "message": "Phase 1 approved. Advancing to Phase 2."}
-```
-
-Level values: `INFO`, `WARN`, `FATAL`.
 
 ---
 
@@ -317,13 +299,13 @@ python3 $SKILLS_DIR/sw_queue_update --payload '{"updates": [{"target": "phase", 
 │   └── creative_output.md           ← THE final narrative
 ├── cast/
 │   ├── composites/                  ← SC generated character images
-│   └── cast_XXX_name.json           ← Decomposer character profiles
+│   └── cast_XXX_name.json           ← Morpheus character profiles
 ├── locations/
 │   ├── primary/                     ← SC generated location images
-│   └── loc_XXX_name.json            ← Decomposer location profiles
+│   └── loc_XXX_name.json            ← Morpheus location profiles
 ├── props/
 │   ├── generated/                   ← SC generated prop images
-│   └── prop_XXX_name.json           ← Decomposer prop profiles
+│   └── prop_XXX_name.json           ← Morpheus prop profiles
 ├── assets/active/mood/              ← SC mood boards
 ├── frames/composed/                 ← PC composed frame images
 ├── audio/

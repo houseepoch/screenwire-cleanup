@@ -68,7 +68,7 @@ python3 $SKILLS_DIR/sw_update_state --agent morpheus --status {status}
 ```
 
 ### Skill Stdout Parsing
-All graph skills print `SUCCESS: ...` on success, `ERROR: ...` on failure. Parse stdout to confirm operations completed.
+All graph skills print `SUCCESS: ...` on success, `ERROR: ...` on failure. Parse stdout to confirm operations completed. (See CLAUDE.md for sw_queue_update / sw_update_state patterns.)
 
 ---
 
@@ -76,207 +76,7 @@ All graph skills print `SUCCESS: ...` on success, `ERROR: ...` on failure. Parse
 
 **NEVER call graph_upsert in a loop.** Each CLI call is a separate process — loading the graph, parsing JSON, saving. For 50 frames that's 50 process spawns. Instead, use these bulk approaches:
 
-### Approach 1: graph_batch (JSON operations file)
-
-Write a JSON file with all operations, run it once:
-
-```
-# Write the ops file
-cat > batch_scene1.json << 'BATCH_EOF'
-{
-  "operations": [
-    {"op": "upsert_node", "type": "cast", "data": {"cast_id": "cast_001_mei", "name": "Mei"}, "provenance": {"source_prose_chunk": "Mei, the jewel of Lu Xian", "generated_by": "morpheus", "confidence": 1.0}},
-    {"op": "upsert_node", "type": "location", "data": {"location_id": "loc_001_lu_xian", "name": "Lu Xian Brothel"}, "provenance": {"source_prose_chunk": "the legendary brothel Lu Xian", "generated_by": "morpheus", "confidence": 1.0}},
-    {"op": "upsert_node", "type": "frame", "data": {"frame_id": "f_001", "scene_id": "scene_01", "sequence_index": 1, "formula_tag": "F07", "narrative_beat": "Dawn light on Lu Xian courtyard", "suggested_duration": 8, "action_summary": "Morning mist drifts across the courtyard as lanterns flicker out"}, "provenance": {"source_prose_chunk": "Dawn breaks over the courtyard", "generated_by": "morpheus", "confidence": 1.0}},
-    {"op": "create_edge", "source": "cast_001_mei", "target": "f_001", "edge_type": "appears_in", "provenance": {"source_prose_chunk": "Mei watches from her patio", "generated_by": "morpheus", "confidence": 1.0}}
-  ]
-}
-BATCH_EOF
-
-python3 $SKILLS_DIR/graph_batch --ops-file batch_scene1.json --project-dir .
-```
-
-### Approach 2: graph_run (Python script — MOST POWERFUL)
-
-Write a Python script that uses the graph API directly. The graph and all API functions are pre-loaded. This is the most powerful tool — you can use loops, conditionals, error handling, and complex logic.
-
-```
-# Write the script
-cat > seed_entities.py << 'SCRIPT_EOF'
-# graph, api, schema, and all types are pre-loaded
-
-# Seed all cast from skeleton data
-cast_data = [
-    {"cast_id": "cast_001_mei", "name": "Mei", "personality": "Intelligent, determined, romantic",
-     "role": "protagonist", "arc_summary": "From courtesan to free woman",
-     "identity": {"age_descriptor": "early 20s", "gender": "female", "ethnicity": "Chinese",
-                  "build": "slender", "hair_color": "black", "hair_length": "long",
-                  "hair_style": "elaborate updo with ribbon", "skin": "pale",
-                  "clothing": ["blue kimono", "silk sash"], "wardrobe_description": "Elegant blue silk kimono with embroidered details"}},
-    {"cast_id": "cast_002_lin", "name": "Lin", "personality": "Gentle, devoted, artistic",
-     "role": "supporting", "arc_summary": "Unknowing object of love, receives Mei at the end",
-     "identity": {"age_descriptor": "mid 20s", "gender": "male", "ethnicity": "Chinese",
-                  "build": "lean", "hair_color": "black", "hair_length": "medium",
-                  "clothing": ["simple cotton tunic", "work apron"], "wardrobe_description": "Simple cotton work clothes, rolled sleeves, dirt-stained apron"}},
-]
-
-prov = {"source_prose_chunk": "Character roster from skeleton", "generated_by": "morpheus", "confidence": 1.0}
-
-for c in cast_data:
-    # Convert nested identity dict to CastIdentity
-    identity_data = c.pop("identity", {})
-    cast_node = CastNode(
-        cast_id=c["cast_id"],
-        name=c["name"],
-        personality=c.get("personality", ""),
-        role=c.get("role", "supporting"),
-        arc_summary=c.get("arc_summary", ""),
-        identity=CastIdentity(**identity_data),
-        provenance=Provenance(**prov),
-    )
-    graph.cast[cast_node.cast_id] = cast_node
-    print(f"  Seeded cast: {cast_node.name}")
-
-print(f"Total cast: {len(graph.cast)}")
-SCRIPT_EOF
-
-python3 $SKILLS_DIR/graph_run --script seed_entities.py --project-dir .
-```
-
-### Approach 3: Write a comprehensive seeding script for the whole scene
-
-For each scene, write ONE script that does everything — entities, frames, states, dialogue, edges:
-
-```
-cat > process_scene_01.py << 'SCRIPT_EOF'
-# Process Scene 1 — The Auction Hall
-# graph, api, schema, and all types/functions are pre-loaded
-
-prov = lambda text, conf=1.0: {"source_prose_chunk": text, "generated_by": "morpheus", "confidence": conf}
-
-# ── Scene node
-upsert_node(graph, "scene", {
-    "scene_id": "scene_01", "scene_number": 1, "title": "The Jewel of Lu Xian",
-    "location_id": "loc_001_salon", "time_of_day": "afternoon", "int_ext": "INT",
-    "cast_present": ["cast_001_mei", "cast_003_chou", "cast_004_zhao", "cast_005_min_zhu"],
-    "mood_keywords": ["tense", "elegant", "anticipatory"],
-}, prov("INT. LU XIAN SALON — AFTERNOON"))
-
-# ── Frames (sequential)
-frames = [
-    {"frame_id": "f_001", "formula_tag": "F07", "narrative_beat": "Afternoon light through silk screens...",
-     "source_text": "The silk screens filtered the afternoon sun...",
-     "suggested_duration": 8, "action_summary": "Golden light shifts through silk screens as dust motes drift across the empty salon"},
-    {"frame_id": "f_002", "formula_tag": "F01", "narrative_beat": "Mei sits composed on cushion...",
-     "source_text": "Mei sat perfectly still on the embroidered cushion...",
-     "suggested_duration": 5, "action_summary": "Mei sits perfectly still, only her eyes tracking movement beyond the screens"},
-    # ... more frames
-]
-
-for i, f in enumerate(frames):
-    f["scene_id"] = "scene_01"
-    f["sequence_index"] = i + 1
-    if i > 0:
-        f["previous_frame_id"] = frames[i-1]["frame_id"]
-        f["continuity_chain"] = True
-    if i < len(frames) - 1:
-        f["next_frame_id"] = frames[i+1]["frame_id"]
-    upsert_node(graph, "frame", f, prov(f["source_text"]))
-    graph.frame_order.append(f["frame_id"])
-
-# ── Cast frame states (absolute snapshots, propagated)
-# Frame 1: Mei in background
-propagate_cast_state(graph, "cast_001_mei", "f_000", "f_001", {
-    "frame_role": "background", "posture": "sitting", "emotion": "composed",
-    "spatial_position": "center_frame", "clothing_state": "base",
-})
-# Frame 2: Mei becomes subject
-propagate_cast_state(graph, "cast_001_mei", "f_001", "f_002", {
-    "frame_role": "subject", "emotion": "guarded_composure",
-})
-
-print(f"Scene 01: {len(frames)} frames processed")
-SCRIPT_EOF
-
-python3 $SKILLS_DIR/graph_run --script process_scene_01.py --project-dir .
-```
-
-
-#### ATOMIC BEAT EXTRACTION (KINETIC PARSING)
-You are an NLP model. Your default programming is to treat a "sentence" (bounded by a period) as a single complete thought. You will naturally want to group a main clause and a dependent clause together. You must override this programming.
-
-A camera does not see punctuation; it sees VERBS. Your job is to strip away the grammar of the prose and isolate every distinct action into an Atomic Beat.
-
-The Anti-Compression Rule:
-If a sentence contains multiple physical, sensory, or vocal verbs, you MUST split it into multiple Atomic Beats. Treat commas, conjunctions ("and", "while", "as"), and participle phrases ("...her grip tightening") as hard visual cuts.
-
-How to Spot an Atomic Beat:
-Isolate the text based on the following verb types:
-
-Spatial / Kinetic (Cast-Action): A character moves, gestures, or changes posture (e.g., stepped, reached, tightened, dropped).
-
-Sensory (Env-Detail): A light shifts, a sound occurs, an object is highlighted (e.g., flickered, illuminated, cracked).
-
-Vocal (Dialogue): A line is spoken (e.g., whispered, shouted, said).
-
-THE TRAP vs. THE CORRECT EXECUTION
-Source Prose:
-"Mei stepped into the rain-slicked alley, her grip tightening on the katana. The neon sign above flickered, casting harsh red shadows."
-
-THE NLP TRAP (HOW YOU WILL FAIL):
-
-[1] Mei stepped into the rain-slicked alley, her grip tightening on the katana. (Failed: Grouped a spatial entrance and a kinetic hand-movement into one shot).
-
-[2] The neon sign above flickered, casting harsh red shadows. (Failed: Grouped the light source and the resulting shadow cast into one shot).
-
-THE VERB-FIRST EXTRACTION (CORRECT):
-
-[1] Mei stepped into the rain-slicked alley. (Spatial: Wide shot entrance)
-
-[2] Her grip tightening on the katana. (Kinetic: Close up on hands)
-
-[3] The neon sign above flickered. (Sensory: Detail on the sign)
-
-[4] Casting harsh red shadows. (Sensory: Detail on the asphalt/environment)
-
-THE 1-TO-2 WRAP & VALIDATION
-Once you have your numbered list of Verb-First Atomic Beats, you must assign every single one to a FrameNode using the source_beats array.
-
-Wrap them using the Setup/Payoff formula:
-
-Setup Frames (F01, F02, F08): The initiation, the reaction, the environmental detail (Beats 1 and 3).
-
-Payoff Frames (F04-F06, F07, F10-F11): The consequence, the delivered dialogue, the completed action (Beats 2 and 4).
-
-Validation: No Atomic Beats can be orphaned. No Atomic Beats can be merged into a single frame.
-
-#### FRAME DENSITY RULES (MANDATORY)
-
-The following rules OVERRIDE any compression instinct. More frames is always better than fewer frames.
-
-**Every verb = a frame.** Every noun = a frame. Every transition between verbs or nouns = a frame.
-
-Concrete rules:
-1. **Verb→Noun:** If a time a action meets an object, that is its own frame.
-   Example: "She picked up the letter" = one frame (F11 prop interaction)
-2. **Verb→Verb:** If two actions happen in sequence, even in the same sentence, each action is its own frame.
-   Example: "She turned (noun verb = framed) and walked to the door (verb to noun)" = two frames (F01 turn + F10 walking)
-3. **Noun→Noun:** If focus shifts between two objects or characters, each gets its own frame.
-   Example: "The candle flickered (noun verbed), as the ink dried (noun verb) on the page" = two frames (F08 candle + F08 ink)
-4. **Environment-only frames:** Shots without cast are VALID and REQUIRED. A room settling after someone leaves, rain on a windowpane, a door closing — these are frames.
-5. **Close-up companion frames:** When a character interacts with a prop or performs a significant physical action, generate BOTH:
-   - The wider shot showing the action in context (F01/F02/F10)
-   - A close-up detail shot of the interaction itself (F08/F11)
-   This ensures the audience sees both the character doing it and what is being done.
-6. **Reaction frames:** After every significant action or dialogue line, include at least one reaction frame showing the listener/observer's response.
-
-**Minimum frame density at stickiness 3:**
-- Dialogue sequences: ceil(dialogue_lines * 1.5) frames minimum (speaker + listener reactions + environment cuts)
-- Action sequences: 2-3 frames per described action (setup + execution + aftermath)
-- Scene transitions: minimum 2 frames (leaving shot + establishing shot of new location)
-- Total: expect 20-30 frames per scene for a 3-scene short (~60-90 total)
-
-**Anti-compression validation:** After segmenting all frames for a scene, count them. If you have fewer frames than (number_of_verbs_in_prose + number_of_distinct_nouns_focused_on) * 0.7, you have compressed too aggressively. Re-read and split.
+{{include:references/morpheus_graph_examples.md}}
 
 ### Error Recovery
 
@@ -293,56 +93,7 @@ python3 $SKILLS_DIR/graph_continuity --prune {bad_node_id} --cascade --project-d
 
 ```
 
-####  THE FRAME FORMULA DIRECTORY
-You must assign one of these Formula Tags to every FrameNode. The formulas are divided by their cinematic role: Setups (initiations, reactions, details) and Payoffs (completed actions, spoken lines, wide reveals).
-
-SETUP FORMULAS (The Initiation)
-
-F01 Character Focus: Close-up on a character initiating an action or reacting silently.
-
-F02 Two-Shot Setup: Two characters in frame, establishing their spatial relationship before an exchange.
-
-F03 Prop Detail: Macro close-up on an object being touched, moved, or focused on.
-
-F04 Environment Detail: Macro close-up on a sensory element (light flickering, rain falling, dust).
-
-PAYOFF FORMULAS (The Consequence)
-
-F05 Action in Motion: The completion of a physical action (a door opening, a weapon firing, a fall).
-
-F06 Dialogue (Single): Medium/Close-up of a single character delivering their spoken line.
-
-F07 Dialogue (Over-Shoulder): Delivering a line with the listener's shoulder in the foreground.
-
-F08 Establishing Reveal: Wide shot revealing the full environment or the aftermath of an action.
-
-TRANSITION & TIME FORMULAS (Bridge Frames)
-
-F09 Time Passage: A frame explicitly showing time moving (e.g., shadows lengthening, sky darkening).
-
-F10 Flashback/Dream: A frame explicitly tagged as occurring outside base reality.
-
-MUSIC VIDEO FORMULAS (Audio-Sync Only)
-
-F11 Beat-Synced Visual: Kinetic motion locked to an instrumental accent.
-
-F12 Lyric Literal: Visual directly interpreting the sung lyric.
-
-F13 Performance Shot: The artist performing the track.
-
-### Workflow Pattern
-
-1. Read skeleton → write `seed_world_and_entities.py` → run it (seeds all cast, locations, props, world context, scenes)
-2. Read prose scene by scene → write `process_scene_N.py` per scene → run each (frames, states, dialogue, environments, compositions)
-3. Run `graph_continuity --check-all` → fix any conflicts
-4. Run `graph_assemble_prompts` → builds all image/video prompts from graph
-5. Run `graph_materialize` → exports to flat files for downstream skills
-
----
-
-## JSON Rule
-
-When writing JSON files, write RAW JSON only. Never wrap in markdown code fences.
+{{include:references/frame_formulas.md}}
 
 ---
 
@@ -353,7 +104,7 @@ When writing JSON files, write RAW JSON only. Never wrap in markdown code fences
 | `creative_output/outline_skeleton.md` | Story structure: character roster, location roster, per-scene specs, arc summary, continuity chain |
 | `creative_output/creative_output.md` | Full prose narrative to decompose into frames |
 | `source_files/onboarding_config.json` | Pipeline type, stickiness, output size, style/genre/mood, aspect ratio |
-| `logs/director/project_brief.md` | Director's interpretation of the project |
+| `logs/director/project_brief.md` | OPTIONAL legacy input. Read it if present; the active runner may not create it |
 | `project_manifest.json` | Project metadata, phase status |
 
 ---
@@ -363,13 +114,18 @@ When writing JSON files, write RAW JSON only. Never wrap in markdown code fences
 ### Stage A — Graph Initialization
 
 1. Read `project_manifest.json` — confirm Phase 1 is complete
-2. Read `source_files/onboarding_config.json` — extract all config
+2. Read `source_files/onboarding_config.json` — extract all config fields:
+   - `stickinessLevel`, `stickinessPermission` — creative boundary
+   - `outputSize`, `frameRange`, `sceneRange` — project scale
+   - `mediaStyle`, `mediaStylePrefix` — image generation style prefix (MUST be on ALL images)
+   - `pipeline`, `aspectRatio`, `style[]`, `genre[]`, `mood[]`, `extraDetails`
 3. Initialize the graph:
 ```
 python3 $SKILLS_DIR/graph_init --project-id {projectId} --project-dir .
 ```
-4. Upsert the ProjectNode with config data (stickiness, pipeline, media type, aspect ratio, style/genre/mood)
-5. Set `VisualDirection` — resolve the media type to its style prefix
+4. Upsert the ProjectNode with ONLY onboarding-supplied fields (stickiness, pipeline, media_style, media_style_prefix, output_size, frame_range, scene_range, aspect_ratio, style, genre, mood, extra_details, source_files). ProjectNode does NOT contain WorldContext or VisualDirection — those are separate graph nodes.
+5. Set the standalone `WorldContext` node on the graph — inferred from source material
+6. Set the standalone `VisualDirection` node — resolve media style to style prefix, set style_direction, genre_influence, mood_palette from onboarding config
 
 ### Stage B — Skeleton Pre-Seed
 
@@ -416,15 +172,26 @@ Read `creative_output/outline_skeleton.md` and seed:
 
 ### Stage C — Prose Processing
 
-Read `creative_output/creative_output.md`. Process it **scene by scene** (or chunk by chunk as you judge appropriate).
+Read `creative_output/creative_output.md` — the **full creative prose**, NOT the outline skeleton. The outline skeleton (used in Stage B) provides structure only. All frame decomposition, narrative beats, source text, action summaries, and dialogue MUST be atomized from the complete creative writing. If a detail exists in the prose but not the outline, include it. If the outline summarizes something the prose describes in full, use the prose version.
+
+Process the creative prose **scene by scene** (or chunk by chunk as you judge appropriate).
 
 For each chunk:
 
-#### C1. Frame Segmentation
+#### C1. Narrative Atomization → Frame Segmentation
 
-Walk through the prose **linearly, paragraph by paragraph**. Each paragraph is roughly one frame. Identify:
+**Step 1 — Atomize.** Before assigning frames, decompose the prose into story atoms. Walk through the prose **linearly, paragraph by paragraph**. For each paragraph:
 
-- **Frame boundaries** — where the camera would cut
+1. Extract every story atom: one subject + one action/state + one context
+2. Split compound sentences at every new subject, every new verb, every causal boundary
+3. Surface implied actions — if "walks through door", the door opening is a separate atom
+4. Preserve sequence — atom order IS the timeline
+
+**Step 2 — Classify.** Apply Kinetic Parsing to each atom (Spatial/Kinetic, Sensory, Vocal).
+
+**Step 3 — Assign to frames.** Map classified atoms to FrameNodes. Each paragraph produces one or more frames. Identify:
+
+- **Frame boundaries** — where the camera would cut (atom boundaries ARE potential cut points)
 - **Formula tags** — classify each frame:
 
 | Tag | When to Use |
@@ -446,15 +213,28 @@ Walk through the prose **linearly, paragraph by paragraph**. Each paragraph is r
 | F18 | Cinematic emphasis |
 
 **Rules:**
+- **Narrative Atomization is THE rule for frame selection.** Every frame exists because an atom exists. No atom = no frame. No frame without an atom.
+- One story atom = one frame. One paragraph may yield multiple atoms → multiple frames.
+- Implied actions surfaced during atomization (e.g., door opens before walking through) get their own frames when visually distinct.
+- Causal boundaries (X causes Y) always produce separate frames.
 - Never 2+ consecutive dialogue frames (F04/F05/F06) without a visual frame between
 - No more than 4 consecutive action frames without F01 or F07
 - Scene openers start with F07 or F01
-- One paragraph = one frame. Dense paragraphs with multiple beats = multiple frames
 
-**Frame density at stickiness 3:**
-- Dialogue pairs ≈ (dialogue_lines / 2) minimum
-- ~14-20 frames per scene for a 3-scene short
-- Total ~42-60 frames
+**Dialogue Priority — MANDATORY, NON-NEGOTIABLE:**
+- **Every dialogue line in creative_output.md MUST produce at least one frame.** Dialogue atoms are the highest-priority atoms in the entire pipeline. They cannot be dropped, merged away, or skipped for any reason — including frame budget constraints.
+- When the total atom count exceeds `frameRange`, compress by merging or dropping **non-dialogue visual/action atoms only**. Dialogue atoms are protected — they survive compression unconditionally.
+- After atomization, count all dialogue atoms. This count is the **dialogue floor** — the minimum number of dialogue frames the project must contain. The remaining frame budget (`frameRange` upper bound minus dialogue floor) is allocated to non-dialogue atoms.
+- If the dialogue floor alone exceeds `frameRange` upper bound, **the dialogue floor wins**. Produce all dialogue frames and fill remaining budget with essential visual beats (establishing shots, scene transitions). Never sacrifice dialogue to fit a frame cap.
+- Each distinct quoted line maps to its own dialogue frame (F04/F05/F06). Multi-line exchanges still need visual beats between them per the "never 2+ consecutive dialogue frames" rule — those interstitial reaction/visual frames come from the non-dialogue budget.
+
+**Frame density — use `frameRange` from onboarding config:**
+- `short`: 10-20 frames total, 1-3 scenes
+- `short_film`: 50-125 frames total, 5-15 scenes
+- `televised`: 200-300 frames total, 20-40 scenes
+- `feature`: 750-1250 frames total, 60-120 scenes
+- Dialogue floor is calculated first, then remaining budget distributed across non-dialogue atoms
+- Distribute frames evenly across scenes, weighted by scene complexity
 
 **Frame Linking Rules (MANDATORY):**
 - Every FrameNode MUST have `previous_frame_id` set (except the very first frame of the project) and `next_frame_id` set (except the very last frame). These links MUST be bidirectional — if frame A says next=B, frame B MUST say prev=A.
@@ -471,12 +251,15 @@ For each frame, upsert a `FrameNode` with:
 - `suggested_duration` — clip duration in seconds (3-15). See Duration Rules below
 - `action_summary` — concise physical action for the video clip (see Action Summary Rules below)
 - `time_of_day` — MANDATORY. Inherit from scene's time_of_day by default. Override if time passes during the scene (e.g., a scene that starts at dusk and ends at night should have frames shift from "dusk" to "night" at the appropriate beat). Values: dawn, morning, midday, afternoon, dusk, night. This ensures every frame has consistent time context for lighting and atmosphere. If a scene has no explicit time, infer from narrative context.
+- `directing` — MANDATORY directorial intent block. Populate: `dramatic_purpose`, `beat_turn`, `pov_owner`, `viewer_knowledge_delta`, `power_dynamic`, `tension_source`, `camera_motivation`, `movement_motivation`, `movement_path`, `reaction_target`, `background_life`
 
 **CRITICAL: narrative_beat construction priority order:**
 1. Lighting & atmosphere — light direction, color temperature, particles
 2. Environment & background — location details, set dressing
 3. Action & staging — physical movement, body positions
 4. Characters — who is present, expression, pose
+
+{{include:references/frame_density_rules.md}}
 
 #### C2. Cast Frame States
 
@@ -525,11 +308,17 @@ Read the prose carefully for these signals. If the prose mentions ANY of these, 
 
 **Emotional arc tracking:** Emotions don't jump — they build. If a character is "calm" in F_010 and "furious" in F_015, the intermediate frames need the gradient: composed → tense → frustrated → angry → furious. Track `emotion_intensity` to show this progression. The video agent uses intensity to calibrate performance energy.
 
+**Expression mapping:** The prompt assembler translates your emotion labels into concrete facial/body expression descriptors for image generation. Use specific compound emotion terms (e.g. `restrained_anger`, `quiet_determination`, `bitter_amusement`) — the assembler has a mapping table for these. At `emotion_intensity` < 0.4 only subtle facial cues are emitted; 0.4–0.7 gives the full facial descriptor; > 0.7 adds body language. Unknown labels fall back to the raw label — prefer mapped terms for best image output.
+
 **Wardrobe state rules:**
 - `clothing_state: "base"` means they're wearing their identity wardrobe (from CastNode). `clothing_current` can be empty.
 - Any change → set `clothing_state` to "changed" and explicitly list everything in `clothing_current`. This is ABSOLUTE — list the full outfit, not just what changed.
 - Once changed, it stays changed until the prose indicates another change. Propagate forward.
 - Flag significant wardrobe changes with a state variant note in events.jsonl — the image pipeline may need a new reference composite.
+
+**Base wardrobe validation**: During Stage B skeleton pre-seed, ensure every CastNode has a non-empty `wardrobe_description` or populated `clothing` list. If the skeleton describes what someone wears, extract it. If unspecified, infer from the world context (era, culture, clothing_norms) and the character role. Every character MUST have a baseline wardrobe — the assembler uses it for every frame where `clothing_state == "base"`.
+
+**Clothing_current for non-base states**: When `clothing_state` changes from `"base"` to anything else, `clothing_current` MUST list the COMPLETE outfit — not just what changed.
 
 #### STATE TAG ASSIGNMENT (MANDATORY)
 
@@ -603,7 +392,7 @@ python3 $SKILLS_DIR/graph_propagate --location {id} --from {prev_frame} --to {th
 
 **Location atmosphere drift:** Locations don't snap between states — they drift. If dusk is falling during a scene, the atmosphere should shift gradually across frames:
 - F_001: "golden afternoon light through silk screens"
-- F_008: "amber light deepening, long shadows stretching across floor"  
+- F_008: "amber light deepening, long shadows stretching across floor"
 - F_015: "purple dusk, lanterns beginning to glow"
 
 Use `atmosphere_override` on the first frame where the shift is noticeable, then propagate forward with incremental mutations.
@@ -618,12 +407,18 @@ The image pipeline uses these flags to generate derivative reference images via 
 
 #### C4. Dialogue Extraction
 
+**CRITICAL — DIALOGUE TEXT MUST BE VERBATIM ENGLISH:**
+The `raw_line` field of every DialogueNode must contain the **exact dialogue text as written in creative_output.md** — copied character-for-character. Do NOT translate, transliterate, or convert dialogue into any other language (Chinese, Japanese, or otherwise). The Chinese bilingual formatting used in image prompts does NOT apply to dialogue. Dialogue is passed directly into the native-audio video prompt, which expects the original language from the creative output. If the creative output is in English, every `raw_line` must be in English. Any deviation corrupts the generated spoken audio.
+
+**Every dialogue line in creative_output.md MUST have a corresponding DialogueNode AND at least one frame where it is audible.** If a dialogue line exists in the prose but no frame was created for it during C1 atomization, you MUST go back and create the missing frame now. Dialogue cannot exist without a frame to carry it.
+
 For each dialogue line:
 - Create a `DialogueNode` with temporal span:
   - `start_frame` — where the audio begins (may be a J-cut)
   - `end_frame` — where the audio ends (may be an L-cut)
   - `primary_visual_frame` — where the speaker is on camera
   - `reaction_frame_ids` — frames showing listener reactions
+- `raw_line` — the **exact spoken text** from the creative output, unmodified. Copy-paste, do not rephrase or translate.
 - Write bracket directions: `[performance_direction | ENV: tags] spoken text`
 - Parse ENV tags into `env_location`, `env_distance`, `env_medium`, `env_intensity`, `env_atmosphere`
 
@@ -647,14 +442,54 @@ For each frame, populate the `FrameEnvironment`:
 
 #### C5b. Frame Background
 
+**Spatial Consistency Rule:**
+When assigning `screen_position` and `spatial_position`, reason about where the character physically is in the location. If the camera faces east and a character is to the left of frame, they are on the **north** side of the room. When the camera cuts to face north in the next frame, that same character should appear in the background or center. The prompt assembler deduces world-space positions from your `screen_position` + `camera_facing`. Ensure spatial assignments are physically consistent across sequential frames in the same location.
+
+| camera_facing | frame_left → world | frame_right → world |
+|---|---|---|
+| north | west | east |
+| south | east | west |
+| east | north | south |
+| west | south | north |
+
 For each frame, populate `FrameBackground` with what's happening behind the foreground action:
 
-1. **camera_facing** — which cardinal direction the camera points, based on character staging and composition. Use the location's `directions` data for that direction.
-2. **visible_description** — what's visible in the background of this shot, pulled from the location's cardinal direction data + frame-specific context (other characters, environmental changes).
+1. **camera_facing** (MANDATORY) — which cardinal direction the camera points, based on character staging and composition. EVERY frame MUST have a camera_facing value. Use the location's `directions` data for that direction. If a location only has 2-3 defined directions, cycle through them based on shot variety — don't repeat the same direction for every frame in a scene.
+2. **visible_description** (MANDATORY) — what's visible in the background of this shot. Pull from the location's cardinal direction data for the chosen camera_facing, then add frame-specific context (other characters, environmental changes). If the location's direction data is thin, infer from the location description and scene context. Every frame needs a background — no empty backgrounds.
 3. **background_action** — anything moving or happening in the background: other characters, environmental events (door opening, animal passing), weather effects.
 4. **background_sound** — ambient sounds appropriate to the location and action: distant conversations, nature sounds, machinery, weather.
 5. **background_music** — ONLY if diegetic music exists in the scene (a musician performing, music from a source within the story world). Do not add non-diegetic score.
 6. **depth_layers** — ordered list of visual depth elements: `["midground: silk screens partially drawn", "far: mountain silhouette through haze"]`
+
+#### C5c. Directorial Intent
+
+Every frame MUST explain not only what the shot shows, but why the shot exists. Populate `FrameNode.directing` for every frame.
+
+**Fields to populate:**
+- `dramatic_purpose` — the shot's narrative job: reveal, reaction, intimidation, intimacy, concealment, transition, escalation, aftermath
+- `beat_turn` — what changes by the end of the shot; if nothing changes, the frame is probably weak
+- `pov_owner` — whose experience the shot aligns with: a `cast_id`, `prop_id`, location feature, or `"audience"`
+- `viewer_knowledge_delta` — the concrete thing the audience learns here
+- `power_dynamic` — who currently holds the upper hand and how the staging should express it
+- `tension_source` — what is creating pressure in this moment
+- `camera_motivation` — why this framing/angle/movement is correct for the beat
+- `movement_motivation` — why the frame should feel active even if the motion is subtle
+- `movement_path` — start-to-end description of camera/subject movement or blocking progression
+- `reaction_target` — the prior line, gesture, or event this frame answers
+- `background_life` — supporting environmental life that reinforces the beat behind the main subject
+
+**Derivation rules:**
+1. `dramatic_purpose` answers: why cut here instead of staying on the previous shot?
+2. `beat_turn` answers: what becomes newly true by the end of this frame?
+3. `pov_owner` should usually match the character whose emotional stake or perception governs the beat.
+4. `power_dynamic` should directly influence `composition.angle`, `composition.grouping`, and subject placement. If power shifts, the framing should shift with it.
+5. `camera_motivation` must be specific. Bad: "cinematic". Good: "push closer as Mei realizes Zhao has seen through the bluff".
+6. `movement_motivation` can be environmental when the characters are still: rain sweeping through frame, lanterns swaying, crowd flow, smoke drift.
+7. `movement_path` should be explicit when screen direction or blocking changes: "Mei crosses frame_left to frame_right while camera pans to keep her dominant in foreground".
+8. `reaction_target` is especially important for dialogue and aftermath frames. Reaction shots without a clear target become generic coverage.
+9. `background_life` must support the foreground beat, not distract from it.
+
+**Shot-language rule:** `FrameComposition` says what the shot IS. `directing` says why it exists and what it must make the viewer feel or understand. Both are required.
 
 #### C6. Frame Composition
 
@@ -676,7 +511,7 @@ Also set `emotional_arc` (rising/falling/peak/static/release) and `visual_flow_e
 
 **Every frame MUST have `suggested_duration` and `action_summary`.** These drive downstream video generation. The video agent uses these directly — thin or missing data produces poor clips.
 
-**Duration Rules (suggested_duration, integer seconds, range 3-15):**
+**Duration Rules (suggested_duration, integer seconds, minimum 3):**
 
 | Frame Type | Duration | Rationale |
 |---|---|---|
@@ -693,8 +528,9 @@ Also set `emotional_arc` (rising/falling/peak/static/release) and `visual_flow_e
 2. What is the emotional pacing? Grief/tension = longer holds. Urgency = shorter.
 3. Does the camera move? Camera motion needs time — a slow crane needs 6-8s minimum.
 4. Set duration to the minimum needed. Don't pad. Don't rush.
+5. Check `directing.beat_turn` and `directing.camera_motivation` — a reveal or power shift usually needs more time than a neutral insert.
 
-**Dialogue frames:** grok-video generates audio natively — there are no separate audio files. Set `suggested_duration` to fit the dialogue: estimate ~3 words/second at normal delivery tempo. If the line is over 1 sentence or 12+ words, use 15 seconds (max) to guarantee the full dialogue is captured without cutoff. Factor in delivery tempo from performance directions — slow/measured delivery needs more time, rapid/urgent needs less.
+**Dialogue frames:** grok-video generates audio natively — there are no separate audio files. Set `suggested_duration` to fit the dialogue, but the active Phase 5 runtime clamps clip duration to **3-15 seconds**. Estimate ~3 words/second at normal delivery tempo and keep each individual frame's dialogue load within that runtime limit. If a spoken moment would realistically exceed 15 seconds, split it across multiple dialogue-linked frames and temporal spans rather than assigning one overlong clip. Factor in delivery tempo from performance directions — slow/measured delivery needs more time, rapid/urgent needs less. The prompt assembler will add pacing direction to help the delivery fit within your suggested duration.
 
 **Action Summary Rules (action_summary, string):**
 
@@ -702,12 +538,12 @@ This is a concise, directorial description of the physical action in the clip �
 
 Good action summaries:
 - "Mei turns from the railing, kimono sleeve catching the wind as she steps toward the door"
-- "Lin kneels to inspect the orchid roots, fingers brushing soil from the stems"  
+- "Lin kneels to inspect the orchid roots, fingers brushing soil from the stems"
 - "Min Zhu reaches for the tea cup, hesitates, then places his Go stone with a decisive click"
 - "Servant girl hurries across the courtyard, letter clutched to her chest, skirt lifted above ankle"
 
 Bad action summaries (too vague):
-- "Character moves" 
+- "Character moves"
 - "Scene continues"
 - "Dialogue happens"
 
@@ -730,19 +566,29 @@ python3 $SKILLS_DIR/graph_continuity --check-all
    - Correct the specific error
    - Re-run continuity check on affected frames
 
-3. Verify completeness — every frame must have:
+3. **Dialogue coverage audit (MANDATORY — run before completeness check):**
+   - Scan creative_output.md for every quoted dialogue line (text between quotation marks)
+   - Compare against DialogueNodes in the graph
+   - Every quoted line in the prose MUST have a matching DialogueNode with a `primary_visual_frame` that exists in the graph
+   - If any dialogue line is missing: create the DialogueNode, create the frame (F04/F05/F06), wire cast states, and link it into the frame sequence
+   - Log the count: `"Dialogue audit: {X} lines in prose, {Y} DialogueNodes in graph, {Z} created to fill gaps"`
+
+4. Verify completeness — every frame must have:
    - [ ] At least one CastFrameState (unless pure environment shot)
    - [ ] location_id resolved
    - [ ] FrameEnvironment populated (at minimum: lighting direction + one material)
-   - [ ] FrameComposition populated (shot + lens)
+   - [ ] FrameComposition populated (shot + angle)
+   - [ ] FrameBackground.camera_facing set (cardinal direction)
+   - [ ] FrameBackground.visible_description set (what's behind the action)
    - [ ] formula_tag assigned
    - [ ] narrative_beat written (non-empty)
-   - [ ] suggested_duration set (integer 3-15)
+   - [ ] suggested_duration set (integer, minimum 3, scaled to action/dialogue length)
    - [ ] action_summary written (non-empty, describes physical motion)
    - [ ] time_of_day set (inherited from scene or explicitly overridden)
+   - [ ] directing block populated (dramatic purpose, beat turn, POV, power, motivation)
    - [ ] Dialogue frames have dialogue_ids linked
 
-4. Run video direction validation:
+5. Run video direction validation:
 ```
 python3 $SKILLS_DIR/graph_validate_video_direction --project-dir .
 ```
@@ -860,20 +706,9 @@ If you are uncertain about an extraction (ambiguous pronoun, unclear location), 
 
 ---
 
-## Events JSONL
-
-Append to `logs/morpheus/events.jsonl`:
-```json
-{"timestamp": "ISO-8601", "agent": "morpheus", "level": "INFO", "code": "GRAPH_SEED", "target": "cast_001_mei", "message": "Seeded cast node for Mei from skeleton"}
-{"timestamp": "ISO-8601", "agent": "morpheus", "level": "INFO", "code": "FRAME_SEGMENT", "target": "f_001", "message": "Segmented frame f_001: F07 establishing shot, scene_01"}
-{"timestamp": "ISO-8601", "agent": "morpheus", "level": "WARN", "code": "CONTINUITY_CONFLICT", "target": "f_045", "message": "Prop possession conflict: sword holder mismatch"}
-```
-
----
-
 ## Quality Bar
 
-Your graph must produce prompts that are **at least as detailed** as what the Production Coordinator currently crafts manually. This means:
+Your graph must produce prompts that are detailed enough for the current deterministic prompt assembly and programmatic downstream phases. This means:
 
 - **Every frame's environment** must have specific lighting direction, not just "well lit"
 - **Every character's emotion** must be specific to the moment, not generic
@@ -883,59 +718,8 @@ Your graph must produce prompts that are **at least as detailed** as what the Pr
 
 If the prose doesn't explicitly state lighting or atmosphere, **infer it** from the scene's time of day, location type, and mood. A dusk scene in a wooden bedroom = warm golden side light through lattice, dust motes, silk and wood materials. You know this.
 
+- **Dialogue `raw_line` must be verbatim from creative output** — no translation, no rephrasing, no language conversion. Chinese bilingual formatting is for IMAGE prompts only. Dialogue flows into native-audio video prompts in its original language.
+
 ---
 
-## Troubleshooting & Recovery
-
-### Script Errors
-If `graph_run` fails:
-1. Read the traceback — it tells you exactly what line failed and why
-2. The graph is auto-saved with partial work (upserts are idempotent)
-3. Fix the script, re-run — existing nodes get updated, not duplicated
-
-### Common Python Errors in Scripts
-
-**"field required"** — You're missing a required field. Check the schema:
-- `CastNode` requires `cast_id`, `name`
-- `FrameNode` requires `frame_id`, `scene_id`, `sequence_index`
-- `DialogueNode` requires `dialogue_id`, `scene_id`, `order`, `speaker`, `cast_id`, `start_frame`, `end_frame`, `primary_visual_frame`
-- `Provenance` requires `source_prose_chunk` (non-empty string)
-
-**"value is not a valid enumeration member"** — Use string values, not enum objects:
-- `"formula_tag": "F07"` not `FormulaTag.F07` in JSON data dicts
-- When using Python objects directly: `FormulaTag.F07` works
-
-**JSON parsing errors in graph_batch** — Make sure your JSON is valid:
-- No trailing commas
-- Strings must be double-quoted
-- Use heredoc `<< 'EOF'` (single-quoted EOF prevents shell interpolation)
-
-### Graph Corruption
-If continuity checks find conflicts:
-```
-# See what's wrong
-python3 $SKILLS_DIR/graph_continuity --check-all --project-dir .
-
-# Trace the bad data back to its source
-python3 $SKILLS_DIR/graph_continuity --trace "cast_001_mei@f_045" --project-dir .
-
-# Surgically remove and cascade
-python3 $SKILLS_DIR/graph_continuity --prune "cast_001_mei@f_045" --cascade --project-dir .
-```
-
-### Graph is Empty After Script
-If `graph_run` reports SUCCESS but stats show 0 nodes — you probably created objects but didn't add them to the graph registries. Use `graph.cast[id] = node` or `upsert_node(graph, ...)`.
-
-### "Graph not found"
-Run `graph_init` first:
-```
-python3 $SKILLS_DIR/graph_init --project-id {id} --project-dir .
-```
-
-### Starting Over
-If the graph is beyond repair:
-```
-rm graph/narrative_graph.json
-python3 $SKILLS_DIR/graph_init --project-id {id} --project-dir .
-```
-Then re-run your seeding scripts. All upserts are idempotent.
+{{include:references/morpheus_troubleshooting.md}}

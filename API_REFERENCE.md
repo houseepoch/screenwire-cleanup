@@ -367,7 +367,7 @@ Content-Type: application/json
     "project": "sw_test001",
     "character": "Sarah",
     "castId": "cast_001_sarah",
-    "mediaType": "anime"
+    "mediaStyle": "new_digital_anime"
   }
 }
 ```

@@ -38,12 +38,20 @@ async def generate_one(client: httpx.AsyncClient, prompt_data: dict, project_dir
     }
     aspect = aspect_map.get(size, "16:9")
 
+    # Resolve reference images (used by directional location views)
+    raw_refs = prompt_data.get("ref_images", [])
+    resolved_refs = []
+    for ref in raw_refs:
+        ref_path = project_dir / ref
+        if ref_path.exists():
+            resolved_refs.append(str(ref_path))
+
     body = {
         "prompt": prompt,
         "aspect_ratio": aspect,
         "output_path": str(out_abs),
         "output_format": "png",
-        "reference_images": [],
+        "reference_images": resolved_refs,
     }
 
     try:
@@ -107,16 +115,18 @@ def main():
     # Load all prompt files
     cast_prompts = load_prompts(project_dir / "cast" / "prompts")
     loc_prompts = load_prompts(project_dir / "locations" / "prompts")
+    loc_dir_prompts = load_prompts(project_dir / "locations" / "direction_prompts")
     prop_prompts = load_prompts(project_dir / "props" / "prompts")
 
     # Filter existing if requested
     if args.skip_existing:
         cast_prompts = [p for p in cast_prompts if not (project_dir / p["out_path"]).exists()]
         loc_prompts = [p for p in loc_prompts if not (project_dir / p["out_path"]).exists()]
+        loc_dir_prompts = [p for p in loc_dir_prompts if not (project_dir / p["out_path"]).exists()]
         prop_prompts = [p for p in prop_prompts if not (project_dir / p["out_path"]).exists()]
 
-    total = len(cast_prompts) + len(loc_prompts) + len(prop_prompts)
-    print(f"Generating {total} assets: {len(cast_prompts)} cast, {len(loc_prompts)} locations, {len(prop_prompts)} props")
+    total = len(cast_prompts) + len(loc_prompts) + len(loc_dir_prompts) + len(prop_prompts)
+    print(f"Generating {total} assets: {len(cast_prompts)} cast, {len(loc_prompts)} locations, {len(loc_dir_prompts)} direction views, {len(prop_prompts)} props")
 
     all_success = 0
     all_failed = 0
@@ -128,8 +138,15 @@ def main():
         all_failed += f
 
     if loc_prompts:
-        print(f"\n--- Locations ({len(loc_prompts)}) ---")
+        print(f"\n--- Locations — Primary ({len(loc_prompts)}) ---")
         s, f = asyncio.run(generate_batch(loc_prompts, project_dir, args.batch_size))
+        all_success += s
+        all_failed += f
+
+    # Directional views AFTER primary locations (they reference the primary image)
+    if loc_dir_prompts:
+        print(f"\n--- Locations — Direction Views ({len(loc_dir_prompts)}) ---")
+        s, f = asyncio.run(generate_batch(loc_dir_prompts, project_dir, args.batch_size))
         all_success += s
         all_failed += f
 

@@ -1,7 +1,15 @@
 {
-  "stickiness": 5,
-  "size": "short",
-  "media_type": "live_action",
-  "pipeline_type": "pitch_idea",
-  "source_file": "source_files/pitch.md"
+  "projectName": "__PROJECT_NAME__",
+  "projectId": "__PROJECT_ID__",
+  "stickinessLevel": 3,
+  "stickinessPermission": "Expand. Follow the source material's direction but round out incomplete areas. Add transitional scenes, supporting details, and environmental context the source implies but doesn't show. All additions must serve what's already demonstrated — supporting information, not new story.",
+  "outputSize": "short",
+  "mediaStyle": "live_clear",
+  "pipeline": "story_upload",
+  "aspectRatio": "16:9",
+  "style": [],
+  "genre": [],
+  "mood": [],
+  "extraDetails": "",
+  "sourceFiles": ["source_files/pitch.md"]
 }

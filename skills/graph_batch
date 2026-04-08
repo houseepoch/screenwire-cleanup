@@ -15,9 +15,9 @@ Operations file format:
     {"op": "upsert_state", "type": "cast_frame_state", "data": {...}, "provenance": {...}},
     {"op": "create_edge", "source": "...", "target": "...", "edge_type": "...", "provenance": {...}},
     {"op": "close_edge", "source": "...", "target": "...", "edge_type": "...", "end_frame": "..."},
-    {"op": "propagate_cast", "cast_id": "...", "from_frame": "...", "to_frame": "...", "mutations": {...}},
-    {"op": "propagate_prop", "prop_id": "...", "from_frame": "...", "to_frame": "...", "mutations": {...}},
-    {"op": "propagate_location", "location_id": "...", "from_frame": "...", "to_frame": "...", "mutations": {...}}
+    {"op": "propagate_cast", "cast_id": "...", "from_frame": "...", "to_frame": "...", "mutations": {...}, "provenance": {...}},
+    {"op": "propagate_prop", "prop_id": "...", "from_frame": "...", "to_frame": "...", "mutations": {...}, "provenance": {...}},
+    {"op": "propagate_location", "location_id": "...", "from_frame": "...", "to_frame": "...", "mutations": {...}, "provenance": {...}}
   ]
 }
 """
@@ -100,6 +100,7 @@ def main():
                 propagate_cast_state(
                     graph, op["cast_id"], op["from_frame"], op["to_frame"],
                     mutations=op.get("mutations"),
+                    provenance=op.get("provenance", {}),
                 )
                 succeeded += 1
 
@@ -107,6 +108,7 @@ def main():
                 propagate_prop_state(
                     graph, op["prop_id"], op["from_frame"], op["to_frame"],
                     mutations=op.get("mutations"),
+                    provenance=op.get("provenance", {}),
                 )
                 succeeded += 1
 
@@ -114,6 +116,7 @@ def main():
                 propagate_location_state(
                     graph, op["location_id"], op["from_frame"], op["to_frame"],
                     mutations=op.get("mutations"),
+                    provenance=op.get("provenance", {}),
                 )
                 succeeded += 1
 

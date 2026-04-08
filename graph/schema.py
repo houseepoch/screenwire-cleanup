@@ -29,8 +29,8 @@ Design decisions:
 from __future__ import annotations
 
 from enum import Enum
-from typing import Optional
-from pydantic import BaseModel, Field
+from typing import Any, Optional
+from pydantic import BaseModel, Field, model_validator
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -287,18 +287,20 @@ class VisualDirection(BaseModel):
     """Project-level visual direction.
     Sourced from ScreenWire scene_coordinator visual_analysis."""
 
-    media_type: str = "live_action"
+    media_style: str = "live_clear"
     style_direction: list[str] = Field(default_factory=list)
     genre_influence: list[str] = Field(default_factory=list)
     mood_palette: list[str] = Field(default_factory=list)
     visual_tone_per_act: dict[str, str] = Field(default_factory=dict)
-    style_prefix: str = ""  # Resolved media type prompt prefix
+    style_prefix: str = ""  # Resolved media style prompt prefix
 
     provenance: Provenance = Field(default_factory=Provenance)
 
 
 class ProjectNode(BaseModel):
-    """Root node of the graph. One per project."""
+    """Root node of the graph. One per project.
+    Contains ONLY onboarding-supplied details. World context and visual
+    direction live as separate top-level graph nodes."""
 
     project_id: str
     title: str = ""
@@ -306,9 +308,17 @@ class ProjectNode(BaseModel):
     stickiness_level: int = 3
     stickiness_permission: str = ""
     output_size: str = "short"
+    output_size_label: str = ""
+    frame_range: list[int] = Field(default_factory=lambda: [10, 20])
+    scene_range: list[int] = Field(default_factory=lambda: [1, 3])
+    media_style: str = "live_clear"
+    media_style_prefix: str = ""
     aspect_ratio: str = "16:9"
-    world: WorldContext = Field(default_factory=WorldContext)
-    visual: VisualDirection = Field(default_factory=VisualDirection)
+    style: list[str] = Field(default_factory=list)
+    genre: list[str] = Field(default_factory=list)
+    mood: list[str] = Field(default_factory=list)
+    extra_details: str = ""
+    source_files: list[str] = Field(default_factory=list)
 
 
 # ─── Cast ────────────────────────────────────────────────────────────────────
@@ -519,14 +529,36 @@ class LocationFrameState(BaseModel):
 
 # ─── Location ───────────────────────────────────────────────────────────────
 
+class LocationDirectionView(BaseModel):
+    """A single cardinal direction view from within a location."""
+    description: str = ""           # What is visible facing this direction
+    image_path: Optional[str] = None  # Generated reference image for this view
+    image_status: Optional[str] = None  # pending, generated, failed
+    key_features: list[str] = Field(default_factory=list)  # Doors, windows, furniture, etc.
+    depth_description: str = ""     # Foreground → midground → background layers
+
+
 class LocationDirections(BaseModel):
     """Cardinal direction views from within a location.
-    Only populated for directions used in frames."""
-    north: Optional[str] = None
-    south: Optional[str] = None
-    east: Optional[str] = None
-    west: Optional[str] = None
-    exterior: Optional[str] = None
+    Each direction has a text description and a generated reference image.
+    The primary location image is used as the base; directional views are
+    generated from it to establish spatial consistency."""
+    north: Optional[LocationDirectionView] = None
+    south: Optional[LocationDirectionView] = None
+    east: Optional[LocationDirectionView] = None
+    west: Optional[LocationDirectionView] = None
+    exterior: Optional[LocationDirectionView] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _upgrade_string_directions(cls, data: Any) -> Any:
+        """Backward compat: auto-upgrade plain string directions to LocationDirectionView."""
+        if isinstance(data, dict):
+            for key in ("north", "south", "east", "west", "exterior"):
+                val = data.get(key)
+                if isinstance(val, str):
+                    data[key] = {"description": val} if val else None
+        return data
 
 
 class LocationNode(BaseModel):
@@ -545,7 +577,7 @@ class LocationNode(BaseModel):
     narrative_purpose: str = ""
 
     # Visual
-    material_palette: list[str] = Field(default_factory=list)  # wood, stone, metal — for anti-CG anchors
+    material_palette: list[str] = Field(default_factory=list)  # wood, stone, metal — texture anchors
     architecture_keywords: list[str] = Field(default_factory=list)
     flora: Optional[str] = None
     location_type: Optional[str] = None     # from Lucid Lines EntityFields
@@ -657,7 +689,7 @@ class FrameEnvironment(BaseModel):
 
     lighting: FrameLighting = Field(default_factory=FrameLighting)
     atmosphere: FrameAtmosphere = Field(default_factory=FrameAtmosphere)
-    materials_present: list[str] = Field(default_factory=list)  # Anti-CG anchor source
+    materials_present: list[str] = Field(default_factory=list)  # Texture detail source
     foreground_objects: list[str] = Field(default_factory=list)
     midground_detail: Optional[str] = None
     background_depth: Optional[str] = None  # "courtyard_through_window", "jungle_canopy"
@@ -673,13 +705,32 @@ class FrameBackground(BaseModel):
     depth_layers: list[str] = Field(default_factory=list)
 
 
+class FrameDirecting(BaseModel):
+    """Narrative and directorial intent for a frame.
+
+    These fields explain why the shot exists, whose experience it aligns
+    with, and how camera language should support the beat.
+    """
+
+    dramatic_purpose: Optional[str] = None      # reveal, reaction, intimidation, intimacy, concealment
+    beat_turn: Optional[str] = None             # What changes by the end of the frame
+    pov_owner: Optional[str] = None             # cast_id, prop_id, location feature, or "audience"
+    viewer_knowledge_delta: Optional[str] = None  # New information the viewer learns here
+    power_dynamic: Optional[str] = None         # Who holds advantage and how
+    tension_source: Optional[str] = None        # What is creating pressure in the moment
+    camera_motivation: Optional[str] = None     # Why this framing or movement is being used
+    movement_motivation: Optional[str] = None   # Why the subject/background/camera should feel active
+    movement_path: Optional[str] = None         # Start-to-end movement or blocking path
+    reaction_target: Optional[str] = None       # The line/action this frame answers
+    background_life: Optional[str] = None       # Supporting environmental life behind the subject
+
+
 class FrameComposition(BaseModel):
     """Camera and composition data for a frame.
     Sourced from Lucid Lines CompositionEngine + ScreenWire formula-to-lens mapping."""
 
     shot: Optional[str] = None              # "medium_shot", "close_up", "wide"
     angle: Optional[str] = None             # "eye_level", "high", "low", "dutch"
-    lens: Optional[str] = None              # "85mm T1.8", "24mm T5.6"
     placement: Optional[str] = None         # Rule of thirds position
     grouping: Optional[str] = None          # How multiple characters are arranged
     blocking: Optional[str] = None          # Stage direction
@@ -726,13 +777,16 @@ class FrameNode(BaseModel):
     # Background data (structured, beyond FrameEnvironment)
     background: FrameBackground = Field(default_factory=FrameBackground)
 
+    # Directorial intent
+    directing: FrameDirecting = Field(default_factory=FrameDirecting)
+
     # Narrative flow
     emotional_arc: Optional[EmotionalArc] = None  # Relative to previous frame
     tension_delta: Optional[float] = None
     visual_flow_element: Optional[str] = None  # motion|dialogue|reaction|action|weight|establishment
 
     # Video direction — Morpheus sets these for downstream video generation
-    suggested_duration: Optional[int] = None  # Clip duration in seconds (3-15). None = use formula heuristic
+    suggested_duration: Optional[int] = None  # Clip duration in seconds (min 3, scales with content). None = use formula heuristic
     action_summary: str = ""                  # Concise physical action for video prompt (e.g., "Mei turns from railing, kimono catching wind")
 
     # Continuity
@@ -801,9 +855,74 @@ class DialogueNode(BaseModel):
     provenance: Provenance = Field(default_factory=Provenance)
 
 
+# ─── Voice Profile ─────────────────────────────────────────────────────────
+
+class VoiceNode(BaseModel):
+    """Voice profile for a speaking cast member.
+    Replaces the Voice Director agent — populated programmatically
+    or by Morpheus during graph construction."""
+
+    voice_id: str                           # Same as cast_id for 1:1 mapping
+    cast_id: str
+    character_name: str = ""
+
+    # Voice identity
+    voice_description: str = ""             # Full description (20-1000 chars)
+    quality_prefix: str = ""                # Media-type-derived audio quality prefix
+    tone: Optional[str] = None              # warm, guarded, analytical
+    pitch: Optional[str] = None             # low-mid register, high soprano, etc.
+    accent: Optional[str] = None            # neutral American, British RP, etc.
+    delivery_style: Optional[str] = None    # Slow, considered pacing, rapid-fire, etc.
+    tempo: Optional[str] = None             # measured, fast, drawling
+    emotional_range: Optional[str] = None   # How emotions manifest vocally
+    vocal_style: Optional[str] = None       # From source material
+
+    # Status
+    voice_profile_path: Optional[str] = None
+    voice_status: str = "pending"           # pending | profiled | confirmed
+
+    provenance: Provenance = Field(default_factory=Provenance)
+
+
+# ─── Chained Frame Group ──────────────────────────────────────────────────
+
+class ChainedFrameGroup(BaseModel):
+    """A sequence of continuous, unbroken frames at the same location.
+    Any 2+ consecutive frames sharing scene_id + location_id form a chain.
+    Used to generate multi-panel storyboard images for visual continuity."""
+
+    chain_id: str                           # e.g., "chain_01"
+    scene_id: str
+    location_id: str
+    frame_ids: list[str] = Field(default_factory=list)  # Ordered frame_ids in this chain
+    frame_count: int = 0
+
+    # Cast/prop presence across the chain
+    cast_present: list[str] = Field(default_factory=list)
+    props_present: list[str] = Field(default_factory=list)
+
+    # Storyboard generation
+    storyboard_prompt_path: Optional[str] = None
+    storyboard_image_path: Optional[str] = None
+    storyboard_status: str = "pending"      # pending | generated | archived
+    storyboard_history: list[str] = Field(default_factory=list)  # Paths to archived storyboards
+
+    provenance: Provenance = Field(default_factory=Provenance)
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # EDGES — Typed relationships between nodes
 # ═══════════════════════════════════════════════════════════════════════════════
+
+
+def canonical_edge_id(
+    source_id: str,
+    edge_type: "EdgeType | str",
+    target_id: str,
+) -> str:
+    """Return the single canonical identifier for an edge."""
+    edge_type_value = edge_type.value if isinstance(edge_type, EdgeType) else str(edge_type)
+    return f"{source_id}__{edge_type_value}__{target_id}"
 
 
 class GraphEdge(BaseModel):
@@ -835,22 +954,30 @@ class NarrativeGraph(BaseModel):
     """The complete narrative graph for a project.
     Morpheus builds this incrementally. Downstream agents query it."""
 
-    # Root
+    # Root — onboarding details only
     project: ProjectNode
+
+    # World & Visual — standalone top-level nodes (seeded before cast)
+    world: WorldContext = Field(default_factory=WorldContext)
+    visual: VisualDirection = Field(default_factory=VisualDirection)
 
     # Entity registries (base identity — static or slowly evolving)
     cast: dict[str, CastNode] = Field(default_factory=dict)
     locations: dict[str, LocationNode] = Field(default_factory=dict)
     props: dict[str, PropNode] = Field(default_factory=dict)
 
+    # Voice profiles (one per speaking cast member)
+    voices: dict[str, VoiceNode] = Field(default_factory=dict)
+
     # Story structure
     scenes: dict[str, SceneNode] = Field(default_factory=dict)
     frames: dict[str, FrameNode] = Field(default_factory=dict)
     dialogue: dict[str, DialogueNode] = Field(default_factory=dict)
 
+    # Chained frame groups (continuous sequences at same location)
+    chained_frame_groups: dict[str, ChainedFrameGroup] = Field(default_factory=dict)
+
     # Per-frame state snapshots (keyed by "{entity_id}@{frame_id}")
-    # These are the absolute snapshots for entities that mutate per frame.
-    # Stored here as a flat registry for efficient lookup.
     cast_frame_states: dict[str, CastFrameState] = Field(default_factory=dict)
     prop_frame_states: dict[str, PropFrameState] = Field(default_factory=dict)
     location_frame_states: dict[str, LocationFrameState] = Field(default_factory=dict)
@@ -871,11 +998,13 @@ class NarrativeGraph(BaseModel):
         "visual_direction": False,
         "cast_identity": False,
         "cast_voice": False,
+        "voice_profiles": False,
         "locations": False,
         "props": False,
         "scenes": False,
         "frames": False,
         "dialogue": False,
+        "chained_frame_groups": False,
         "cast_frame_states": False,
         "prop_frame_states": False,
         "location_frame_states": False,
@@ -894,3 +1023,66 @@ class NarrativeGraph(BaseModel):
     # Build stats
     total_tokens_used: int = 0
     build_log: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _validate_contracts(self) -> "NarrativeGraph":
+        """Enforce canonical graph contracts on persisted data."""
+        errors: list[str] = []
+
+        node_registries = [
+            ("cast", self.cast),
+            ("location", self.locations),
+            ("prop", self.props),
+            ("voice", self.voices),
+            ("scene", self.scenes),
+            ("frame", self.frames),
+            ("dialogue", self.dialogue),
+            ("chained_frame_group", self.chained_frame_groups),
+            ("cast_frame_state", self.cast_frame_states),
+            ("prop_frame_state", self.prop_frame_states),
+            ("location_frame_state", self.location_frame_states),
+        ]
+        for registry_name, registry in node_registries:
+            for node_id, node in registry.items():
+                provenance = getattr(node, "provenance", None)
+                source_prose_chunk = getattr(provenance, "source_prose_chunk", "")
+                if not source_prose_chunk or not source_prose_chunk.strip():
+                    errors.append(f"{registry_name}:{node_id} missing provenance.source_prose_chunk")
+
+        for key, state in self.cast_frame_states.items():
+            expected_key = f"{state.cast_id}@{state.frame_id}"
+            if key != expected_key:
+                errors.append(f"cast_frame_state key mismatch: expected {expected_key}, found {key}")
+        for key, state in self.prop_frame_states.items():
+            expected_key = f"{state.prop_id}@{state.frame_id}"
+            if key != expected_key:
+                errors.append(f"prop_frame_state key mismatch: expected {expected_key}, found {key}")
+        for key, state in self.location_frame_states.items():
+            expected_key = f"{state.location_id}@{state.frame_id}"
+            if key != expected_key:
+                errors.append(f"location_frame_state key mismatch: expected {expected_key}, found {key}")
+
+        seen_edge_ids: set[str] = set()
+        for edge in self.edges:
+            expected_edge_id = canonical_edge_id(edge.source_id, edge.edge_type, edge.target_id)
+            if not edge.edge_id or not edge.edge_id.strip():
+                errors.append(
+                    f"edge missing edge_id: {edge.source_id} --{edge.edge_type.value}--> {edge.target_id}"
+                )
+                continue
+            if edge.edge_id != expected_edge_id:
+                errors.append(
+                    f"edge_id mismatch: expected {expected_edge_id}, found {edge.edge_id}"
+                )
+            if edge.edge_id in seen_edge_ids:
+                errors.append(f"duplicate edge_id: {edge.edge_id}")
+            seen_edge_ids.add(edge.edge_id)
+
+        if errors:
+            preview = "; ".join(errors[:20])
+            remaining = len(errors) - min(len(errors), 20)
+            if remaining > 0:
+                preview += f"; ... {remaining} more"
+            raise ValueError(f"Graph contract validation failed: {preview}")
+
+        return self

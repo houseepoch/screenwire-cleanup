@@ -33,7 +33,7 @@ TEXT_COLOR = (255, 255, 0)  # Yellow fill
 OUTLINE_COLOR = (0, 0, 0)  # Black outline
 BG_COLOR = (0, 0, 0, 140)  # Semi-transparent black background
 
-# Directories to watch (relative to project root)
+# Directories to watch — ONLY reference images get tagged
 TAGGED_DIRS = {
     "cast/composites": "cast",
     "locations/primary": "location",
@@ -41,18 +41,62 @@ TAGGED_DIRS = {
     "assets/active/mood": "mood",
 }
 
+# Directories that must NEVER be tagged (scene frames, storyboards, etc.)
+NEVER_TAG_DIRS = {
+    "frames/composed",
+    "frames/storyboards",
+    "frames/prompts",
+    "video/prompts",
+    "video/rendered",
+}
+
 
 # ---------------------------------------------------------------------------
 # Core tagging function
 # ---------------------------------------------------------------------------
 
-def tag_image(image_path: Path, label: str) -> None:
-    """Overlay label text on image in upper-right corner. Overwrites in place."""
+def _load_tag_manifest(project_dir: Path) -> dict:
+    """Load the tag manifest tracking which files have been tagged."""
+    manifest_path = project_dir / "logs" / "tagged_manifest.json"
+    if manifest_path.exists():
+        try:
+            return json.loads(manifest_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {}
+
+
+def _save_tag_manifest(project_dir: Path, manifest: dict) -> None:
+    """Persist the tag manifest."""
+    manifest_path = project_dir / "logs" / "tagged_manifest.json"
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+
+
+def is_tagged(image_path: Path, project_dir: Path) -> bool:
+    """Check whether an image has already been tagged (via manifest)."""
+    manifest = _load_tag_manifest(project_dir)
+    return str(image_path) in manifest
+
+
+def tag_image(image_path: Path, label: str, project_dir: Path | None = None) -> bool:
+    """Overlay label text on image in upper-right corner. Overwrites in place.
+
+    Returns True on success, False on failure.
+    If project_dir is provided, records the tag in the manifest to prevent
+    double-tagging and enable verification.
+    """
+    # Skip if already tagged
+    if project_dir is not None:
+        manifest = _load_tag_manifest(project_dir)
+        if str(image_path) in manifest:
+            return True
+
     try:
         img = Image.open(image_path).convert("RGBA")
     except Exception as e:
         print(f"[ImageTagger] Cannot open {image_path.name}: {e}", file=sys.stderr)
-        return
+        return False
 
     w, h = img.size
     font_size = max(MIN_FONT_SIZE, min(MAX_FONT_SIZE, int(h * FONT_SIZE_RATIO)))
@@ -110,6 +154,17 @@ def tag_image(image_path: Path, label: str) -> None:
         tagged.save(image_path, "PNG")
 
     print(f"[ImageTagger] Tagged: {image_path.name} → \"{label}\"")
+
+    # Record in manifest
+    if project_dir is not None:
+        manifest = _load_tag_manifest(project_dir)
+        manifest[str(image_path)] = {
+            "label": label,
+            "tagged_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }
+        _save_tag_manifest(project_dir, manifest)
+
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -185,22 +240,175 @@ def _humanize_id(entity_id: str) -> str:
 # Batch tag all existing images in a project
 # ---------------------------------------------------------------------------
 
-def tag_all_project_images(project_dir: Path) -> int:
-    """Tag all existing cast/location/prop/mood images. Returns count tagged."""
-    count = 0
+def tag_all_project_images(project_dir: Path) -> tuple[int, set[str]]:
+    """Tag all existing reference images (cast/location/prop/mood).
+
+    Only tags files in TAGGED_DIRS. Scene frames and storyboards are never tagged.
+    Skips images already recorded in the tag manifest (prevents double-overlay).
+
+    Returns (count_tagged, set_of_tagged_absolute_paths).
+    """
+    tagged_paths: set[str] = set()
+    failed_paths: list[str] = []
     for rel_dir, entity_type in TAGGED_DIRS.items():
         dir_path = project_dir / rel_dir
         if not dir_path.exists():
             continue
         for img_path in sorted(dir_path.glob("*.png")) + sorted(dir_path.glob("*.jpg")):
+            # Safety: verify path is not in a forbidden directory
+            try:
+                rel = img_path.relative_to(project_dir)
+                if any(str(rel).startswith(blocked) for blocked in NEVER_TAG_DIRS):
+                    continue
+            except ValueError:
+                pass
             label = resolve_label(img_path, entity_type, project_dir)
-            tag_image(img_path, label)
-            count += 1
-    return count
+            if tag_image(img_path, label, project_dir=project_dir):
+                tagged_paths.add(str(img_path))
+            else:
+                failed_paths.append(str(img_path))
+
+    if failed_paths:
+        print(f"[ImageTagger] WARNING: {len(failed_paths)} image(s) failed to tag:", file=sys.stderr)
+        for fp in failed_paths:
+            print(f"  - {fp}", file=sys.stderr)
+
+    return len(tagged_paths), tagged_paths
+
+
+def verify_ref_images_tagged(project_dir: Path, ref_image_paths: list[str]) -> tuple[bool, list[str]]:
+    """Verify that every reference image path exists and has been tagged.
+
+    For any untagged image that falls within a TAGGED_DIR, attempt to tag it now.
+
+    Returns (all_ok, list_of_problem_paths).
+    """
+    manifest = _load_tag_manifest(project_dir)
+    problems: list[str] = []
+
+    for ref in ref_image_paths:
+        ref_path = Path(ref) if Path(ref).is_absolute() else project_dir / ref
+        if not ref_path.exists():
+            problems.append(f"MISSING: {ref}")
+            continue
+
+        # Check if already tagged
+        if str(ref_path) in manifest:
+            continue
+
+        # Determine if this path is in a TAGGED_DIR (should have been tagged)
+        try:
+            rel = ref_path.relative_to(project_dir)
+            rel_str = str(rel)
+        except ValueError:
+            continue  # Outside project — not our concern
+
+        matched_type = None
+        for tagged_dir, entity_type in TAGGED_DIRS.items():
+            if rel_str.startswith(tagged_dir):
+                matched_type = entity_type
+                break
+
+        if matched_type is None:
+            continue  # Not in a tagged directory — no tag expected
+
+        # Attempt to tag now
+        label = resolve_label(ref_path, matched_type, project_dir)
+        if tag_image(ref_path, label, project_dir=project_dir):
+            print(f"[ImageTagger] Late-tagged: {ref_path.name} → \"{label}\"")
+        else:
+            problems.append(f"TAG_FAILED: {ref}")
+
+    return len(problems) == 0, problems
 
 
 # ---------------------------------------------------------------------------
-# Watch mode — monitor directories for new images
+# Non-blocking watcher for pipeline integration
+# ---------------------------------------------------------------------------
+
+
+def start_tag_watcher(project_dir: Path) -> "Observer | None":
+    """Start a background watcher that auto-tags reference images as they arrive.
+
+    Returns the Observer instance (call stop_tag_watcher() when done) or None
+    if watchdog is not installed.  Tags existing images first, then watches.
+    """
+    # Tag existing images first
+    count, _ = tag_all_project_images(project_dir)
+    if count:
+        print(f"[ImageTagger] Tagged {count} existing reference images.")
+
+    try:
+        from watchdog.events import FileSystemEventHandler
+        from watchdog.observers import Observer
+    except ImportError:
+        print("[ImageTagger] watchdog not installed — auto-tagging disabled", file=sys.stderr)
+        return None
+
+    class _TagHandler(FileSystemEventHandler):
+        def __init__(self, entity_type: str, proj_dir: Path):
+            self.entity_type = entity_type
+            self.proj_dir = proj_dir
+
+        def _should_tag(self, path: Path) -> bool:
+            if path.suffix.lower() not in (".png", ".jpg", ".jpeg"):
+                return False
+            try:
+                rel = path.relative_to(self.proj_dir)
+                for blocked in NEVER_TAG_DIRS:
+                    if str(rel).startswith(blocked):
+                        return False
+            except ValueError:
+                pass
+            return True
+
+        def _do_tag(self, path: Path) -> None:
+            time.sleep(0.5)
+            if path.exists() and path.stat().st_size > 0:
+                label = resolve_label(path, self.entity_type, self.proj_dir)
+                tag_image(path, label, project_dir=self.proj_dir)
+
+        def on_created(self, event):
+            if event.is_directory:
+                return
+            path = Path(event.src_path)
+            if self._should_tag(path):
+                self._do_tag(path)
+
+        def on_moved(self, event):
+            """Catch atomic writes (tmp → final rename via os.replace)."""
+            if event.is_directory:
+                return
+            path = Path(event.dest_path)
+            if self._should_tag(path):
+                self._do_tag(path)
+
+    observer = Observer()
+    for rel_dir, entity_type in TAGGED_DIRS.items():
+        dir_path = project_dir / rel_dir
+        dir_path.mkdir(parents=True, exist_ok=True)
+        handler = _TagHandler(entity_type, project_dir)
+        observer.schedule(handler, str(dir_path), recursive=True)
+    observer.daemon = True
+    observer.start()
+    print("[ImageTagger] Background watcher started for reference images.")
+    return observer
+
+
+def stop_tag_watcher(observer) -> None:
+    """Stop the background tag watcher."""
+    if observer is None:
+        return
+    try:
+        observer.stop()
+        observer.join(timeout=3)
+        print("[ImageTagger] Background watcher stopped.")
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------------------
+# Interactive watch mode — blocks until interrupted
 # ---------------------------------------------------------------------------
 
 def watch_project(project_dir: Path) -> None:
@@ -228,7 +436,7 @@ def watch_project(project_dir: Path) -> None:
             time.sleep(0.5)
             if path.exists() and path.stat().st_size > 0:
                 label = resolve_label(path, self.entity_type, self.proj_dir)
-                tag_image(path, label)
+                tag_image(path, label, project_dir=self.proj_dir)
 
     observer = Observer()
     for rel_dir, entity_type in TAGGED_DIRS.items():
@@ -274,7 +482,7 @@ def _poll_watch(project_dir: Path) -> None:
                     seen.add(key)
                     if f.stat().st_size > 0:
                         label = resolve_label(f, entity_type, project_dir)
-                        tag_image(f, label)
+                        tag_image(f, label, project_dir=project_dir)
 
 
 # ---------------------------------------------------------------------------
@@ -295,12 +503,12 @@ if __name__ == "__main__":
 
     if args.file:
         label = args.label or Path(args.file).stem
-        tag_image(Path(args.file), label)
+        tag_image(Path(args.file), label, project_dir=project_dir)
     elif args.watch:
         # Tag existing first, then watch
-        count = tag_all_project_images(project_dir)
+        count, _ = tag_all_project_images(project_dir)
         print(f"[ImageTagger] Tagged {count} existing images.")
         watch_project(project_dir)
     else:
-        count = tag_all_project_images(project_dir)
+        count, _ = tag_all_project_images(project_dir)
         print(f"[ImageTagger] Tagged {count} images.")

@@ -8,11 +8,13 @@ This guide governs ALL prose output from the Creative Coordinator. Every spawned
 
 Your prose tells a linear story of **motion, dialogue, reaction, action, weight, and establishment.** These are the six elements every scene is built from. Not plot — visual flow. Every paragraph should be doing at least one, and the sequence should cycle through them naturally, never stacking any single one.
 
+**Dialogue is the heartbeat of the story.** At stickiness level 3 and above, dialogue should be the most frequent element in any scene with two or more characters. Characters who are together talk — about what's happening, what they feel, what they want. A scene where two characters are present but never speak to each other is almost always wrong. When in doubt, add dialogue. A line of speech does more for character, pacing, and audience connection than a paragraph of visual description.
+
 | Element | What it means | What it produces downstream |
 |---|---|---|
 | **Motion** | Something is always moving — a character, the camera, light, wind, background life. The frame is never still. | Gives the video agent movement to animate. Dead-still frames feel broken. |
-| **Dialogue** | Characters speak with their bodies as much as their words. Speech is physical performance — the mouth, hands, posture, position in space all work together. | Produces setup-payoff frame pairs. Body business during speech gives the Decomposer visual frames to interleave with dialogue frames. |
-| **Reaction** | Every action and every line produces a visible response — from another character, from the environment, from the speaker's own body. Nothing lands in silence. | Creates the alternating visual/event rhythm the Decomposer requires. Prevents consecutive dialogue frames. |
+| **Dialogue** | Characters speak with their bodies as much as their words. Speech is physical performance — the mouth, hands, posture, position in space all work together. | Produces setup-payoff frame pairs. Body business during speech gives Narrative Atomization visual frames to interleave with dialogue frames. |
+| **Reaction** | Every action and every line produces a visible response — from another character, from the environment, from the speaker's own body. Nothing lands in silence. | Creates the alternating visual/event rhythm Narrative Atomization requires. Prevents consecutive dialogue frames. |
 | **Action** | Physical business that advances the scene — crossing a room, opening a door, placing a Go stone, gripping a railing. Purposeful movement, not idle fidgeting. | Maps directly to F10/F11 frames. Gives scenes kinetic energy between dialogue exchanges. |
 | **Weight** | Moments that land. The camera holds. A breath. A trembling hand. The instant before a decision. Not every beat is fast — some earn stillness through what preceded them. | Produces F18 cinematic emphasis frames. These are the emotional anchors of the edit. Use sparingly — they earn their power from contrast with motion. |
 | **Establishment** | The environment, lighting, atmosphere, and space that everything sits inside. The canvas before the figures. Always leads — never assumed. | Feeds directly into the narrativeBeat priority order. Produces F07/F08 frames that ground every scene visually. |
@@ -21,13 +23,17 @@ Your prose tells a linear story of **motion, dialogue, reaction, action, weight,
 
 ---
 
-## How Your Prose Gets Consumed: The Decomposer
+## How Your Prose Gets Consumed: Narrative Atomization
 
-A downstream agent (the Decomposer) reads your `creative_output.md` **linearly, paragraph by paragraph, sentence by sentence** and segments it into **frames** — each frame is one visual shot that becomes one image and one video clip. Your prose order IS the final edit order. Nothing gets reordered. Nothing gets regrouped. The sequence you write is the sequence the audience sees.
+Morpheus reads your `creative_output.md` and decomposes it into **story atoms** — the smallest independently renderable units. Each atom is one subject + one action + one context, mapped to one frame. Your prose order IS the final edit order. Nothing gets reordered. Nothing gets regrouped. The sequence you write is the sequence the audience sees.
+
+**Atomization means your prose will be split at:** every new subject, every new verb, every causal boundary (X causes Y = two atoms), and every implied action will be made explicit (if a character "walks through the door", the door opening is extracted as a separate atom).
+
+**Write to make atomization clean:** one visual event per paragraph. If you write compound actions, they WILL be split — so structure your prose so each paragraph already maps to one atom. The cleaner your prose, the cleaner the frames.
 
 ### The 18 Frame Types (Formula Tags)
 
-The Decomposer classifies every frame using one of these tags. You should know them because your prose implies them:
+Narrative Atomization classifies every frame using one of these tags. You should know them because your prose implies them:
 
 | Tag | Type | What it captures |
 |---|---|---|
@@ -57,15 +63,16 @@ The Decomposer classifies every frame using one of these tags. You should know t
 | Description of person, place, thing | Dialogue, action, reaction |
 | F01, F02, F03, F07, F08, F11, F18 | F04, F05, F06, F10, F11 |
 
-The Decomposer reads your prose and classifies: description → visual frame. Dialogue/action → event frame. Next sentence. Repeat. Because screenplays naturally alternate between description and dialogue/action, following script order produces dispersed, rhythmic frames automatically — **IF you write with this alternation in mind.**
+Narrative Atomization reads your prose and decomposes it into story atoms: one subject + one action + one context each. Description → visual frame. Dialogue/action → event frame. Causal chains are split (X causes Y = two atoms). Implied actions are made explicit (character "walks through door" = door opens + walks through). Because screenplays naturally alternate between description and dialogue/action, following script order produces dispersed, rhythmic frames automatically — **IF you write with this alternation in mind.**
 
-### The Cardinal Rules the Decomposer Enforces
+### The Cardinal Rules Narrative Atomization Enforces
 
-1. **Never reorder out of script sequence.** Your prose order = frame order = video edit order.
-2. **No consecutive dialogue frames.** If the Decomposer finds 2+ dialogue frames (F04/F05/F06) in a row, it means you failed to write a visual beat between them. The result is talking-head video.
+1. **Never reorder out of script sequence.** Your prose order = atom order = frame order = video edit order.
+2. **No consecutive dialogue frames.** If atomization finds 2+ dialogue frames (F04/F05/F06) in a row, it means you failed to write a visual beat between them. The result is talking-head video.
 3. **No more than 4 consecutive action frames** without a breathing frame (F01 character moment or F07 establishing shot).
-4. **No compression.** If your prose describes 3 separate beats, the Decomposer creates 3 frames. If you pack 3 beats into one paragraph, it becomes 1 muddy frame.
-5. **Scene openers** should produce F07 (establishing) or F01 (character intro). Lead with environment.
+4. **No compression.** If your prose describes 3 separate beats, atomization creates 3 atoms → 3 frames. If you pack 3 beats into one paragraph, they WILL be split — but you lose control over how. Write one atom per paragraph.
+5. **Implied actions surface as atoms.** If you write "sits down at the table", atomization will extract "crosses to chair" as a separate atom. Write these transitions explicitly to control their framing.
+6. **Scene openers** should produce F07 (establishing) or F01 (character intro). Lead with environment.
 
 ### The Setup-Payoff Pair Pattern
 
@@ -73,7 +80,7 @@ Every dialogue exchange produces a minimum of TWO frames:
 - **Setup frame** (visual) — who is about to speak, where they are, what their body is doing
 - **Payoff frame** (event) — the dialogue itself
 
-This means your prose should naturally write in pairs: a visual beat, then the line. A reaction beat, then the next line. The Decomposer expects this cadence. When you skip the setup, it has to manufacture one or accept a talking head.
+This means your prose should naturally write in pairs: a visual beat, then the line. A reaction beat, then the next line. Atomization expects this cadence. When you skip the setup, it has to manufacture one or accept a talking head.
 
 **Practical density check:** Count dialogue lines in a scene. Multiply by ~1.5-2. That's roughly your minimum frame count for that scene. Add environment openers, transitions, and non-dialogue action beats on top.
 
@@ -92,7 +99,7 @@ If you write a 3-scene project at stickiness 3 and your prose only implies ~8 fr
 
 ### The narrativeBeat Priority Order
 
-Each frame the Decomposer creates has a `narrativeBeat` field — the primary input for image and video generation. It follows this priority:
+Each frame Morpheus creates from story atoms has a `narrativeBeat` field — the primary input for image and video generation. It follows this priority:
 
 1. **Lighting & atmosphere** — light direction, color temperature, weather, particles
 2. **Environment & background** — location details, background action, set dressing
@@ -103,11 +110,11 @@ Your prose should mirror this order. The environment is the canvas. Characters a
 
 ---
 
-## Writing Rules (Built on Decomposer Logic)
+## Writing Rules (Built on Narrative Atomization)
 
-### 1. One Paragraph = One Frame
+### 1. One Paragraph = One Story Atom = One Frame
 
-Each paragraph should describe what a single camera shot captures. When the camera would cut — new subject, new angle, new action — start a new paragraph. This is not a style preference. The Decomposer segments by paragraph boundaries. Dense paragraphs with multiple visual beats become single muddy frames. Separated paragraphs become distinct, clean shots.
+Each paragraph should describe exactly one story atom: one subject doing one thing in one context. When the subject, action, or context changes — start a new paragraph. This is not a style preference. Narrative Atomization decomposes by atoms, and a paragraph that maps to one atom produces one clean frame. Dense paragraphs with multiple atoms get split — but you lose control over how they're framed.
 
 **Bad — 3 beats compressed into 1 frame:**
 > Mei rises from the stool, crosses to the window, and looks down at the flower shop where Lin is watering his orchids in the fading light.
@@ -119,9 +126,23 @@ Each paragraph should describe what a single camera shot captures. When the came
 >
 > Below, Lin tilts the watering can over his orchids. The last daylight turns the water to copper thread.
 
-The Decomposer reads this as: `F01 (Mei rising) → F09 (transition/movement) → F01 (Lin, new subject)`. Three usable shots instead of one overloaded one.
+Atomization reads this as three story atoms: `mei → rises → from stool` / `mei → crosses → to window` / `lin → waters → orchids`. Three atoms → three frames: `F01 (Mei rising) → F09 (transition/movement) → F01 (Lin, new subject)`. Three usable shots instead of one overloaded one.
 
-### 2. Environment First, Characters Second
+### 2. Camera Direction + Background in Every Paragraph
+
+Every paragraph must establish which direction the camera faces and what's visible behind the action. Use the location's cardinal direction views from the skeleton — these are the backgrounds for every frame in that location.
+
+**Bad — no camera direction, no background:**
+> Mei sets the teacup down on the table.
+
+**Good — camera direction defines the background:**
+> The camera faces south — through the open screen doors, the koi pond glints in afternoon light, willows trailing into the water. Mei sets the teacup down on the lacquered table.
+
+**Why this is mandatory:** Every frame renders an image with a background. If your prose doesn't specify what's behind the action, the frame either gets a generic background or an empty one. The location's cardinal directions (defined in the skeleton) give you 4-5 pre-built backgrounds per location — cycle through them for visual variety. When the camera direction changes, the background changes, and the audience feels spatial awareness of the location.
+
+**Practical rule:** When two characters are in dialogue, alternate camera directions for each speaker's shot. If Mei faces south (garden behind her) and Lin faces north (entrance behind him), the over-shoulder shots naturally alternate backgrounds. This prevents the visual monotony of talking heads against the same wall.
+
+### 3. Environment First, Characters Second
 
 Lead every new location, time shift, or significant staging change with the visual canvas. This directly feeds the `narrativeBeat` priority order:
 
@@ -131,7 +152,7 @@ Use keyword-cluster descriptions for efficiency: `Amber light through lattice. P
 
 The body does not stop when the mouth starts. Real people talk and move simultaneously. A saleswoman walks the room while pitching. A soldier reloads while giving orders. A nervous man folds and unfolds a letter while reading it aloud.
 
-This is not just good writing — it's **mechanically necessary**. Each physical action during dialogue gives the Decomposer a visual frame to cut to. Without it, dialogue sequences become consecutive F04/F05 frames — talking heads.
+This is not just good writing — it's **mechanically necessary**. Each physical action during dialogue gives Narrative Atomization a visual frame to cut to. Without it, dialogue sequences become consecutive F04/F05 frames — talking heads.
 
 **Bad — 1-2 frames, static:**
 ```
@@ -161,7 +182,7 @@ Her fingers brush Mei's shoulder as she turns to the wealthiest tables. Zhao's t
 Min Zhu's fan pauses mid-arc. A murmur rolls through the seated men.
 ```
 
-The Decomposer reads: `F10 (Chou moving) → F06 (dialogue + walk) → F01 (Zhao reaction) → F05 (dialogue OTS) → F03 (group reaction)`. The dialogue is the same length. The visual density is completely different.
+Atomization reads: `F10 (Chou moving) → F06 (dialogue + walk) → F01 (Zhao reaction) → F05 (dialogue OTS) → F03 (group reaction)`. The dialogue is the same length. The visual density is completely different.
 
 **What counts as physical business during dialogue:**
 - Walking, pacing, circling
@@ -183,7 +204,7 @@ The Decomposer reads: `F10 (Chou moving) → F06 (dialogue + walk) → F01 (Zhao
 Every dialogue block carries two layers of direction:
 
 1. **Performance direction** — emotional delivery, tone, subtext
-2. **Shot hint** — suggested framing for the Decomposer
+2. **Shot hint** — suggested framing for Narrative Atomization
 
 Format: `(performance cue — SHOT TYPE, camera movement)`
 
@@ -211,7 +232,7 @@ Camera movements: `push-in`, `pull-back`, `pan`, `track`, `static`, `handheld`
           (reading aloud, trembling hands — CU on hands, slow push-in)
 ```
 
-These are suggestions the Decomposer may adjust — but they establish intended visual rhythm and prevent framing ambiguity.
+These are suggestions Narrative Atomization may adjust — but they establish intended visual rhythm and prevent framing ambiguity.
 
 ### 5. Break Longer Dialogues With Frameable Moments
 
@@ -230,7 +251,7 @@ When a character speaks more than ~30 words, break the speech into segments sepa
 [Physical payoff — staging change, environment response]
 ```
 
-This gives the Decomposer the setup-payoff pairs it expects instead of one locked-off talking head.
+This gives Narrative Atomization the setup-payoff pairs it expects instead of one locked-off talking head.
 
 ### 6. Solo Scenes: The Body Tells the Story
 
@@ -245,20 +266,20 @@ When a character is alone (reading a letter, making a decision, waiting), they s
 
 **Example — Lin reading the note (bad vs good):**
 
-Bad: Lin reads the note at the table through 5 consecutive dialogue blocks. Same pose, same location, same framing. The Decomposer gets 5 F04 talking-head frames.
+Bad: Lin reads the note at the table through 5 consecutive dialogue blocks. Same pose, same location, same framing. Atomization produces 5 F04 talking-head frames.
 
 Good: Lin reads the first lines at the table (F04). Rises, carries the note closer to the lantern (F10). Reads the next lines while walking to the shuttered window (F04 + F11). Presses his hand flat against the shutter — looking toward the street he can't see through (F01). Picks up the orchid he nursed back to health, holds it while reading the final lines (F11 + F04). Moves to the door before he finishes reading — his body deciding before his mind does (F10). Each shift is a frame. The same 5 dialogue blocks now produce 10+ frames.
 
 ### 7. Transitions Are Frames
 
-Moving between locations or time periods is not invisible. Transitions are visual moments the Decomposer captures:
+Moving between locations or time periods is not invisible. Transitions are visual moments Narrative Atomization captures:
 
 - A character walking through a corridor → F09
 - A door sliding open or shut → F08 detail shot
 - Light shifting from interior to exterior → F17
 - A held shot that lets a moment breathe → F18 cinematic emphasis
 
-Write them explicitly. They give the editor pacing control and the Decomposer clean cut points between scenes.
+Write them explicitly. They give the editor pacing control and Narrative Atomization clean cut points between scenes.
 
 ### 8. Background Is Alive
 
@@ -283,7 +304,7 @@ If a sentence does none of these, cut it. A 50-word paragraph that produces one 
 
 ## Scene Draft Self-Check
 
-Before finalizing any scene draft, verify against the Decomposer's expectations:
+Before finalizing any scene draft, verify against Narrative Atomization's expectations:
 
 - [ ] Every dialogue block has physical business during or immediately adjacent — no static deliveries
 - [ ] No 3+ consecutive dialogue blocks without a visual beat between them (would stack F04/F05 frames)
@@ -292,6 +313,9 @@ Before finalizing any scene draft, verify against the Decomposer's expectations:
 - [ ] Environment/lighting leads each new location or significant time shift (feeds narrativeBeat priority)
 - [ ] Solo characters externalize emotion through physical action and object interaction
 - [ ] Each prose paragraph maps to roughly one camera shot (one paragraph = one frame)
+- [ ] Every paragraph includes a camera direction and background description from the location's cardinal views
+- [ ] Camera directions vary across consecutive frames — don't point the camera the same way for 5 frames straight
+- [ ] Dialogue scenes alternate camera directions between speakers for background variety
 - [ ] Transitions between locations/times are written as explicit visual moments (F09/F17)
 - [ ] Backgrounds contain at least one element of motion or life
 - [ ] Frame density sanity check: dialogue lines × ~1.5-2 ≈ minimum frame count for the scene
