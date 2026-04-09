@@ -1,0 +1,16 @@
+{
+  "voiceId": "voice_nova",
+  "castId": "cast_nova",
+  "characterName": "Nova",
+  "voiceDescription": "low controlled alto with clipped urgency",
+  "qualityPrefix": "",
+  "tone": "guarded",
+  "pitch": null,
+  "accent": null,
+  "deliveryStyle": "precise",
+  "tempo": "measured",
+  "emotionalRange": null,
+  "vocalStyle": null,
+  "voiceProfilePath": "voices/voice_nova.json",
+  "voiceStatus": "profiled"
+}

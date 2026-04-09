@@ -1,0 +1,36 @@
+{
+  "project_dir": "/home/nikoles16/Documents/ScreenWire Environments/screenwire-pipeline/tests/projects/test-20260409T034531340457Z",
+  "frame_count": 4,
+  "scene_count": 2,
+  "storyboard_grid_count": 1,
+  "materialize_counts": {
+    "cast": 2,
+    "locations": 2,
+    "props": 1,
+    "voices": 2,
+    "dialogue": 2,
+    "visual_analysis": 1,
+    "manifest": 4
+  },
+  "prompt_counts": {
+    "image_prompts": 4,
+    "video_prompts": 4,
+    "composite_prompts": 2,
+    "location_prompts": 2,
+    "prop_prompts": 1,
+    "storyboard_prompts": 1
+  },
+  "manifest_status": "phase_3_ready",
+  "key_expectations": {
+    "frame_prompt_leading_ref": "frames/storyboards/grid_01/frames/frame_003.png",
+    "frame_prompt_previous_frame_ref": "frames/composed/f_003_gen.png",
+    "video_prompt_input_image_path": "frames/composed/f_004_gen.png",
+    "video_prompt_dialogue_line": "Then move.",
+    "storyboard_prompt_refs": [
+      "cast/composites/cast_nova_ref.png",
+      "cast/composites/cast_rafe_ref.png",
+      "locations/primary/loc_rooftop.png",
+      "locations/primary/loc_stairwell.png"
+    ]
+  }
+}

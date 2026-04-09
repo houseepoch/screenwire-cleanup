@@ -18,6 +18,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
+from dotenv import load_dotenv
+load_dotenv(Path(__file__).resolve().parent / ".env")
+
 import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
@@ -857,6 +860,121 @@ async def generate_frame(req: GenerateFrameRequest):
         pred_input, headers, output, req.prompt,
         req.reference_images, aspect_ratio, _t0,
     )
+
+
+# ---------------------------------------------------------------------------
+# Layer 1: POST /internal/generate-location-direction  (prunaai/p-image-edit)
+# ---------------------------------------------------------------------------
+
+P_IMAGE_EDIT_MODEL = "prunaai/p-image-edit"
+
+
+class GenerateLocationDirectionRequest(BaseModel):
+    prompt: str
+    input_path: str                                     # Primary location image (north-facing)
+    image_size: str = "landscape_16_9"
+    output_path: str
+    output_format: str = "png"
+    reference_images: list[str] = Field(default_factory=list)  # Currently unused; reserved
+    seed: Optional[int] = None
+
+
+@app.post("/internal/generate-location-direction")
+async def generate_location_direction(req: GenerateLocationDirectionRequest):
+    """Generate a location direction view using prunaai/p-image-edit.
+
+    Takes the primary (north-facing) location image and edits it into the
+    requested cardinal direction view while preserving architecture, materials,
+    and lighting.
+    """
+    import time as _time
+    _t0 = _time.monotonic()
+
+    output = _resolve_output(req.output_path)
+
+    # Resolve the source image (primary/north view)
+    source = Path(req.input_path)
+    if not source.is_absolute():
+        source = PROJECT_DIR / source
+    if not source.exists():
+        raise HTTPException(status_code=400, detail=f"Source image not found: {source}")
+
+    # Upload source image as data URI
+    source_uri = await _upload_to_replicate(source)
+
+    # Map size preset to aspect ratio
+    aspect_map = {
+        "landscape_16_9": "16:9", "landscape_4_3": "4:3", "landscape_3_2": "3:2",
+        "portrait_9_16": "9:16", "portrait_3_4": "3:4", "portrait_2_3": "2:3",
+        "square": "1:1", "square_hd": "1:1",
+    }
+    aspect_ratio = aspect_map.get(req.image_size, "match_input_image")
+
+    pred_input: dict[str, Any] = {
+        "prompt": req.prompt,
+        "images": [source_uri],
+        "turbo": False,         # Perspective changes are complex; disable turbo
+        "aspect_ratio": aspect_ratio,
+    }
+    if req.seed is not None:
+        pred_input["seed"] = req.seed
+
+    headers = {
+        "Authorization": f"Bearer {REPLICATE_API_TOKEN}",
+        "Content-Type": "application/json",
+        "Prefer": "wait",
+    }
+
+    try:
+        pred_data = await _replicate_predict(P_IMAGE_EDIT_MODEL, pred_input, headers)
+    except httpx.HTTPStatusError as exc:
+        log("LocDirection", f"p-image-edit HTTP error: {exc.response.status_code}")
+        _log_composition(
+            output_path=str(output), prompt=req.prompt, model=P_IMAGE_EDIT_MODEL,
+            prediction_id="", reference_images=[req.input_path], success=False,
+            aspect_ratio=aspect_ratio,
+            error=str(exc),
+            duration_ms=int((_time.monotonic() - _t0) * 1000),
+        )
+        raise HTTPException(status_code=502, detail=f"p-image-edit HTTP error: {exc.response.status_code}")
+
+    prediction_id = pred_data.get("id", "")
+    if pred_data.get("status") != "succeeded":
+        pred_data = await _poll_replicate_prediction(prediction_id, headers)
+
+    if pred_data.get("status") != "succeeded":
+        error_detail = _build_prediction_error(pred_data, req.prompt)
+        _log_composition(
+            output_path=str(output), prompt=req.prompt, model=P_IMAGE_EDIT_MODEL,
+            prediction_id=prediction_id, reference_images=[req.input_path], success=False,
+            aspect_ratio=aspect_ratio,
+            error=error_detail.get("failure_type", "UNKNOWN"),
+            duration_ms=int((_time.monotonic() - _t0) * 1000),
+        )
+        raise HTTPException(status_code=502, detail=error_detail)
+
+    # Download result
+    output_url = pred_data.get("output")
+    if isinstance(output_url, list):
+        output_url = output_url[0]
+
+    seed_val = pred_data.get("metrics", {}).get("seed") or pred_data.get("input", {}).get("seed")
+    await _download_file(output_url, output)
+
+    elapsed = int((_time.monotonic() - _t0) * 1000)
+    _log_composition(
+        output_path=str(output), prompt=req.prompt, model=P_IMAGE_EDIT_MODEL,
+        prediction_id=prediction_id, reference_images=[req.input_path], success=True,
+        aspect_ratio=aspect_ratio, seed=seed_val, duration_ms=elapsed,
+    )
+
+    return {
+        "success": True,
+        "path": str(output),
+        "seed": seed_val,
+        "prediction_id": prediction_id,
+        "model": P_IMAGE_EDIT_MODEL,
+    }
 
 
 # ---------------------------------------------------------------------------

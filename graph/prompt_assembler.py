@@ -2,12 +2,12 @@
 Prompt Assembler — Deterministic graph → prompt construction
 =============================================================
 
-Builds Chinese bilingual image prompts and video motion prompts
-directly from graph data. No LLM involved.
+Builds image generation prompts and video motion prompts directly
+from structured graph data. No LLM involved.
 
-Image prompts follow the 6-segment Chinese bilingual template from
-the Production Coordinator spec. Video prompts follow the Video Agent
-layered structure. Both are assembled from structured graph fields.
+Image prompts follow a storyboard-driven template with reference
+images as source of truth. Video prompts follow a layered structure
+with dialogue leading. Both are assembled from structured graph fields.
 """
 
 from __future__ import annotations
@@ -24,7 +24,11 @@ from .schema import (
     LocationFrameState, FormulaTag, LightingDirection, LightingQuality,
     Posture, EmotionalArc, FrameComposition, FrameEnvironment,
 )
-from .api import get_frame_context
+from .api import (
+    get_frame_context,
+    get_frame_cast_state_models,
+    get_frame_prop_state_models,
+)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -84,6 +88,9 @@ FORMULA_VIDEO = {
     "F18": ("Dramatic angle", "Slow push or crane", "Dramatic weight"),
 }
 
+# Native runtime ceiling enforced by server.py for grok-video clips.
+MAX_VIDEO_DURATION_SECONDS = 15
+
 # DialogueNode.env_medium → audio quality modifier for delivery instructions
 ENV_MEDIUM_AUDIO = {
     "radio":     "transmitted through radio — static-filtered, compressed frequency",
@@ -95,52 +102,6 @@ ENV_MEDIUM_AUDIO = {
     "distant":   "distant — reduced volume, environmental reverb",
 }
 
-# Time of day → Chinese descriptor
-TIME_CHINESE = {
-    "dawn": "破晓微光",
-    "morning": "清晨",
-    "midday": "正午阳光",
-    "afternoon": "午后斜阳",
-    "dusk": "黄昏暮色",
-    "night": "夜色深沉",
-}
-
-# Lighting direction → Chinese
-LIGHTING_DIR_CHINESE = {
-    "top": "从头顶",
-    "side_left": "从左侧",
-    "side_right": "从右侧",
-    "side_raking": "以低角度侧面",
-    "back": "从身后",
-    "rim": "勾勒轮廓",
-    "under": "从下方",
-    "ambient": "环境光均匀",
-    "split": "分割式",
-}
-
-# Lighting quality → Chinese
-LIGHTING_QUAL_CHINESE = {
-    "harsh": "强烈的",
-    "soft": "柔和的",
-    "diffused": "散射的",
-    "dappled": "斑驳的",
-    "volumetric": "体积感的",
-    "flickering": "摇曳的",
-}
-
-# Posture → Chinese
-POSTURE_CHINESE = {
-    "standing": "站立",
-    "sitting": "端坐",
-    "crouching": "蹲伏",
-    "kneeling": "跪着",
-    "lying": "躺卧",
-    "walking": "行走",
-    "running": "奔跑",
-    "leaning": "倚靠",
-    "hunched": "弓身",
-}
-
 # Screen-space → world-space cardinal direction mapping
 # Key: camera_facing direction. Value: {screen_side: world_direction}
 SPATIAL_WORLD_MAP = {
@@ -148,14 +109,6 @@ SPATIAL_WORLD_MAP = {
     'south': {'left': 'east',  'right': 'west',  'center': None, 'behind': 'south'},
     'east':  {'left': 'north', 'right': 'south', 'center': None, 'behind': 'east'},
     'west':  {'left': 'south', 'right': 'north', 'center': None, 'behind': 'west'},
-}
-
-# World direction → Chinese
-WORLD_DIR_CHINESE = {
-    'north': '北',
-    'south': '南',
-    'east':  '东',
-    'west':  '西',
 }
 
 # Emotion label → (facial_descriptors, body_descriptors)
@@ -401,7 +354,7 @@ def assemble_image_prompt(graph: NarrativeGraph, frame_id: str,
     """Build a complete image composition prompt for a frame.
 
     Returns dict with:
-        prompt: str — the full Chinese bilingual prompt
+        prompt: str — the full prompt
         ref_images: list[str] — reference image paths
         size: str — aspect ratio size param
         out_path: str — output file path
@@ -409,113 +362,66 @@ def assemble_image_prompt(graph: NarrativeGraph, frame_id: str,
     ctx = get_frame_context(graph, frame_id)
     frame = ctx["frame"]
     scene = ctx["scene"] or {}
-    visual = ctx["visual"]
-    world = ctx["world"]
     directing = _extract_directing_data(graph, ctx, frame)
 
     style_prefix = _resolve_style_prefix(graph)
 
-    # ── Segment 1: Scene description (场景描述)
-    # Prefer frame-level time_of_day, fall back to scene
-    frame_tod = frame.get("time_of_day") or scene.get("time_of_day", "")
-    time_cn = TIME_CHINESE.get(frame_tod, "")
-    location = ctx["location"] or {}
-    loc_desc = location.get("description", "")
-    loc_atmosphere = location.get("atmosphere", "")
+    # ── Instruction bridge (leads the prompt)
+    instruction_bridge = (
+        "Generate an image staying true to the storyboard grids composition. "
+        "Generate a single image frame based on the sample storyboard image provided "
+        "and comprised of the reference images as the cast and sources of truth to "
+        "recreate a still image of this scene. Logically make sure all elements are "
+        "well placed consistent to the storyboard and nothing is illogical or appears "
+        "accidental, all objects follow their desired physics, such as disfigurement, unnatural artifacts, use your logic to "
+        "process the information and build an assembled accurate scene. This prompt defines a frame in the grid identify it and rebuild it with these new material reference. "
+        "Use the reference images of the cast and storyboard to determine the "
+        "appropriate styling qualities to match. Do not add overlay text, labels or "
+        "notes on the images, text that exists within the scene is ok, ensure there "
+        "is not leakage of instruction generated on the image. You are to ensure that the final image matches a frame withing the example grid provided."
+    )
 
-    # Check for location state override
-    loc_state = ctx.get("location_state")
-    if loc_state:
-        if loc_state.get("atmosphere_override"):
-            loc_atmosphere = loc_state["atmosphere_override"]
-        modifiers = loc_state.get("condition_modifiers", [])
-        if modifiers:
-            loc_atmosphere += "，" + "，".join(modifiers)
-        if loc_state.get("lighting_override"):
-            loc_atmosphere += "，" + loc_state["lighting_override"]
-        damage = loc_state.get("damage_level", "none")
-        if damage and damage not in ("none", ""):
-            loc_atmosphere += f"，环境损坏程度：{damage}"
-
-    scene_desc = f"{time_cn}，{loc_desc}" if loc_desc else time_cn
-    if loc_atmosphere:
-        scene_desc += f"。{loc_atmosphere}"
-
-    # Location texture anchors — material palette + architecture keywords
-    _mat_pal = location.get("material_palette", [])
-    _arch_kw = location.get("architecture_keywords", [])
-    if _mat_pal or _arch_kw:
-        _texture_parts = []
-        if _arch_kw:
-            _texture_parts.append(f"建筑风格：{'，'.join(_arch_kw[:4])}")
-        if _mat_pal:
-            _texture_parts.append(f"材质：{'，'.join(_mat_pal[:4])}")
-        scene_desc += "，" + "，".join(_texture_parts)
-
-    # ── Segment 2: Character action & emotion (人物动作与情绪)
+    # ── Character action & emotion (name-driven, no appearance — ref images carry identity)
     char_segments = []
     for cs in ctx.get("cast_states", []):
         if cs.get("frame_role") in ("referenced", None):
             continue
-        name = _get_cast_name(ctx["cast"], cs["cast_id"])
-        appearance = _get_cast_appearance(ctx["cast"], cs)
+        name = _get_cast_name(ctx["cast"], cs["cast_id"]) or cs.get("cast_id", "Character")
         action = cs.get("action", "")
         emotion = cs.get("emotion", "")
         emotion_intensity = cs.get("emotion_intensity")
         posture = cs.get("posture", "")
-        posture_cn = POSTURE_CHINESE.get(posture, "")
-        clothing_state = cs.get("clothing_state", "base")
-        clothing_current = cs.get("clothing_current", [])
-        hair_state = cs.get("hair_state")
-        injury = cs.get("injury")
-        eye_direction = cs.get("eye_direction")
-        facing_direction = cs.get("facing_direction")
         screen_position = cs.get("screen_position")
         looking_at = cs.get("looking_at")
         spatial_position = cs.get("spatial_position")
+        eye_direction = cs.get("eye_direction")
+        facing_direction = cs.get("facing_direction")
+        injury = cs.get("injury")
         props_held = cs.get("props_held", [])
 
-        parts = []
-        if name and appearance:
-            parts.append(f"{name} ({appearance})")
-        elif name:
-            parts.append(name)
+        parts = [name]
         # Screen position & spatial placement
         if screen_position:
-            parts.append(f"，位于画面{screen_position}")
+            parts.append(f"at {screen_position}")
         elif spatial_position:
-            parts.append(f"，位于{spatial_position}")
-        # World-space spatial anchor (camera_facing + screen_position → cardinal room side)
+            parts.append(f"at {spatial_position}")
+        # World-space spatial anchor
         _img_camera_facing = frame.get("background", {}).get("camera_facing")
         if _img_camera_facing and screen_position:
             _world_dir = _resolve_world_position(_img_camera_facing, screen_position)
             if _world_dir:
-                _world_cn = WORLD_DIR_CHINESE.get(_world_dir, _world_dir)
-                parts.append(f"，位于房间{_world_cn}侧")
+                parts.append(f"on {_world_dir} side of the space")
         # Facing direction
         if facing_direction:
-            parts.append(f"，面朝{facing_direction}")
-        # Wardrobe — use override if non-base state, else fall back to identity wardrobe
-        if clothing_state and clothing_state != "base":
-            if clothing_current:
-                parts.append(f"，身穿{'，'.join(clothing_current)}")
-            # If non-base state but no clothing_current, don't fall back to base wardrobe
-            # (the outfit has changed but details weren't specified)
-        else:
-            identity_wardrobe = _get_cast_wardrobe(ctx.get("cast", []), cs.get("cast_id", ""))
-            if identity_wardrobe:
-                parts.append(f"，身穿{identity_wardrobe}")
-        # Hair state override
-        if hair_state:
-            parts.append(f"，发型{hair_state}")
+            parts.append(f"facing {facing_direction}")
         # Injury
         if injury:
-            parts.append(f"，{injury}")
+            parts.append(injury)
         # Action/posture
         if action:
-            parts.append(f"，正在{action}")
-        elif posture_cn:
-            parts.append(f"，{posture_cn}")
+            parts.append(action)
+        elif posture:
+            parts.append(posture)
         # Props held
         if props_held:
             _prop_state_lookup = {ps["prop_id"]: ps for ps in ctx.get("prop_states", [])}
@@ -529,38 +435,38 @@ def assemble_image_prompt(graph: NarrativeGraph, frame_id: str,
                     prop_names.append(f"{_cond} {base_name}")
                 else:
                     prop_names.append(base_name)
-            parts.append(f"，手持{'、'.join(prop_names)}")
+            parts.append(f"holding {', '.join(prop_names)}")
         # Emotion — translated to concrete facial/body descriptors
         if emotion:
             expression = _resolve_expression(emotion, emotion_intensity if emotion_intensity is not None else 0.5)
-            parts.append(f"，{expression}")
+            parts.append(expression)
         # Eye direction / looking at
         if looking_at:
-            parts.append(f"，目光注视{looking_at}")
+            parts.append(f"looking at {looking_at}")
         elif eye_direction:
-            parts.append(f"，目光{eye_direction}")
+            parts.append(f"eyes {eye_direction}")
 
         if parts:
-            char_segments.append("".join(parts))
+            char_segments.append(", ".join(parts))
 
-    char_desc = "。".join(char_segments) if char_segments else ""
+    char_desc = ". ".join(char_segments) if char_segments else ""
 
-    # ── Segment 3: Environmental details (环境细节)
+    # ── Environmental details
     env = frame.get("environment", {})
     env_parts = []
     fg = env.get("foreground_objects", [])
     if fg:
-        env_parts.append("前景：" + "，".join(fg[:3]))
+        env_parts.append("Foreground: " + ", ".join(fg[:3]))
     mid = env.get("midground_detail")
     if mid:
-        env_parts.append(f"中景：{mid}")
+        env_parts.append(f"Midground: {mid}")
     bg = env.get("background_depth")
     if bg:
-        env_parts.append(f"远景：{bg}")
+        env_parts.append(f"Background depth: {bg}")
     atmo = env.get("atmosphere", {})
     particles = atmo.get("particles")
     if particles:
-        env_parts.append(f"空气中{particles}在光线中漂浮")
+        env_parts.append(f"{particles} drifting in the air")
     ambient = atmo.get("ambient_motion")
     if ambient:
         env_parts.append(ambient)
@@ -568,53 +474,40 @@ def assemble_image_prompt(graph: NarrativeGraph, frame_id: str,
     # Weather & temperature
     weather = atmo.get("weather")
     if weather:
-        env_parts.append(f"天气：{weather}")
+        env_parts.append(f"Weather: {weather}")
     temp_feel = atmo.get("temperature_feel")
     if temp_feel:
-        env_parts.append(f"体感{temp_feel}")
+        env_parts.append(f"Temperature: {temp_feel}")
 
     # Background enrichment from FrameBackground + location directions
+    location = ctx["location"] or {}
     bg_data = frame.get("background", {})
     camera_facing = bg_data.get("camera_facing")
     if camera_facing:
-        env_parts.append(f"镜头朝向{camera_facing}")
+        env_parts.append(f"Camera facing {camera_facing}")
     # Auto-resolve visible_description from location directions if not explicitly set
     visible_desc = bg_data.get("visible_description", "")
     if not visible_desc and camera_facing and location:
         directions = location.get("directions", {})
         if isinstance(directions, dict):
-            visible_desc = directions.get(camera_facing, "")
+            dir_view = directions.get(camera_facing)
+            if isinstance(dir_view, dict):
+                visible_desc = dir_view.get("description", "")
+            elif isinstance(dir_view, str):
+                visible_desc = dir_view
     if visible_desc:
-        env_parts.append(f"背景：{visible_desc}")
+        env_parts.append(f"Background: {visible_desc}")
     if bg_data.get("background_action"):
-        env_parts.append(f"背景动作：{bg_data['background_action']}")
+        env_parts.append(f"Background action: {bg_data['background_action']}")
     if directing.get("background_life"):
-        env_parts.append(f"背景生活：{directing['background_life']}")
+        env_parts.append(f"Background life: {directing['background_life']}")
     if bg_data.get("depth_layers"):
         for layer in bg_data["depth_layers"][:2]:
             env_parts.append(layer)
 
-    env_desc = "。".join(env_parts) if env_parts else ""
+    env_desc = ". ".join(env_parts) if env_parts else ""
 
-    # ── Segment 4: Lighting (光影描述)
-    lighting = env.get("lighting", {})
-    light_parts = []
-    source = lighting.get("motivated_source", "")
-    quality = LIGHTING_QUAL_CHINESE.get(lighting.get("quality", ""), "")
-    color = lighting.get("color_temp", "")
-    direction = LIGHTING_DIR_CHINESE.get(lighting.get("direction", ""), "")
-    shadows = lighting.get("shadow_behavior", "")
-
-    if source and direction:
-        light_parts.append(f"{source}的{quality}{color}光{direction}照射")
-    elif quality and color:
-        light_parts.append(f"{quality}{color}光线")
-    if shadows:
-        light_parts.append(f"，{shadows}")
-
-    light_desc = "".join(light_parts) if light_parts else ""
-
-    # ── Segment 5: Shot framing from FrameComposition (no camera hardware)
+    # ── Shot framing from FrameComposition (no camera hardware)
     tag = frame.get("formula_tag", "F07")
     shot_desc = FORMULA_SHOT.get(tag, "Medium shot")
     comp = frame.get("composition", {})
@@ -667,62 +560,30 @@ def assemble_image_prompt(graph: NarrativeGraph, frame_id: str,
         if directorial_parts else ""
     )
 
-    # ── Continuity prefix
-    continuity_prefix = ""
-    if frame.get("continuity_chain"):
-        continuity_prefix = "同一场景，保持环境光线一致。"
-
-    # ── Dialogue context for image (NO dialogue text — just who speaks to whom)
-    dialogue_cue = ""
-    dialogue_nodes_img = ctx.get("dialogue", [])
-    if frame.get("is_dialogue") and dialogue_nodes_img:
-        for dn in dialogue_nodes_img:
-            if dn.get("primary_visual_frame") == frame_id:
-                speaker_name = _get_cast_name(ctx["cast"], dn.get("cast_id", ""))
-                # Find who they're speaking to (other cast in frame)
-                listeners = []
-                for cs in ctx.get("cast_states", []):
-                    if cs.get("cast_id") != dn.get("cast_id") and cs.get("frame_role") in ("subject", "object"):
-                        ln = _get_cast_name(ctx["cast"], cs["cast_id"])
-                        if ln:
-                            listeners.append(ln)
-                if speaker_name and listeners:
-                    dialogue_cue = f"{speaker_name}正在对{'、'.join(listeners)}说话"
-                elif speaker_name:
-                    dialogue_cue = f"{speaker_name}正在说话"
-                break
-    # Reaction frame — listener is the focus
-    if not dialogue_cue and dialogue_nodes_img:
-        for dn in dialogue_nodes_img:
-            if frame_id in (dn.get("reaction_frame_ids") or []):
-                listener_names = []
-                speaker_id = dn.get("cast_id", "")
-                speaker_name = _get_cast_name(ctx["cast"], speaker_id)
-                for cs in ctx.get("cast_states", []):
-                    if cs.get("cast_id") != speaker_id and cs.get("frame_role") in ("subject", "object"):
-                        ln = _get_cast_name(ctx["cast"], cs["cast_id"])
-                        if ln:
-                            listener_names.append(ln)
-                if listener_names and speaker_name:
-                    dialogue_cue = f"{'、'.join(listener_names)}正在倾听{speaker_name}"
-                elif listener_names:
-                    dialogue_cue = f"{'、'.join(listener_names)}正在倾听"
-                break
-
-    # ── Instruction bridge — cinematic direction between style prefix and scene data
-    instruction_bridge = (
-        "Use the reference images to craft a cinematic scene depicting the following "
-        "actions in a natural interaction with the environment. Compose a production-quality "
-        "frame as seen in televised media — consistent character appearance across all frames, "
-        "natural poses, grounded lighting, and deliberate camera composition. "
-    )
+    # ── Source material excerpt (verbatim prose this frame was created from)
+    source_excerpt = ""
+    frame_obj = graph.frames.get(frame_id)
+    if frame_obj:
+        # Prefer source_text (the full prose paragraph), fall back to provenance chunk
+        raw_source = (
+            frame_obj.source_text
+            or (frame_obj.provenance.source_prose_chunk if frame_obj.provenance else "")
+        )
+        if raw_source and raw_source.strip():
+            source_excerpt = f"Source material: {_compact_text(raw_source)}"
 
     # ── Assemble full prompt
-    segments = [s for s in [scene_desc, char_desc, env_desc, light_desc] if s]
-    if dialogue_cue:
-        segments.append(dialogue_cue)
-    chinese_body = "。".join(segments)
-    full_prompt = f"{style_prefix}{instruction_bridge}{continuity_prefix}{chinese_body}。{framing_suffix}{directorial_suffix} 画面内无任何文字。"
+    # Order: instruction_bridge → style_prefix → characters → environment → framing → directorial → source
+    segments = [s for s in [char_desc, env_desc] if s]
+    body = ". ".join(segments)
+    prompt_parts = [instruction_bridge, style_prefix, body]
+    if framing_suffix:
+        prompt_parts.append(framing_suffix)
+    if directorial_suffix:
+        prompt_parts.append(directorial_suffix.strip())
+    if source_excerpt:
+        prompt_parts.append(source_excerpt)
+    full_prompt = " ".join(p for p in prompt_parts if p)
 
     # ── Reference images
     ref_images = resolve_ref_images(graph, frame_id, project_dir=project_dir)
@@ -753,35 +614,27 @@ def assemble_video_prompt(graph: NarrativeGraph, frame_id: str) -> dict:
     """Build a video generation prompt for a frame (grok-video only).
 
     Returns dict with:
-        prompt: str — the full video prompt (dialogue included in AUDIO section)
-        duration: int — clip duration in seconds (from Morpheus or formula heuristic)
+        prompt: str — the full video prompt (dialogue in AUDIO section)
+        duration: int — clip duration in seconds
         target_api: str — always "grok-video"
         input_image_path: str
         dialogue_line: str or None — raw dialogue text if present
+        dialogue_pacing: str — pacing config (metadata, not in prompt)
         action_summary: str — concise action description
         frame_id, scene_id, sequence_index
     """
     ctx = get_frame_context(graph, frame_id)
     frame = ctx["frame"]
     scene = ctx["scene"] or {}
-    visual = ctx["visual"]
     location = ctx["location"] or {}
     directing = _extract_directing_data(graph, ctx, frame)
-
-    style_prefix = _resolve_style_prefix(graph)
-    # Replace "still"/"photo" words that freeze video output
-    style_prefix = style_prefix.replace("still,", "frame,").replace("photograph", "film")
 
     tag = frame.get("formula_tag", "F07")
     shot_type, camera_default, motion_focus = FORMULA_VIDEO.get(
         tag, ("Medium shot", "Static", "General motion")
     )
 
-    # ── Time of day (must match image prompt for lighting consistency)
-    frame_tod = frame.get("time_of_day") or scene.get("time_of_day", "")
-    tod_section = f"Time of day: {frame_tod}." if frame_tod else ""
-
-    # ── Continuity prefix (match image prompt behavior)
+    # ── Continuity prefix
     continuity_prefix = ""
     if frame.get("continuity_chain"):
         continuity_prefix = "Continuous scene — maintain consistent lighting, environment, and character positions."
@@ -789,49 +642,27 @@ def assemble_video_prompt(graph: NarrativeGraph, frame_id: str) -> dict:
     # ── Action summary (Morpheus-authored, concise physical action)
     action_summary = frame.get("action_summary", "")
 
-    # ── Environmental motion
     env = frame.get("environment", {})
     atmo = env.get("atmosphere", {})
-    env_motion_parts = []
-    if atmo.get("ambient_motion"):
-        env_motion_parts.append(atmo["ambient_motion"])
-    if atmo.get("particles"):
-        env_motion_parts.append(f"{atmo['particles']} drifting in the air")
-    if atmo.get("weather"):
-        env_motion_parts.append(f"{atmo['weather']} falling")
-    if atmo.get("temperature_feel"):
-        env_motion_parts.append(f"{atmo['temperature_feel']} atmosphere")
-    if directing.get("background_life"):
-        env_motion_parts.append(directing["background_life"])
-    if directing.get("movement_motivation"):
-        env_motion_parts.append(f"motion motivation: {directing['movement_motivation']}")
-    env_motion = ". ".join(env_motion_parts) if env_motion_parts else "Subtle atmospheric movement."
-
-    # ── Depth layers (foreground → midground → background)
-    depth_parts = []
-    fg = env.get("foreground_objects", [])
-    if fg:
-        depth_parts.append(f"Foreground: {', '.join(fg[:3])}")
-    mid = env.get("midground_detail")
-    if mid:
-        depth_parts.append(f"Midground: {mid}")
-    depth_section = ". ".join(depth_parts) + "." if depth_parts else ""
-
-    # ── Background
-    bg = env.get("background_depth", "")
     bg_data = frame.get("background", {})
+
+    # ── Background (labeled block)
+    bg = env.get("background_depth", "")
     bg_parts = []
     vid_camera_facing = bg_data.get("camera_facing")
     if vid_camera_facing:
-        bg_parts.append(f"camera facing {vid_camera_facing}")
+        bg_parts.append(f"looking {vid_camera_facing}")
     if bg:
         bg_parts.append(bg)
-    # Auto-resolve visible_description from location directions if not set
     vid_visible_desc = bg_data.get("visible_description", "")
     if not vid_visible_desc and vid_camera_facing and location:
         vid_directions = location.get("directions", {})
         if isinstance(vid_directions, dict):
-            vid_visible_desc = vid_directions.get(vid_camera_facing, "")
+            vid_dir_view = vid_directions.get(vid_camera_facing)
+            if isinstance(vid_dir_view, dict):
+                vid_visible_desc = vid_dir_view.get("description", "")
+            elif isinstance(vid_dir_view, str):
+                vid_visible_desc = vid_dir_view
     if vid_visible_desc:
         bg_parts.append(vid_visible_desc)
     if bg_data.get("background_action"):
@@ -843,57 +674,22 @@ def assemble_video_prompt(graph: NarrativeGraph, frame_id: str) -> dict:
             bg_parts.append(layer)
     bg_section = f"Background: {'. '.join(bg_parts)}." if bg_parts else ""
 
-    # ── Location state override (condition/damage/atmosphere modifiers)
-    loc_state = ctx.get("location_state")
-    loc_state_section = ""
-    if loc_state:
-        loc_state_parts = []
-        atmo_override = loc_state.get("atmosphere_override", "")
-        if atmo_override:
-            loc_state_parts.append(atmo_override)
-        condition_mods = loc_state.get("condition_modifiers", [])
-        if condition_mods:
-            loc_state_parts.extend(condition_mods)
-        lighting_override = loc_state.get("lighting_override", "")
-        if lighting_override:
-            loc_state_parts.append(lighting_override)
-        damage = loc_state.get("damage_level", "")
-        if damage and damage not in ("none", ""):
-            loc_state_parts.append(f"environment damage: {damage}")
-        if loc_state_parts:
-            loc_state_section = "Location state: " + ", ".join(loc_state_parts) + "."
-
-    # ── Lighting (carry image prompt lighting into video for consistency)
-    lighting = env.get("lighting", {})
-    light_parts_v = []
-    if lighting.get("motivated_source"):
-        light_parts_v.append(f"lit by {lighting['motivated_source']}")
-    if lighting.get("quality"):
-        light_parts_v.append(f"{lighting['quality']} light")
-    if lighting.get("color_temp"):
-        light_parts_v.append(f"{lighting['color_temp']} tone")
-    if lighting.get("direction"):
-        light_parts_v.append(f"from {lighting['direction']}")
-    if lighting.get("shadow_behavior"):
-        light_parts_v.append(f"shadows: {lighting['shadow_behavior']}")
-    lighting_section = f"Lighting: {', '.join(light_parts_v)}." if light_parts_v else ""
-
     # ── Camera motion + FrameComposition
     comp = frame.get("composition", {})
     camera_move = comp.get("movement") or camera_default
-    camera_parts = [f"Camera: {camera_move}"]
+    camera_parts = [camera_move]
     if comp.get("shot"):
         camera_parts.append(comp["shot"])
     if comp.get("angle"):
         camera_parts.append(f"{comp['angle']} angle")
     if comp.get("focus"):
-        camera_parts.append(f"focus on {comp['focus']}")
+        camera_parts.append(f"focused on {comp['focus']}")
     if comp.get("transition"):
-        camera_parts.append(f"transition: {comp['transition']}")
+        camera_parts.append(comp["transition"])
     if directing.get("camera_motivation"):
-        camera_parts.append(f"motivation: {directing['camera_motivation']}")
+        camera_parts.append(directing["camera_motivation"])
     if directing.get("movement_path"):
-        camera_parts.append(f"path: {directing['movement_path']}")
+        camera_parts.append(f"tracking {directing['movement_path']}")
     camera_section = f"{', '.join(camera_parts)}."
 
     # ── Character performance (enriched with blocking + positioning)
@@ -902,7 +698,6 @@ def assemble_video_prompt(graph: NarrativeGraph, frame_id: str) -> dict:
         if cs.get("frame_role") in ("referenced", None):
             continue
         name = _get_cast_name(ctx["cast"], cs["cast_id"])
-        # Build physical appearance descriptor for video model identification
         appearance = _get_cast_appearance(ctx["cast"], cs)
         action = cs.get("action", "")
         emotion = cs.get("emotion", "")
@@ -918,29 +713,23 @@ def assemble_video_prompt(graph: NarrativeGraph, frame_id: str) -> dict:
         props_held = cs.get("props_held", [])
 
         desc = f"{name} ({appearance})" if appearance else (name or "Character")
-        # Position in frame
         if screen_pos:
             desc += f" at {screen_pos}"
         elif spatial_pos:
             desc += f" at {spatial_pos}"
-        # World-space spatial anchor
         _vid_camera_facing = bg_data.get("camera_facing")
         if _vid_camera_facing and screen_pos:
             _vid_world_dir = _resolve_world_position(_vid_camera_facing, screen_pos)
             if _vid_world_dir:
                 desc += f", positioned on {_vid_world_dir} side of the space"
-        # Facing
         if facing:
             desc += f", facing {facing}"
-        # Physical state modifiers
         if hair_state:
             desc += f", hair {hair_state}"
         if injury:
             desc += f", {injury}"
-        # Action
         if action:
             desc += f", {action}"
-        # Props
         if props_held:
             _vprop_state_lookup = {ps["prop_id"]: ps for ps in ctx.get("prop_states", [])}
             prop_names = []
@@ -959,7 +748,6 @@ def assemble_video_prompt(graph: NarrativeGraph, frame_id: str) -> dict:
             desc += f", {expression}"
         if posture and posture not in ("standing",):
             desc += f", {posture}"
-        # Gaze
         if looking_at:
             desc += f", looking at {looking_at}"
         elif eye_dir:
@@ -967,8 +755,6 @@ def assemble_video_prompt(graph: NarrativeGraph, frame_id: str) -> dict:
         perf_parts.append(desc)
 
     perf_section = ". ".join(perf_parts) if perf_parts else ""
-
-    # If Morpheus provided an action_summary, prepend it — it's the directorial intent
     if action_summary:
         perf_section = f"{action_summary}. {perf_section}" if perf_section else action_summary
 
@@ -1009,11 +795,11 @@ def assemble_video_prompt(graph: NarrativeGraph, frame_id: str) -> dict:
                     if transitions:
                         blocking_parts.append(f"{name}: {'; '.join(transitions)}")
         except Exception:
-            pass  # Next frame not found — skip blocking transition
+            pass
 
     blocking_section = ""
     if blocking_parts:
-        blocking_section = "Character blocking: " + ". ".join(blocking_parts) + "."
+        blocking_section = ". ".join(blocking_parts) + "."
 
     # ── Emotional beat
     arc = frame.get("emotional_arc", "")
@@ -1026,51 +812,49 @@ def assemble_video_prompt(graph: NarrativeGraph, frame_id: str) -> dict:
         if mapped:
             beat_parts.append(mapped)
     if directing.get("dramatic_purpose"):
-        beat_parts.append(f"Dramatic purpose: {directing['dramatic_purpose']}.")
+        beat_parts.append(f"{directing['dramatic_purpose']}.")
     if directing.get("beat_turn"):
-        beat_parts.append(f"Beat turn: {directing['beat_turn']}.")
+        beat_parts.append(f"{directing['beat_turn']}.")
     if directing.get("pov_owner"):
-        beat_parts.append(f"POV aligned with {directing['pov_owner']}.")
+        beat_parts.append(f"We see this through {directing['pov_owner']}'s eyes.")
     if directing.get("viewer_knowledge_delta"):
-        beat_parts.append(f"Viewer learns: {directing['viewer_knowledge_delta']}.")
+        beat_parts.append(f"The audience realizes {directing['viewer_knowledge_delta']}.")
     if directing.get("power_dynamic"):
-        beat_parts.append(f"Power dynamic: {directing['power_dynamic']}.")
+        beat_parts.append(f"{directing['power_dynamic']}.")
     if directing.get("tension_source"):
-        beat_parts.append(f"Tension source: {directing['tension_source']}.")
+        beat_parts.append(f"{directing['tension_source']}.")
     if directing.get("reaction_target"):
-        beat_parts.append(f"Reaction target: {directing['reaction_target']}.")
+        beat_parts.append(f"Reacting to {directing['reaction_target']}.")
     beat_section = " ".join(beat_parts)
 
-    # ── Dialogue handling — all frames use grok-video, dialogue goes in AUDIO section
-    # Dialogue resolved via temporal span (covers J-cuts, L-cuts, and direct IDs)
+    # ── Dialogue handling — speaker(appearance): "dialogue" format
     dialogue_nodes = ctx.get("dialogue", [])
     dialogue_text = ""
     dialogue_line_raw = None
     dialogue_line_all = []
     dialogue_delivery = ""
     primary_voice_tempo = ""
+    dialogue_timing: dict[str, float | int | bool] | None = None
     duration = 5  # default
 
-    # Process dialogue if ANY dialogue is audible (not just is_dialogue flag)
-    # This captures J-cuts (audio before visual) and L-cuts (audio over reaction)
     if dialogue_nodes:
-        # Group by speaker for multi-speaker handling
         speakers_seen: dict[str, list[dict]] = {}
         for dn in dialogue_nodes:
             cid = dn.get("cast_id", "unknown")
             speakers_seen.setdefault(cid, []).append(dn)
 
-        # Build per-speaker dialogue lines
         per_speaker_lines = []
         for cid, speaker_dns in speakers_seen.items():
             speaker_name = _get_cast_name(ctx["cast"], cid) or "Character"
             speaker_voice = _get_cast_voice_profile(ctx["cast"], cid)
+            speaker_appearance = _get_cast_appearance(ctx["cast"], {"cast_id": cid})
             lines = [dn.get("raw_line", "").strip() for dn in speaker_dns if dn.get("raw_line", "").strip()]
             if lines:
                 combined = " ".join(lines)
                 delivery, tempo = _build_dialogue_delivery(speaker_dns[0], speaker_voice)
                 per_speaker_lines.append({
                     "name": speaker_name,
+                    "appearance": speaker_appearance,
                     "line": combined,
                     "delivery": delivery,
                     "tempo": tempo,
@@ -1080,21 +864,14 @@ def assemble_video_prompt(graph: NarrativeGraph, frame_id: str) -> dict:
             dialogue_line_all = [s["line"] for s in per_speaker_lines]
             dialogue_line_raw = " ".join(dialogue_line_all)
 
-            if len(per_speaker_lines) == 1:
-                # Single speaker
-                s = per_speaker_lines[0]
-                dialogue_text = f'{s["name"]} speaking: "{s["line"]}"'
-                dialogue_delivery = s["delivery"]
-                primary_voice_tempo = s["tempo"]
-            else:
-                # Multi-speaker — label each speaker's line
-                parts = []
-                for s in per_speaker_lines:
-                    parts.append(f'{s["name"]}: "{s["line"]}"')
-                dialogue_text = "Dialogue: " + " / ".join(parts)
-                # Use first speaker's delivery for primary tempo
-                dialogue_delivery = per_speaker_lines[0]["delivery"]
-                primary_voice_tempo = per_speaker_lines[0]["tempo"]
+            # Format: speaker(appearance): "dialogue"
+            dialogue_parts = []
+            for s in per_speaker_lines:
+                label = f'{s["name"]}({s["appearance"]})' if s["appearance"] else s["name"]
+                dialogue_parts.append(f'{label}: "{s["line"]}"')
+            dialogue_text = " / ".join(dialogue_parts)
+            dialogue_delivery = per_speaker_lines[0]["delivery"]
+            primary_voice_tempo = per_speaker_lines[0]["tempo"]
 
     # ── Audio section — always build for grok-video
     audio_section = ""
@@ -1104,7 +881,6 @@ def assemble_video_prompt(graph: NarrativeGraph, frame_id: str) -> dict:
         if env_tags:
             audio_layers.append(", ".join(env_tags))
     if not audio_layers:
-        # Derive from environment
         if atmo.get("weather"):
             audio_layers.append(atmo["weather"])
         if atmo.get("ambient_motion"):
@@ -1115,32 +891,29 @@ def assemble_video_prompt(graph: NarrativeGraph, frame_id: str) -> dict:
     if bg_data.get("background_music"):
         audio_layers.append(f"music: {bg_data['background_music']}")
 
-    # Dialogue frames: dialogue text leads the AUDIO section
     if dialogue_text:
         env_audio = ", ".join(audio_layers) if audio_layers else ""
-        audio_parts = [f"AUDIO: {dialogue_text}"]
+        audio_parts = [dialogue_text]
         if dialogue_delivery:
-            audio_parts.append(f"Voice delivery: {dialogue_delivery}")
+            audio_parts.append(f"spoken with {dialogue_delivery}")
         if env_audio:
-            audio_parts.append(f"Ambient audio: {env_audio}")
-        audio_section = ". ".join(audio_parts)
+            audio_parts.append(f"with ambient {env_audio}")
+        audio_section = ", ".join(audio_parts) + "."
     elif audio_layers:
-        audio_section = "AUDIO: No dialogue — visual-only frame. Ambient: " + ", ".join(audio_layers)
+        audio_section = "Silent scene with ambient " + ", ".join(audio_layers) + "."
     else:
-        audio_section = "AUDIO: No dialogue — visual-only frame."
+        audio_section = "Silent scene, no dialogue."
 
-    # ── Duration: Morpheus suggested_duration is the starting point, but
-    # dialogue frames MUST have enough time for the spoken words. If Morpheus
-    # underestimates, the dialogue-based duration wins.
+    # ── Duration calculation
     morpheus_duration = frame.get("suggested_duration")
     if dialogue_line_all:
-        dialogue_duration = _estimate_dialogue_duration(
+        dialogue_timing = _estimate_dialogue_timing(
             dialogue_line_all,
             tempo=primary_voice_tempo,
             env_intensity=dialogue_nodes[0].get("env_intensity", ""),
         )
+        dialogue_duration = int(dialogue_timing["recommended_duration"])
         if morpheus_duration and 3 <= morpheus_duration <= 30:
-            # Take the LONGER of Morpheus and dialogue estimate — dialogue must fit
             duration = max(morpheus_duration, dialogue_duration)
         else:
             duration = dialogue_duration
@@ -1153,35 +926,43 @@ def assemble_video_prompt(graph: NarrativeGraph, frame_id: str) -> dict:
         }
         duration = duration_map.get(tag, 5)
 
-    # ── Dialogue pacing direction: when dialogue exists, add pacing instruction
-    # based on how much dialogue must fit within the frame duration
+    actual_duration = min(duration, MAX_VIDEO_DURATION_SECONDS)
+    duration_reason = "formula_or_authored_default"
+    dialogue_fit_status = "no_dialogue"
+    if dialogue_timing:
+        duration_reason = "dialogue_timing"
+        if morpheus_duration and 3 <= morpheus_duration <= 30 and morpheus_duration >= int(dialogue_timing["recommended_duration"]):
+            duration_reason = "authored_duration_meets_or_exceeds_dialogue_timing"
+        dialogue_fit_status = "fits"
+        if duration > MAX_VIDEO_DURATION_SECONDS:
+            dialogue_fit_status = "capped_to_model_max"
+    elif morpheus_duration and 3 <= morpheus_duration <= 30:
+        duration_reason = "authored_duration"
+
+    # ── Dialogue pacing — computed as config metadata, NOT included in prompt
     dialogue_pacing = ""
     if dialogue_line_all:
         combined_dialogue = " ".join(_normalize_ws(l) for l in dialogue_line_all if _normalize_ws(l))
         word_count = len(combined_dialogue.split())
-        words_per_sec = word_count / max(duration - 1, 1)  # reserve ~1s for breath/pause
+        words_per_sec = word_count / max(actual_duration - 1, 1)
         if words_per_sec > 3.5:
-            dialogue_pacing = "Deliver dialogue at a brisk, urgent pace to fit within the frame duration."
+            dialogue_pacing = "brisk"
         elif words_per_sec > 2.5:
-            dialogue_pacing = "Deliver dialogue at a natural, conversational pace."
+            dialogue_pacing = "natural"
         elif words_per_sec > 1.5:
-            dialogue_pacing = "Deliver dialogue at a measured, deliberate pace with room for pauses."
+            dialogue_pacing = "measured"
         else:
-            dialogue_pacing = "Deliver dialogue slowly with weight and intentional pauses between phrases."
+            dialogue_pacing = "slow"
 
-    # ── Assemble (video prompts omit style prefix, time of day, lighting —
-    #    those are baked into the composed image already)
+    # ── Assemble prompt
+    # Audio/dialogue leads, then continuity, background, camera, performance, blocking, beat
     parts = []
+    if audio_section:
+        parts.append(audio_section)
     if continuity_prefix:
         parts.append(continuity_prefix)
-    if env_motion:
-        parts.append(env_motion)
-    if depth_section:
-        parts.append(depth_section)
     if bg_section:
         parts.append(bg_section)
-    if loc_state_section:
-        parts.append(loc_state_section)
     if camera_section:
         parts.append(camera_section)
     if perf_section:
@@ -1190,25 +971,38 @@ def assemble_video_prompt(graph: NarrativeGraph, frame_id: str) -> dict:
         parts.append(blocking_section)
     if beat_section:
         parts.append(beat_section)
-    if audio_section:
-        parts.append(audio_section)
-    if dialogue_pacing:
-        parts.append(dialogue_pacing)
 
     full_prompt = " ".join(parts)
+
+    # ── Grok Imagine Video enforces a 4096-char prompt limit.
+    GROK_VIDEO_CHAR_LIMIT = 4096
+    if len(full_prompt) > GROK_VIDEO_CHAR_LIMIT:
+        while len(" ".join(parts)) > GROK_VIDEO_CHAR_LIMIT and len(parts) > 1:
+            parts.pop()
+        full_prompt = " ".join(parts)
+        if len(full_prompt) > GROK_VIDEO_CHAR_LIMIT:
+            full_prompt = full_prompt[:GROK_VIDEO_CHAR_LIMIT]
 
     return {
         "frame_id": frame_id,
         "scene_id": frame.get("scene_id", ""),
         "sequence_index": frame.get("sequence_index", 0),
         "prompt": full_prompt,
-        "duration": duration,
+        "duration": actual_duration,
+        "recommended_duration": duration,
+        "duration_reason": duration_reason,
+        "dialogue_fit_status": dialogue_fit_status,
         "target_api": "grok-video",
         "input_image_path": frame.get("composed_image_path") or f"frames/composed/{frame_id}_gen.png",
         "dialogue_line": dialogue_line_raw,
         "voice_delivery": dialogue_delivery,
         "dialogue_pacing": dialogue_pacing,
         "voice_tempo": primary_voice_tempo,
+        "estimated_speech_seconds": dialogue_timing["speech_seconds"] if dialogue_timing else None,
+        "estimated_pause_seconds": dialogue_timing["pause_seconds"] if dialogue_timing else None,
+        "dialogue_word_count": dialogue_timing["word_count"] if dialogue_timing else 0,
+        "dialogue_turn_count": dialogue_timing["turn_count"] if dialogue_timing else 0,
+        "dialogue_exceeds_model_max": bool(dialogue_timing["exceeds_model_max"]) if dialogue_timing else False,
         "action_summary": action_summary,
         "formula_tag": tag,
         "shot_type": shot_type,
@@ -1282,7 +1076,13 @@ def assemble_composite_prompt(graph: NarrativeGraph, cast_id: str) -> dict:
 
 
 def assemble_location_prompt(graph: NarrativeGraph, location_id: str) -> dict:
-    """Build a location establishing shot prompt."""
+    """Build a location 4x4 directional grid prompt.
+
+    Generates a single 4x4 grid image showing the location from all four
+    cardinal directions (north, south, east, west). Each grid cell is labeled
+    with the direction. Direction descriptions from the graph are appended
+    to guide the generation of each view.
+    """
     loc = graph.locations.get(location_id)
     if not loc:
         raise KeyError(f"Location {location_id} not found")
@@ -1297,6 +1097,12 @@ def assemble_location_prompt(graph: NarrativeGraph, location_id: str) -> dict:
             mood = ", ".join(scene.mood_keywords)
 
     parts = [
+        (
+            "Generate a 4x4 grid demonstrating this location facing all four "
+            "directions, of north, south, east, west. Label each grid section "
+            "with the direction label. You are to use your logic and build a "
+            "360 view of this environment captured in 4 images on the grid."
+        ),
         style_prefix + "Cinematic wide establishing shot.",
         f"{loc.name}: {loc.description}." if loc.description else f"{loc.name}.",
     ]
@@ -1305,6 +1111,13 @@ def assemble_location_prompt(graph: NarrativeGraph, location_id: str) -> dict:
     if mood:
         parts.append(f"Mood: {mood}.")
     parts.append("No characters, environmental focus, professional cinematography composition.")
+
+    # Append direction descriptions from graph (merged from location direction prompts)
+    if loc.directions:
+        for direction in ("north", "south", "east", "west"):
+            view = getattr(loc.directions, direction, None)
+            if view and view.description:
+                parts.append(f"{direction.capitalize()} view: {view.description}.")
 
     ar = graph.project.aspect_ratio
     size_map = {"16:9": "landscape_16_9", "9:16": "portrait_9_16", "4:3": "landscape_4_3", "1:1": "square_hd"}
@@ -1318,89 +1131,12 @@ def assemble_location_prompt(graph: NarrativeGraph, location_id: str) -> dict:
 
 
 def assemble_location_direction_prompts(graph: NarrativeGraph, location_id: str) -> list[dict]:
-    """Build directional view prompts for a location.
-
-    Generates one prompt per cardinal direction that has a description in the
-    location's directions data. Each directional view uses the primary location
-    image as a reference to maintain spatial and stylistic consistency.
-
-    Returns a list of prompt dicts, one per direction that needs generation.
+    """DEPRECATED — Direction views are now generated as part of the primary
+    location 4x4 grid prompt via assemble_location_prompt(). This function
+    returns an empty list for backward compatibility with callers that still
+    iterate over its results.
     """
-    loc = graph.locations.get(location_id)
-    if not loc:
-        raise KeyError(f"Location {location_id} not found")
-
-    style_prefix = _resolve_style_prefix(graph)
-    ar = graph.project.aspect_ratio
-    size_map = {"16:9": "landscape_16_9", "9:16": "portrait_9_16",
-                "4:3": "landscape_4_3", "1:1": "square_hd"}
-    size = size_map.get(ar, "landscape_16_9")
-
-    direction_labels = {
-        "north": "facing north",
-        "south": "facing south, turned around from the primary view",
-        "east": "facing east, turned right from the primary view",
-        "west": "facing west, turned left from the primary view",
-        "exterior": "exterior establishing view — stepping outside, looking outward from the entrance",
-    }
-
-    prompts = []
-    for direction in ("north", "south", "east", "west", "exterior"):
-        view = getattr(loc.directions, direction, None)
-        if not view or not view.description:
-            continue
-        # Skip if already generated
-        if view.image_path and view.image_status == "generated":
-            continue
-
-        facing_label = direction_labels[direction]
-        features = ", ".join(view.key_features) if view.key_features else ""
-        depth = view.depth_description or ""
-
-        if direction == "exterior":
-            instruction_bridge = (
-                f"Use the reference image to craft a cinematic exterior establishing shot of the same location. "
-                f"Step outside and look outward from the entrance — show the facade, surroundings, and environmental context. "
-                f"Maintain the same architectural style, materials, and atmosphere as the reference."
-            )
-        else:
-            instruction_bridge = (
-                f"Use the reference image to craft a cinematic interior view of the same location, "
-                f"now {facing_label}. Maintain the same architectural style, materials, lighting "
-                f"character, and atmosphere as the reference — this is the same room seen from a "
-                f"different angle."
-            )
-
-        prompt_parts = [
-            style_prefix,
-            instruction_bridge,
-            f"Location: {loc.name}.",
-            f"Visible in this direction: {view.description}.",
-        ]
-        if features:
-            prompt_parts.append(f"Key features: {features}.")
-        if depth:
-            prompt_parts.append(f"Depth: {depth}.")
-        prompt_parts.append(
-            "No characters, environmental focus, professional cinematography composition."
-        )
-
-        out_path = f"locations/direction/{location_id}_{direction}.png"
-
-        ref_images = []
-        if loc.primary_image_path:
-            ref_images.append(loc.primary_image_path)
-
-        prompts.append({
-            "location_id": location_id,
-            "direction": direction,
-            "prompt": " ".join(prompt_parts),
-            "ref_images": ref_images,
-            "size": size,
-            "out_path": out_path,
-        })
-
-    return prompts
+    return []
 
 
 def assemble_prop_prompt(graph: NarrativeGraph, prop_id: str) -> dict:
@@ -1456,17 +1192,23 @@ def resolve_ref_images(graph: NarrativeGraph, frame_id: str,
 
     refs = []
 
-    # 0. Chain storyboard reference — find which chain this frame belongs to
-    for chain in graph.chained_frame_groups.values():
-        if frame_id in chain.frame_ids:
-            if chain.storyboard_image_path and _exists(chain.storyboard_image_path):
-                refs.append(chain.storyboard_image_path)
-            else:
-                # Fallback: check expected path on disk
-                fallback = f"frames/storyboards/{chain.chain_id}_storyboard.png"
-                if _exists(fallback):
-                    refs.append(fallback)
-            break
+    # 0. Grid cell image — find which storyboard grid this frame belongs to
+    #    The cell image is the primary leading reference for this frame.
+    from .api import get_frame_cell_image
+    cell_image = get_frame_cell_image(graph, frame_id)
+    if cell_image and _exists(cell_image):
+        refs.append(cell_image)
+    else:
+        # Fallback: grid composite image
+        for grid in graph.storyboard_grids.values():
+            if frame_id in grid.frame_ids:
+                if grid.composite_image_path and _exists(grid.composite_image_path):
+                    refs.append(grid.composite_image_path)
+                else:
+                    fallback = f"frames/storyboards/{grid.grid_id}/composite.png"
+                    if _exists(fallback):
+                        refs.append(fallback)
+                break
 
     # 1. Continuity chain: previous composed frame FIRST
     if frame.continuity_chain and frame.previous_frame_id:
@@ -1476,12 +1218,7 @@ def resolve_ref_images(graph: NarrativeGraph, frame_id: str,
 
     # 2. Cast composites (max 4-5)
     # Prefer frame-level cast_states; fall back to graph-level registry if empty
-    _cast_states = frame.cast_states
-    if not _cast_states:
-        _cast_states = [
-            cfs for key, cfs in graph.cast_frame_states.items()
-            if key.endswith(f"@{frame_id}")
-        ]
+    _cast_states = get_frame_cast_state_models(graph, frame_id)
     cast_ids_in_frame = [cs.cast_id for cs in _cast_states
                          if cs.frame_role not in ("referenced",)]
     for cid in cast_ids_in_frame[:5]:
@@ -1519,8 +1256,9 @@ def resolve_ref_images(graph: NarrativeGraph, frame_id: str,
                 refs.append(loc.primary_image_path)
 
     # 4. Prop reference images (max 3, avoid exceeding 14-image cap)
-    if frame.prop_states:
-        for ps in frame.prop_states[:3]:
+    frame_prop_states = get_frame_prop_state_models(graph, frame_id)
+    if frame_prop_states:
+        for ps in frame_prop_states[:3]:
             prop = graph.props.get(ps.prop_id)
             if prop and prop.image_path:
                 refs.append(prop.image_path)
@@ -1570,9 +1308,7 @@ def _sample_key_frames(frame_ids: list[str], graph, max_panels: int) -> list[str
     for fid, frame in frames:
         tag_str = str(frame.formula_tag.value if hasattr(frame.formula_tag, 'value') else frame.formula_tag or "F08")
         priority = 2 if tag_str in _KEY_TAGS else 1
-        cast_states = frame.cast_states
-        if not cast_states:
-            cast_states = [cfs for k, cfs in graph.cast_frame_states.items() if k.endswith(f"@{fid}")]
+        cast_states = get_frame_cast_state_models(graph, fid)
         if len(cast_states) >= 2:
             priority += 1
         scored.append((fid, priority))
@@ -1603,118 +1339,166 @@ def _sample_key_frames(frame_ids: list[str], graph, max_panels: int) -> list[str
     return result
 
 
-def assemble_chain_storyboard_prompt(graph: NarrativeGraph, chain_id: str,
-                                     project_dir: str | Path | None = None) -> dict:
-    """Build a multi-panel storyboard prompt for a chained frame group.
+def _build_cell_prompt(graph: NarrativeGraph, frame_id: str) -> str:
+    """Build a compact per-cell prompt for one frame inside a storyboard grid.
 
-    Each chain is a continuous sequence of frames at the same scene+location.
-    The storyboard covers all frames in the chain and becomes the reference
-    image for every frame within it.
-
-    Returns dict with:
-        chain_id: str
-        scene_id: str
-        location_id: str
-        prompt: str — multi-panel storyboard instruction
-        ref_images: list[str] — cast/location/prop references for the chain
-        size: str — always landscape_16_9
-        out_path: str — storyboard output path
-        frame_ids: list[str] — frames included in storyboard panels
-        all_frame_ids: list[str] — all frames in the chain
+    Uses the same data as assemble_image_prompt but strips the instruction
+    bridge and ref-image logic — those are handled at the grid level.
+    Returns a single-paragraph description suitable for a numbered cell.
     """
-    chain = graph.chained_frame_groups.get(chain_id)
-    if not chain:
-        raise KeyError(f"ChainedFrameGroup {chain_id} not found")
+    ctx = get_frame_context(graph, frame_id)
+    frame = ctx["frame"]
+    directing = _extract_directing_data(graph, ctx, frame)
 
     style_prefix = _resolve_style_prefix(graph)
 
-    # All frames in the chain, in order
-    all_frame_ids = [fid for fid in chain.frame_ids if graph.frames.get(fid)]
+    # ── Characters
+    char_segments = []
+    for cs in ctx.get("cast_states", []):
+        if cs.get("frame_role") in ("referenced", None):
+            continue
+        name = _get_cast_name(ctx["cast"], cs["cast_id"]) or cs.get("cast_id", "Character")
+        action = cs.get("action", "")
+        emotion = cs.get("emotion", "")
+        emotion_intensity = cs.get("emotion_intensity")
+        posture = cs.get("posture", "")
+        screen_position = cs.get("screen_position")
+        facing_direction = cs.get("facing_direction")
+        looking_at = cs.get("looking_at")
+        eye_direction = cs.get("eye_direction")
+        props_held = cs.get("props_held", [])
 
-    # Sample key frames for storyboard panels
-    sampled_ids = _sample_key_frames(all_frame_ids, graph, MAX_STORYBOARD_PANELS)
-    panel_count = len(sampled_ids)
+        parts = [name]
+        if screen_position:
+            parts.append(f"at {screen_position}")
+        if facing_direction:
+            parts.append(f"facing {facing_direction}")
+        if action:
+            parts.append(action)
+        elif posture:
+            parts.append(posture)
+        if props_held:
+            prop_names = []
+            for pid in props_held[:3]:
+                prop = graph.props.get(pid)
+                prop_names.append(prop.name if prop else pid)
+            parts.append(f"holding {', '.join(prop_names)}")
+        if emotion:
+            expression = _resolve_expression(emotion, emotion_intensity if emotion_intensity is not None else 0.5)
+            parts.append(expression)
+        if looking_at:
+            parts.append(f"looking at {looking_at}")
+        elif eye_direction:
+            parts.append(f"eyes {eye_direction}")
+        char_segments.append(", ".join(parts))
 
-    # Build panel descriptions
-    panels = []
-    for i, fid in enumerate(sampled_ids):
-        frame = graph.frames[fid]
-        raw_tag = frame.formula_tag
-        tag_str = str(raw_tag.value if hasattr(raw_tag, 'value') else raw_tag or "F08")
-        tag_label = TAG_LABELS.get(tag_str, "Shot")
-        try:
-            img_prompt_data = assemble_image_prompt(graph, fid, project_dir=project_dir)
-            panel_body = img_prompt_data["prompt"]
-            sp = img_prompt_data.get("style_prefix_used", "")
-            if sp and panel_body.startswith(sp):
-                panel_body = panel_body[len(sp):]
-            # Trim trailing no-text instruction if present
-            no_text_marker = "画面内无任何文字"
-            no_text_idx = panel_body.find(no_text_marker)
-            if no_text_idx > 0:
-                panel_body = panel_body[:no_text_idx].rstrip("。，. ,")
-            if len(panel_body) > 400:
-                panel_body = panel_body[:397] + "..."
-        except Exception:
-            panel_body = frame.narrative_beat or frame.action_summary or "Visual beat"
-            if len(panel_body) > 150:
-                panel_body = panel_body[:147] + "..."
-        panels.append(f"Panel {i + 1} ({tag_label}): {panel_body}")
+    char_desc = ". ".join(char_segments) if char_segments else ""
 
-    panel_text = "\n".join(panels)
+    # ── Environment (compact)
+    env = frame.get("environment", {})
+    env_parts = []
+    bg_data = frame.get("background", {})
+    camera_facing = bg_data.get("camera_facing")
+    if camera_facing:
+        env_parts.append(f"camera facing {camera_facing}")
+    visible_desc = bg_data.get("visible_description", "")
+    if not visible_desc and camera_facing:
+        location = ctx["location"] or {}
+        directions = location.get("directions", {})
+        if isinstance(directions, dict):
+            sb_dir_view = directions.get(camera_facing)
+            if isinstance(sb_dir_view, dict):
+                visible_desc = sb_dir_view.get("description", "")
+            elif isinstance(sb_dir_view, str):
+                visible_desc = sb_dir_view
+    if visible_desc:
+        env_parts.append(visible_desc)
+    atmo = env.get("atmosphere", {})
+    if atmo.get("particles"):
+        env_parts.append(f"{atmo['particles']} in air")
+    env_desc = ". ".join(env_parts) if env_parts else ""
 
-    # Location description
-    loc = graph.locations.get(chain.location_id) if chain.location_id else None
-    loc_text = f"{loc.name}: {loc.description}" if loc else ""
+    # ── Shot framing
+    tag = frame.get("formula_tag", "F07")
+    shot_desc = FORMULA_SHOT.get(tag, "Medium shot")
+    comp = frame.get("composition", {})
+    if comp.get("shot"):
+        shot_desc = comp["shot"]
 
-    # Scene mood
-    scene = graph.scenes.get(chain.scene_id)
-    mood_text = ", ".join(scene.mood_keywords) if scene and scene.mood_keywords else ""
+    # ── Assemble cell prompt: style + characters + environment + shot
+    segments = [s for s in [style_prefix, char_desc, env_desc, shot_desc] if s]
+    return ". ".join(segments)
 
-    # Assemble prompt
-    prompt_parts = [
-        f"{panel_count}-panel cinematic storyboard arranged in a 2-row grid.",
-        f"Exactly {panel_count} panels with clear borders, numbered sequentially.",
-        "Consistent character appearance across all panels. Each panel is one key moment.",
-        f"All panels share the same continuous location — maintain spatial consistency.",
-        "",
-        panel_text,
-    ]
-    if loc_text:
-        prompt_parts.append(f"\nLocation: {loc_text}")
-    if mood_text:
-        prompt_parts.append(f"Mood: {mood_text}")
-    prompt_parts.append(f"\nStyle: {style_prefix.strip()}")
 
-    full_prompt = "\n".join(prompt_parts)
+def assemble_grid_storyboard_prompt(graph: NarrativeGraph, grid_id: str,
+                                     project_dir: str | Path | None = None) -> dict:
+    """Build a storyboard prompt for a storyboard grid.
 
-    # Gather reference images by querying every frame in the chain — same
-    # images the frames themselves would use (minus storyboard self-reference).
-    # Deduplicate while preserving insertion order.
-    seen: set[str] = set()
-    ref_images: list[str] = []
+    Programmatically stacks the individual frame image prompts into numbered
+    cell descriptions — each cell gets the full directing context from its
+    frame, giving nano-banana-pro precise per-cell instructions.
+
+    Returns dict with:
+        grid_id: str
+        grid: str — always "4x4"
+        cell_prompts: list[str] — one prompt string per cell/frame
+        scene: str — legacy compat, joined cell prompts
+        refs: list[str] — reference image paths (prev grid composite, cast, etc.)
+        output_dir: str — output directory for this grid
+        cell_map: dict[int, str] — cell index -> frame_id
+        frame_ids: list[str] — all frames in the grid
+    """
+    grid = graph.storyboard_grids.get(grid_id)
+    if not grid:
+        raise KeyError(f"StoryboardGrid {grid_id} not found")
+
+    # All valid frames in the grid, in order
+    all_frame_ids = [fid for fid in grid.frame_ids if graph.frames.get(fid)]
+
+    # Build per-cell prompts from each frame's image prompt data
+    cell_prompts: list[str] = []
     for fid in all_frame_ids:
-        for ref in resolve_ref_images(graph, fid, project_dir=project_dir):
-            # Skip storyboard paths — can't reference ourselves
-            if "storyboard" in ref:
-                continue
-            if ref not in seen:
-                seen.add(ref)
-                ref_images.append(ref)
+        cell_prompts.append(_build_cell_prompt(graph, fid))
 
-    out_path = f"frames/storyboards/{chain_id}_storyboard.png"
+    # Grid layout string
+    grid_layout = f"{grid.cols}x{grid.rows}"
+
+    # Gather reference images
+    # Previous grid composite → cascading continuity
+    refs: list[str] = []
+    if grid.previous_grid_id:
+        prev_grid = graph.storyboard_grids.get(grid.previous_grid_id)
+        if prev_grid and prev_grid.composite_image_path:
+            refs.append(prev_grid.composite_image_path)
+
+    # Cast composites
+    seen_refs: set[str] = set(refs)
+    for cid in grid.cast_present:
+        cast = graph.cast.get(cid)
+        if cast and cast.composite_path and cast.composite_path not in seen_refs:
+            seen_refs.add(cast.composite_path)
+            refs.append(cast.composite_path)
+
+    # Location images
+    for fid in all_frame_ids:
+        frame = graph.frames[fid]
+        if frame.location_id:
+            loc = graph.locations.get(frame.location_id)
+            if loc and loc.primary_image_path and loc.primary_image_path not in seen_refs:
+                seen_refs.add(loc.primary_image_path)
+                refs.append(loc.primary_image_path)
+
+    output_dir = f"frames/storyboards/{grid_id}"
 
     return {
-        "chain_id": chain_id,
-        "scene_id": chain.scene_id,
-        "location_id": chain.location_id,
-        "prompt": full_prompt,
-        "ref_images": ref_images,
-        "size": "landscape_16_9",
-        "out_path": out_path,
-        "frame_ids": sampled_ids,
-        "frame_count": panel_count,
-        "all_frame_ids": all_frame_ids,
+        "grid_id": grid_id,
+        "grid": grid_layout,
+        "cell_prompts": cell_prompts,
+        "scene": "\n".join(f"[Cell {i+1}] {cp}" for i, cp in enumerate(cell_prompts)),
+        "refs": refs,
+        "output_dir": output_dir,
+        "cell_map": grid.cell_map,
+        "frame_ids": all_frame_ids,
     }
 
 
@@ -1811,18 +1595,18 @@ def assemble_all_prompts(graph: NarrativeGraph, project_dir: str | Path) -> dict
         except Exception as e:
             print(f"WARNING: Failed to assemble prop for {prop_id}: {e}")
 
-    # Chain storyboard prompts — one per ChainedFrameGroup
-    for chain_id, chain in graph.chained_frame_groups.items():
+    # Grid storyboard prompts — one per StoryboardGrid
+    for grid_id, grid in graph.storyboard_grids.items():
         try:
-            sb = assemble_chain_storyboard_prompt(graph, chain_id, project_dir=project_dir)
-            (storyboard_prompt_dir / f"{chain_id}_storyboard.json").write_text(
+            sb = assemble_grid_storyboard_prompt(graph, grid_id, project_dir=project_dir)
+            (storyboard_prompt_dir / f"{grid_id}_grid.json").write_text(
                 json.dumps(sb, indent=2, ensure_ascii=False), encoding="utf-8"
             )
-            # Update the chain's prompt path on the graph
-            chain.storyboard_prompt_path = f"frames/storyboard_prompts/{chain_id}_storyboard.json"
+            # Update the grid's prompt path on the graph
+            grid.storyboard_prompt_path = f"frames/storyboard_prompts/{grid_id}_grid.json"
             counts["storyboard_prompts"] += 1
         except Exception as e:
-            print(f"WARNING: Failed to assemble storyboard for {chain_id}: {e}")
+            print(f"WARNING: Failed to assemble storyboard for {grid_id}: {e}")
 
     return counts
 
@@ -1989,39 +1773,73 @@ def _infer_voice_tempo(*signals: str) -> str:
     return "measured"
 
 
+def _estimate_dialogue_timing(lines: list[str], tempo: str = "", env_intensity: str = "") -> dict[str, float | int | bool]:
+    """Estimate dialogue timing with a conservative bias toward longer clips."""
+    cleaned_lines = [_normalize_ws(line) for line in lines if _normalize_ws(line)]
+    if not cleaned_lines:
+        return {
+            "recommended_duration": 5,
+            "speech_seconds": 0.0,
+            "pause_seconds": 0.0,
+            "word_count": 0,
+            "turn_count": 0,
+            "exceeds_model_max": False,
+        }
+
+    combined = " ".join(cleaned_lines)
+    word_count = len(re.findall(r"\b[\w']+\b", combined))
+    units = max(_count_dialogue_units(combined), 1)
+    sentence_breaks = len(re.findall(r"[.!?]+", combined))
+    clause_breaks = len(re.findall(r"[,;:—-]", combined))
+    speaker_turns = max(len(cleaned_lines) - 1, 0)
+
+    tempo_lower = (tempo or "").lower()
+    env_lower = (env_intensity or "").lower()
+    units_per_second = 2.15
+
+    if "fast" in tempo_lower:
+        units_per_second = 2.75
+    elif any(token in tempo_lower for token in ("slow", "measured", "deliberate", "careful")):
+        units_per_second = 1.8
+
+    if any(token in env_lower for token in ("whisper", "quiet", "soft", "hushed")):
+        units_per_second = min(units_per_second, 1.75)
+    elif any(token in env_lower for token in ("loud", "shouting", "shout", "yelling", "urgent")):
+        units_per_second = max(units_per_second, 2.45)
+
+    speech_seconds = units / units_per_second
+    pause_seconds = (
+        sentence_breaks * 0.55 +
+        clause_breaks * 0.2 +
+        speaker_turns * 0.75
+    )
+    lead_in_seconds = 1.6 if speaker_turns == 0 else 2.1
+    recommended_duration = max(
+        5,
+        math.ceil(speech_seconds + pause_seconds + lead_in_seconds),
+    )
+
+    return {
+        "recommended_duration": recommended_duration,
+        "speech_seconds": round(speech_seconds, 2),
+        "pause_seconds": round(pause_seconds + lead_in_seconds, 2),
+        "word_count": word_count,
+        "turn_count": speaker_turns + 1,
+        "exceeds_model_max": recommended_duration > MAX_VIDEO_DURATION_SECONDS,
+    }
+
+
 def _estimate_dialogue_duration(lines: list[str], tempo: str = "", env_intensity: str = "") -> int:
     """Estimate clip duration for native-audio video generation.
 
-    Uses word-count / tempo calculation for ALL dialogue regardless of
-    sentence count.  No hardcoded cap — duration scales with content.
+    Conservative wrapper retained for callers that only need the integer.
     """
-    cleaned_lines = [_normalize_ws(line) for line in lines if _normalize_ws(line)]
-    if not cleaned_lines:
-        return 5
+    return int(_estimate_dialogue_timing(
+        lines,
+        tempo=tempo,
+        env_intensity=env_intensity,
+    )["recommended_duration"])
 
-    combined = " ".join(cleaned_lines)
-    units = max(_count_dialogue_units(combined), 1)
-    tempo_lower = (tempo or "").lower()
-    env_lower = (env_intensity or "").lower()
-    units_per_second = 2.6
-
-    if "fast" in tempo_lower:
-        units_per_second = 3.4
-    elif any(token in tempo_lower for token in ("slow", "measured", "deliberate")):
-        units_per_second = 2.0
-
-    if any(token in env_lower for token in ("whisper", "quiet", "soft")):
-        units_per_second = min(units_per_second, 2.2)
-    elif any(token in env_lower for token in ("loud", "shouting", "shout", "yelling")):
-        units_per_second = max(units_per_second, 3.0)
-
-    return max(4, math.ceil(units / units_per_second) + 2)
-
-
-def _count_sentences(text: str) -> int:
-    """Count sentence-like segments in dialogue text."""
-    segments = [segment for segment in re.split(r"[.!?。！？]+", _normalize_ws(text)) if segment.strip()]
-    return len(segments)
 
 
 def _count_dialogue_units(text: str) -> int:

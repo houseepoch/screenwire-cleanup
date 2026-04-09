@@ -1,0 +1,51 @@
+{
+  "castId": "cast_rafe",
+  "name": "Rafe",
+  "physicalDescription": "broad man with cropped black hair and a tired commander's posture",
+  "wardrobeDescription": "charcoal wool coat",
+  "personality": "",
+  "role": "ally",
+  "arcSummary": "",
+  "relationships": [],
+  "wardrobe": "charcoal wool coat",
+  "firstAppearance": null,
+  "scenesPresent": [],
+  "dialogueLineCount": 0,
+  "sceneCount": 0,
+  "importanceScore": 0.0,
+  "voiceNotes": "",
+  "identity": {
+    "ageDescriptor": "40s",
+    "gender": "male",
+    "ethnicity": null,
+    "build": "broad",
+    "skin": null,
+    "hairLength": "cropped",
+    "hairStyle": null,
+    "hairColor": "black",
+    "clothing": [
+      "charcoal wool coat"
+    ],
+    "clothingStyle": null,
+    "clothingFabric": null,
+    "clothingFit": null,
+    "footwear": null,
+    "accessories": []
+  },
+  "voice": {
+    "voiceDescription": "rough baritone with urgent restraint",
+    "qualityPrefix": "",
+    "tone": "urgent",
+    "pitch": null,
+    "accent": null,
+    "deliveryStyle": "clipped",
+    "tempo": "fast",
+    "emotionalRange": null,
+    "vocalStyle": null
+  },
+  "stateVariants": {},
+  "compositePath": "cast/composites/cast_rafe_ref.png",
+  "compositeStatus": "generated",
+  "voiceProfilePath": "voices/voice_rafe.json",
+  "voiceStatus": "profiled"
+}

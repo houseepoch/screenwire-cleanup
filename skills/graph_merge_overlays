@@ -1,0 +1,54 @@
+#!/usr/bin/env python3
+"""graph_merge_overlays — Merge parallel overlay files into the base graph.
+
+Swarm agents 3 (Dialogue Wirer) and 4 (Compositor) write to separate
+overlay files to avoid clobbering the base graph while running in parallel.
+This skill merges all overlay_*.json files back into narrative_graph.json,
+then deletes the overlay files.
+
+Usage:
+    python3 $SKILLS_DIR/graph_merge_overlays --project-dir .
+"""
+
+import argparse
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from graph.store import GraphStore
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Merge graph overlay files into base graph")
+    parser.add_argument("--project-dir", default=os.getcwd(),
+                        help="Project directory (default: cwd)")
+    args = parser.parse_args()
+
+    store = GraphStore(args.project_dir)
+
+    if not store.exists():
+        print("ERROR: No base graph found. Run graph_init first.")
+        sys.exit(1)
+
+    overlays = store.list_overlays()
+    if not overlays:
+        print("SUCCESS: No overlay files found — nothing to merge.")
+        return
+
+    overlay_names = [p.stem.replace("overlay_", "") for p in overlays]
+    print(f"Found {len(overlays)} overlay(s): {', '.join(overlay_names)}")
+
+    graph = store.load_and_merge_overlays()
+
+    print(f"SUCCESS: Merged {len(overlays)} overlay(s) into base graph.")
+    print(f"  Graph: {len(graph.cast)} cast, {len(graph.locations)} locations, "
+          f"{len(graph.props)} props, {len(graph.scenes)} scenes, "
+          f"{len(graph.frames)} frames, {len(graph.dialogue)} dialogue, "
+          f"{len(graph.edges)} edges")
+    print(f"  States: {len(graph.cast_frame_states)} cast, "
+          f"{len(graph.prop_frame_states)} prop, "
+          f"{len(graph.location_frame_states)} location")
+
+
+if __name__ == "__main__":
+    main()

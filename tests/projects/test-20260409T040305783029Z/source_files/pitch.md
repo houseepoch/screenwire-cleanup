@@ -1,0 +1,1 @@
+Nova holds the roofline, the pager vibrates early, and the warning pushes her into motion before the watchers can close the gap.

@@ -1,0 +1,30 @@
+{
+  "grid_id": "grid_01",
+  "grid": "4x4",
+  "cell_prompts": [
+    "live action, clinical midnight thriller photography with hard edge practicals and cool city spill carving subjects out of shadow. . Nova, at frame_left, standing, eyes scanning, expression carefully neutral, jaw slightly set, looking at distance. camera facing east. the surveillance district skyline blinking beyond the ledge. wide establishing shot",
+    "live action, clinical midnight thriller photography with hard edge practicals and cool city spill carving subjects out of shadow. . Nova, at frame_center, reading the vibrating pager, holding signal pager, eyes steady and focused, jaw set, chin level. camera facing east. the surveillance district skyline blinking beyond the ledge. medium close-up",
+    "live action, clinical midnight thriller photography with hard edge practicals and cool city spill carving subjects out of shadow. . Nova, at frame_left, closing the distance to Rafe on the landing, holding signal pager, tense. Rafe, at frame_right, leaning, eyes scanning, expression carefully neutral, jaw slightly set, looking at cast_nova. camera facing north. the open exit door bleeding streetlight down the stairwell core. two-shot",
+    "live action, clinical midnight thriller photography with hard edge practicals and cool city spill carving subjects out of shadow. . Nova, at frame_left, standing, holding signal pager, eyes snapping wide, eyebrows shooting up, breath caught, looking at cast_rafe. Rafe, at frame_right, pressing the order into Nova's space, urgent, looking at cast_nova. camera facing north. the open exit door bleeding streetlight down the stairwell core. over-shoulder dialogue"
+  ],
+  "scene": "[Cell 1] live action, clinical midnight thriller photography with hard edge practicals and cool city spill carving subjects out of shadow. . Nova, at frame_left, standing, eyes scanning, expression carefully neutral, jaw slightly set, looking at distance. camera facing east. the surveillance district skyline blinking beyond the ledge. wide establishing shot\n[Cell 2] live action, clinical midnight thriller photography with hard edge practicals and cool city spill carving subjects out of shadow. . Nova, at frame_center, reading the vibrating pager, holding signal pager, eyes steady and focused, jaw set, chin level. camera facing east. the surveillance district skyline blinking beyond the ledge. medium close-up\n[Cell 3] live action, clinical midnight thriller photography with hard edge practicals and cool city spill carving subjects out of shadow. . Nova, at frame_left, closing the distance to Rafe on the landing, holding signal pager, tense. Rafe, at frame_right, leaning, eyes scanning, expression carefully neutral, jaw slightly set, looking at cast_nova. camera facing north. the open exit door bleeding streetlight down the stairwell core. two-shot\n[Cell 4] live action, clinical midnight thriller photography with hard edge practicals and cool city spill carving subjects out of shadow. . Nova, at frame_left, standing, holding signal pager, eyes snapping wide, eyebrows shooting up, breath caught, looking at cast_rafe. Rafe, at frame_right, pressing the order into Nova's space, urgent, looking at cast_nova. camera facing north. the open exit door bleeding streetlight down the stairwell core. over-shoulder dialogue",
+  "refs": [
+    "cast/composites/cast_nova_ref.png",
+    "cast/composites/cast_rafe_ref.png",
+    "locations/primary/loc_rooftop.png",
+    "locations/primary/loc_stairwell.png"
+  ],
+  "output_dir": "frames/storyboards/grid_01",
+  "cell_map": {
+    "0": "f_001",
+    "1": "f_002",
+    "2": "f_003",
+    "3": "f_004"
+  },
+  "frame_ids": [
+    "f_001",
+    "f_002",
+    "f_003",
+    "f_004"
+  ]
+}

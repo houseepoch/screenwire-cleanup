@@ -1,0 +1,1 @@
+Nova catches an early warning on a rooftop, carries the signal pager into a stairwell meeting, and Rafe forces the escape before the watchers close in.

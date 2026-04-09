@@ -1,0 +1,371 @@
+{
+  "projectId": "sw_pipeline_smoke_e2e",
+  "projectName": "Pipeline Smoke E2E",
+  "status": "phase_3_ready",
+  "version": 7,
+  "phases": {
+    "phase_0": {
+      "status": "complete"
+    },
+    "phase_1": {
+      "status": "complete"
+    },
+    "phase_2": {
+      "status": "complete"
+    },
+    "phase_3": {
+      "status": "ready"
+    }
+  },
+  "mediaStyle": "live_clear",
+  "mediaStylePrefix": "live action, clinical midnight thriller photography with hard edge practicals and cool city spill carving subjects out of shadow. ",
+  "outputSize": "short",
+  "stickinessLevel": 3,
+  "cast": [
+    {
+      "castId": "cast_nova",
+      "name": "Nova",
+      "role": "protagonist",
+      "profilePath": "cast/cast_nova.json",
+      "compositePath": "cast/composites/cast_nova_ref.png",
+      "voiceProfilePath": "voices/voice_nova.json",
+      "dialogueLineCount": 0
+    },
+    {
+      "castId": "cast_rafe",
+      "name": "Rafe",
+      "role": "ally",
+      "profilePath": "cast/cast_rafe.json",
+      "compositePath": "cast/composites/cast_rafe_ref.png",
+      "voiceProfilePath": "voices/voice_rafe.json",
+      "dialogueLineCount": 0
+    }
+  ],
+  "locations": [
+    {
+      "locationId": "loc_rooftop",
+      "name": "Service Rooftop",
+      "profilePath": "locations/loc_rooftop.json",
+      "primaryImagePath": "locations/primary/loc_rooftop.png"
+    },
+    {
+      "locationId": "loc_stairwell",
+      "name": "Exit Stairwell",
+      "profilePath": "locations/loc_stairwell.json",
+      "primaryImagePath": "locations/primary/loc_stairwell.png"
+    }
+  ],
+  "props": [
+    {
+      "propId": "prop_signal_pager",
+      "name": "signal pager",
+      "profilePath": "props/prop_signal_pager.json",
+      "imagePath": "props/generated/prop_signal_pager.png"
+    }
+  ],
+  "voices": [
+    {
+      "voiceId": "voice_nova",
+      "castId": "cast_nova",
+      "characterName": "Nova",
+      "voiceProfilePath": "voices/voice_nova.json",
+      "voiceStatus": "profiled"
+    },
+    {
+      "voiceId": "voice_rafe",
+      "castId": "cast_rafe",
+      "characterName": "Rafe",
+      "voiceProfilePath": "voices/voice_rafe.json",
+      "voiceStatus": "profiled"
+    }
+  ],
+  "frames": [
+    {
+      "frameId": "f_001",
+      "sceneId": "scene_01",
+      "sequenceIndex": 1,
+      "formulaTag": "F07",
+      "castIds": [
+        "cast_nova"
+      ],
+      "locationId": "loc_rooftop",
+      "propIds": [],
+      "narrativeBeat": "Nova watches the district from the rooftop ledge before the alert lands.",
+      "actionSummary": "Nova scans the district from the rooftop ledge.",
+      "suggestedDuration": 6,
+      "isDialogue": false,
+      "dialogueIds": [],
+      "dialogueRef": null,
+      "sourceText": "On the rooftop, Nova scans the district before the pager starts to vibrate.",
+      "timeOfDay": "night",
+      "emotionalArc": null,
+      "visualFlowElement": null,
+      "composition": {
+        "shot": "wide establishing shot",
+        "angle": "eye_level",
+        "placement": null,
+        "grouping": null,
+        "blocking": null,
+        "movement": null,
+        "focus": "character",
+        "transition": null,
+        "rule": null
+      },
+      "background": {
+        "visible_description": "the surveillance district skyline blinking beyond the ledge",
+        "camera_facing": "east",
+        "background_action": null,
+        "background_sound": "distant traffic wash",
+        "background_music": null,
+        "depth_layers": []
+      },
+      "directing": {
+        "dramatic_purpose": "establish the watch position before the warning lands",
+        "beat_turn": "The silence is about to break",
+        "pov_owner": "cast_nova",
+        "viewer_knowledge_delta": "Nova is exposed on the roof with no cover",
+        "power_dynamic": null,
+        "tension_source": "She is waiting for a signal that does not come fast enough",
+        "camera_motivation": "Hold the whole roof to expose how alone she is",
+        "movement_motivation": null,
+        "movement_path": null,
+        "reaction_target": null,
+        "background_life": "tower beacons pulse across the skyline"
+      },
+      "continuityChain": false,
+      "previousFrameId": null,
+      "nextFrameId": "f_002",
+      "status": "generated",
+      "generatedImagePath": "frames/composed/f_001_gen.png",
+      "videoPath": "video/clips/f_001.mp4"
+    },
+    {
+      "frameId": "f_002",
+      "sceneId": "scene_01",
+      "sequenceIndex": 2,
+      "formulaTag": "F11",
+      "castIds": [
+        "cast_nova"
+      ],
+      "locationId": "loc_rooftop",
+      "propIds": [
+        "prop_signal_pager"
+      ],
+      "narrativeBeat": "The pager vibrates and Nova reads the warning.",
+      "actionSummary": "Nova pulls the pager from her coat and reads the alert.",
+      "suggestedDuration": 5,
+      "isDialogue": true,
+      "dialogueIds": [
+        "dlg_001"
+      ],
+      "dialogueRef": "dlg_001",
+      "sourceText": "The pager vibrates in Nova's hand and she mutters that they are early.",
+      "timeOfDay": "night",
+      "emotionalArc": null,
+      "visualFlowElement": null,
+      "composition": {
+        "shot": "medium close-up",
+        "angle": "eye_level",
+        "placement": null,
+        "grouping": null,
+        "blocking": null,
+        "movement": "slow_push",
+        "focus": "prop",
+        "transition": null,
+        "rule": null
+      },
+      "background": {
+        "visible_description": "the surveillance district skyline blinking beyond the ledge",
+        "camera_facing": "east",
+        "background_action": null,
+        "background_sound": "distant traffic wash",
+        "background_music": null,
+        "depth_layers": []
+      },
+      "directing": {
+        "dramatic_purpose": "pivot from surveillance into immediate threat",
+        "beat_turn": "Nova understands the watchers are moving early",
+        "pov_owner": "cast_nova",
+        "viewer_knowledge_delta": "The warning has arrived too late to feel safe",
+        "power_dynamic": "The unseen watchers hold the tempo",
+        "tension_source": "The pager compresses the time Nova has left",
+        "camera_motivation": "Push toward the pager as the warning lands",
+        "movement_motivation": "Let Nova's hands absorb the shock of the alert",
+        "movement_path": "coat pocket to eye line",
+        "reaction_target": "prop_signal_pager",
+        "background_life": "the skyline keeps flashing behind the message"
+      },
+      "continuityChain": true,
+      "previousFrameId": "f_001",
+      "nextFrameId": "f_003",
+      "status": "generated",
+      "generatedImagePath": "frames/composed/f_002_gen.png",
+      "videoPath": "video/clips/f_002.mp4"
+    },
+    {
+      "frameId": "f_003",
+      "sceneId": "scene_02",
+      "sequenceIndex": 3,
+      "formulaTag": "F02",
+      "castIds": [
+        "cast_nova",
+        "cast_rafe"
+      ],
+      "locationId": "loc_stairwell",
+      "propIds": [
+        "prop_signal_pager"
+      ],
+      "narrativeBeat": "Nova reaches the stairwell landing where Rafe is already waiting.",
+      "actionSummary": "Nova reaches the landing and meets Rafe under the exit glow.",
+      "suggestedDuration": 5,
+      "isDialogue": false,
+      "dialogueIds": [],
+      "dialogueRef": null,
+      "sourceText": "Nova hits the stairwell landing and finds Rafe waiting in the spill from the exit door.",
+      "timeOfDay": "night",
+      "emotionalArc": null,
+      "visualFlowElement": null,
+      "composition": {
+        "shot": "two-shot",
+        "angle": "eye_level",
+        "placement": null,
+        "grouping": null,
+        "blocking": null,
+        "movement": null,
+        "focus": "character",
+        "transition": null,
+        "rule": null
+      },
+      "background": {
+        "visible_description": "the open exit door bleeding streetlight down the stairwell core",
+        "camera_facing": "north",
+        "background_action": null,
+        "background_sound": "street rumble filtering down the shaft",
+        "background_music": null,
+        "depth_layers": []
+      },
+      "directing": {
+        "dramatic_purpose": "land the contact and compress the available space",
+        "beat_turn": "Rafe sees Nova already carrying the warning",
+        "pov_owner": "cast_nova",
+        "viewer_knowledge_delta": "The meet is already in motion before either speaks",
+        "power_dynamic": "Rafe is positioned to command the exit",
+        "tension_source": "They have no private space left to talk",
+        "camera_motivation": "Keep both bodies visible to show the handoff geometry",
+        "movement_motivation": null,
+        "movement_path": null,
+        "reaction_target": null,
+        "background_life": "streetlight spills and traffic echoes down the stair core"
+      },
+      "continuityChain": false,
+      "previousFrameId": "f_002",
+      "nextFrameId": "f_004",
+      "status": "generated",
+      "generatedImagePath": "frames/composed/f_003_gen.png",
+      "videoPath": "video/clips/f_003.mp4"
+    },
+    {
+      "frameId": "f_004",
+      "sceneId": "scene_02",
+      "sequenceIndex": 4,
+      "formulaTag": "F05",
+      "castIds": [
+        "cast_nova",
+        "cast_rafe"
+      ],
+      "locationId": "loc_stairwell",
+      "propIds": [
+        "prop_signal_pager"
+      ],
+      "narrativeBeat": "Rafe leans in, forces the decision, and sends Nova toward the exit.",
+      "actionSummary": "Rafe leans in and drives Nova toward the exit.",
+      "suggestedDuration": 5,
+      "isDialogue": true,
+      "dialogueIds": [
+        "dlg_002"
+      ],
+      "dialogueRef": "dlg_002",
+      "sourceText": "Rafe leans in and tells Nova to move before the stairwell seals behind them.",
+      "timeOfDay": "night",
+      "emotionalArc": null,
+      "visualFlowElement": null,
+      "composition": {
+        "shot": "over-shoulder dialogue",
+        "angle": "eye_level",
+        "placement": null,
+        "grouping": null,
+        "blocking": null,
+        "movement": "slow_push",
+        "focus": "character",
+        "transition": null,
+        "rule": null
+      },
+      "background": {
+        "visible_description": "the open exit door bleeding streetlight down the stairwell core",
+        "camera_facing": "north",
+        "background_action": null,
+        "background_sound": "street rumble filtering down the shaft",
+        "background_music": null,
+        "depth_layers": []
+      },
+      "directing": {
+        "dramatic_purpose": "seal the handoff with urgency and force movement",
+        "beat_turn": "Rafe turns the warning into an exit command",
+        "pov_owner": "cast_nova",
+        "viewer_knowledge_delta": "There is no time left to plan",
+        "power_dynamic": "Rafe takes command of the escape route",
+        "tension_source": "The stairwell can be cut off at any second",
+        "camera_motivation": "Push in to make the order feel inescapable",
+        "movement_motivation": "Carry Nova's reaction toward the exit line",
+        "movement_path": "landing rail toward the exit door",
+        "reaction_target": "dlg_002",
+        "background_life": "streetlight pulses behind them while the fixture buzzes"
+      },
+      "continuityChain": true,
+      "previousFrameId": "f_003",
+      "nextFrameId": null,
+      "status": "generated",
+      "generatedImagePath": "frames/composed/f_004_gen.png",
+      "videoPath": "video/clips/f_004.mp4"
+    }
+  ],
+  "storyboardGrids": [
+    {
+      "gridId": "grid_01",
+      "frameIds": [
+        "f_001",
+        "f_002",
+        "f_003",
+        "f_004"
+      ],
+      "frameCount": 4,
+      "rows": 4,
+      "cols": 4,
+      "sceneIds": [
+        "scene_01",
+        "scene_02"
+      ],
+      "breakReason": "end",
+      "previousGridId": null,
+      "nextGridId": null,
+      "compositeImagePath": "frames/storyboards/grid_01/composite.png",
+      "cellImageDir": "frames/storyboards/grid_01/frames",
+      "cellMap": {
+        "0": "f_001",
+        "1": "f_002",
+        "2": "f_003",
+        "3": "f_004"
+      },
+      "castPresent": [
+        "cast_nova",
+        "cast_rafe"
+      ],
+      "propsPresent": [
+        "prop_signal_pager"
+      ],
+      "storyboardStatus": "generated",
+      "shotMatchGroups": []
+    }
+  ],
+  "dialoguePath": "dialogue.json"
+}

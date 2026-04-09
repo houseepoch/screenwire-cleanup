@@ -884,28 +884,51 @@ class VoiceNode(BaseModel):
     provenance: Provenance = Field(default_factory=Provenance)
 
 
-# ─── Chained Frame Group ──────────────────────────────────────────────────
+# ─── Storyboard Grid ─────────────────────────────────────────────────────
 
-class ChainedFrameGroup(BaseModel):
-    """A sequence of continuous, unbroken frames at the same location.
-    Any 2+ consecutive frames sharing scene_id + location_id form a chain.
-    Used to generate multi-panel storyboard images for visual continuity."""
+class ShotMatchGroup(BaseModel):
+    """Frames within a storyboard grid sharing the same shot setup.
+    Populated post-generation for visual consistency enforcement."""
+    group_id: str                            # "smg_grid_01_00"
+    frame_ids: list[str] = Field(default_factory=list)
+    match_basis: str = ""                    # e.g. "F01_medium_eye_level"
+    confidence: float = 0.0
 
-    chain_id: str                           # e.g., "chain_01"
-    scene_id: str
-    location_id: str
-    frame_ids: list[str] = Field(default_factory=list)  # Ordered frame_ids in this chain
+
+class StoryboardGrid(BaseModel):
+    """Sequential batch of up to 16 frames -> one 4x4 storyboard image.
+    Splits on scene breaks / large shifts. Cascades to next grid."""
+    grid_id: str                             # "grid_01"
+    frame_ids: list[str] = Field(default_factory=list)  # ordered, max 16
     frame_count: int = 0
+    rows: int = 4
+    cols: int = 4
 
-    # Cast/prop presence across the chain
+    # Context (informational, not grouping keys)
+    scene_ids: list[str] = Field(default_factory=list)  # scenes touched by this grid
+    break_reason: Optional[str] = None       # "full" | "scene_break" | "large_shift" | "end"
+
+    # Entity presence
     cast_present: list[str] = Field(default_factory=list)
     props_present: list[str] = Field(default_factory=list)
 
+    # Cascading chain
+    previous_grid_id: Optional[str] = None
+    next_grid_id: Optional[str] = None
+
     # Storyboard generation
     storyboard_prompt_path: Optional[str] = None
-    storyboard_image_path: Optional[str] = None
-    storyboard_status: str = "pending"      # pending | generated | archived
-    storyboard_history: list[str] = Field(default_factory=list)  # Paths to archived storyboards
+    composite_image_path: Optional[str] = None    # full grid composite
+    cell_image_dir: Optional[str] = None          # dir with frame_000.png..frame_015.png
+    storyboard_status: str = "pending"             # pending | generated | archived
+    storyboard_history: list[str] = Field(default_factory=list)
+
+    # Cell-to-frame mapping (cell index -> frame_id)
+    cell_map: dict[int, str] = Field(default_factory=dict)  # {0: "f_001", 1: "f_002", ...}
+
+    # Shot matching (post-generation)
+    shot_match_groups: list[ShotMatchGroup] = Field(default_factory=list)
+    shot_matching_status: str = "pending"    # pending | matched
 
     provenance: Provenance = Field(default_factory=Provenance)
 
@@ -974,8 +997,8 @@ class NarrativeGraph(BaseModel):
     frames: dict[str, FrameNode] = Field(default_factory=dict)
     dialogue: dict[str, DialogueNode] = Field(default_factory=dict)
 
-    # Chained frame groups (continuous sequences at same location)
-    chained_frame_groups: dict[str, ChainedFrameGroup] = Field(default_factory=dict)
+    # Storyboard grids (sequential batches of up to 16 frames -> 4x4 composites)
+    storyboard_grids: dict[str, StoryboardGrid] = Field(default_factory=dict)
 
     # Per-frame state snapshots (keyed by "{entity_id}@{frame_id}")
     cast_frame_states: dict[str, CastFrameState] = Field(default_factory=dict)
@@ -1004,7 +1027,7 @@ class NarrativeGraph(BaseModel):
         "scenes": False,
         "frames": False,
         "dialogue": False,
-        "chained_frame_groups": False,
+        "storyboard_grids": False,
         "cast_frame_states": False,
         "prop_frame_states": False,
         "location_frame_states": False,
@@ -1024,6 +1047,53 @@ class NarrativeGraph(BaseModel):
     total_tokens_used: int = 0
     build_log: list[str] = Field(default_factory=list)
 
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_chained_frame_groups(cls, data: Any) -> Any:
+        """Migrate legacy chained_frame_groups data to storyboard_grids."""
+        if not isinstance(data, dict):
+            return data
+        cfg = data.get("chained_frame_groups")
+        if cfg and "storyboard_grids" not in data:
+            grids: dict[str, dict] = {}
+            for chain_id, chain_data in cfg.items():
+                if isinstance(chain_data, dict):
+                    cd = chain_data
+                else:
+                    cd = chain_data.model_dump() if hasattr(chain_data, "model_dump") else dict(chain_data)
+                frame_ids = cd.get("frame_ids", [])
+                n = len(frame_ids)
+                if n <= 4:
+                    rows, cols = 2, 2
+                elif n <= 9:
+                    rows, cols = 3, 3
+                else:
+                    rows, cols = 4, 4
+                grid_id = chain_id.replace("chain_", "grid_")
+                grids[grid_id] = {
+                    "grid_id": grid_id,
+                    "frame_ids": frame_ids,
+                    "frame_count": cd.get("frame_count", n),
+                    "rows": rows,
+                    "cols": cols,
+                    "scene_ids": [cd["scene_id"]] if cd.get("scene_id") else [],
+                    "cast_present": cd.get("cast_present", []),
+                    "props_present": cd.get("props_present", []),
+                    "storyboard_prompt_path": cd.get("storyboard_prompt_path"),
+                    "composite_image_path": cd.get("storyboard_image_path"),
+                    "storyboard_status": cd.get("storyboard_status", "pending"),
+                    "storyboard_history": cd.get("storyboard_history", []),
+                    "cell_map": {i: fid for i, fid in enumerate(frame_ids)},
+                    "provenance": cd.get("provenance", {}),
+                }
+            data["storyboard_grids"] = grids
+            del data["chained_frame_groups"]
+            # Migrate seeded_domains key
+            sd = data.get("seeded_domains", {})
+            if "chained_frame_groups" in sd:
+                sd["storyboard_grids"] = sd.pop("chained_frame_groups")
+        return data
+
     @model_validator(mode="after")
     def _validate_contracts(self) -> "NarrativeGraph":
         """Enforce canonical graph contracts on persisted data."""
@@ -1037,7 +1107,7 @@ class NarrativeGraph(BaseModel):
             ("scene", self.scenes),
             ("frame", self.frames),
             ("dialogue", self.dialogue),
-            ("chained_frame_group", self.chained_frame_groups),
+            ("storyboard_grid", self.storyboard_grids),
             ("cast_frame_state", self.cast_frame_states),
             ("prop_frame_state", self.prop_frame_states),
             ("location_frame_state", self.location_frame_states),

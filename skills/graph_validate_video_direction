@@ -22,6 +22,8 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from graph.api import get_frame_cast_state_models, get_frame_context
+from graph.prompt_assembler import _estimate_dialogue_timing, MAX_VIDEO_DURATION_SECONDS
 from graph.store import GraphStore
 
 
@@ -46,7 +48,7 @@ def main():
     parser = argparse.ArgumentParser(description="Validate video direction data on all frames.")
     parser.add_argument("--project-dir", default=os.getcwd())
     parser.add_argument("--fix", action="store_true",
-                        help="Auto-fix missing durations with formula-based heuristics")
+                        help="Auto-fix missing or undersized durations with formula/dialogue heuristics")
     args = parser.parse_args()
 
     store = GraphStore(args.project_dir)
@@ -66,16 +68,40 @@ def main():
 
         tag = frame.formula_tag or "F07"
         scene_sequences.setdefault(frame.scene_id, []).append(frame)
+        ctx = get_frame_context(graph, frame_id)
+        dialogue_nodes = ctx.get("dialogue", [])
+        dialogue_lines = [d.get("raw_line", "").strip() for d in dialogue_nodes if d.get("raw_line", "").strip()]
+        dialogue_timing = None
+        minimum_dialogue_duration = None
+        if dialogue_lines:
+            dialogue_timing = _estimate_dialogue_timing(
+                dialogue_lines,
+                tempo=dialogue_nodes[0].get("performance_direction", ""),
+                env_intensity=dialogue_nodes[0].get("env_intensity", ""),
+            )
+            minimum_dialogue_duration = min(
+                int(dialogue_timing["recommended_duration"]),
+                MAX_VIDEO_DURATION_SECONDS,
+            )
 
         # Check suggested_duration
         if frame.suggested_duration is None:
             if args.fix:
-                frame.suggested_duration = DEFAULT_DURATION.get(tag, 5)
+                frame.suggested_duration = minimum_dialogue_duration or DEFAULT_DURATION.get(tag, 5)
                 fixed += 1
             else:
                 errors.append(f"{frame_id}: suggested_duration is missing")
         elif frame.suggested_duration < 3:
             errors.append(f"{frame_id}: suggested_duration={frame.suggested_duration} below minimum 3")
+        elif minimum_dialogue_duration and frame.suggested_duration < minimum_dialogue_duration:
+            if args.fix:
+                frame.suggested_duration = minimum_dialogue_duration
+                fixed += 1
+            else:
+                errors.append(
+                    f"{frame_id}: suggested_duration={frame.suggested_duration} too short for dialogue "
+                    f"(needs at least {minimum_dialogue_duration}s)"
+                )
         else:
             # Check against formula range — dialogue frames may legitimately exceed
             # the formula range to accommodate longer lines, so only warn
@@ -91,6 +117,12 @@ def main():
                     f"{frame_id}: suggested_duration={frame.suggested_duration} "
                     f"above typical maximum {hi} for {tag}"
                 )
+
+        if dialogue_timing and dialogue_timing["exceeds_model_max"]:
+            warnings.append(
+                f"{frame_id}: dialogue wants ~{int(dialogue_timing['recommended_duration'])}s "
+                f"but runtime max is {MAX_VIDEO_DURATION_SECONDS}s; split dialogue across more frames if clipping persists"
+            )
 
         # Check action_summary
         if not frame.action_summary or len(frame.action_summary.strip()) < 10:
@@ -111,7 +143,7 @@ def main():
                 errors.append(f"{frame_id}: directing.{field_name} is missing")
 
         visible_cast = [
-            cs for cs in frame.cast_states
+            cs for cs in get_frame_cast_state_models(graph, frame.frame_id)
             if getattr(getattr(cs, "frame_role", None), "value", getattr(cs, "frame_role", None)) != "referenced"
         ]
         if visible_cast and not getattr(directing, "pov_owner", None):

@@ -1,0 +1,32 @@
+{
+  "locationId": "loc_stairwell",
+  "name": "Exit Stairwell",
+  "parentLocationId": null,
+  "description": "a concrete stairwell with sodium spill from the street above and wet footprints on the steps",
+  "atmosphere": "humid, echoing, urgent",
+  "narrativePurpose": "",
+  "locationType": null,
+  "materialPalette": [],
+  "architectureKeywords": [],
+  "flora": null,
+  "scenesUsed": [
+    "scene_02"
+  ],
+  "timeOfDayVariants": [],
+  "moodPerScene": {},
+  "directions": {
+    "north": {
+      "description": "the open exit door bleeding streetlight down the stairwell core",
+      "image_path": "locations/direction/loc_stairwell_north.png",
+      "image_status": "generated",
+      "key_features": [],
+      "depth_description": ""
+    },
+    "south": null,
+    "east": null,
+    "west": null,
+    "exterior": null
+  },
+  "primaryImagePath": "locations/primary/loc_stairwell.png",
+  "imageStatus": "generated"
+}

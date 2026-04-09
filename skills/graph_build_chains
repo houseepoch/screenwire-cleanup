@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""graph_build_chains — Build chained frame groups in the narrative graph.
+"""graph_build_chains — Backward-compatible shim for storyboard grid building.
 
-Identifies sequences of 2+ consecutive frames sharing the same scene_id
-and location_id, registers them as ChainedFrameGroup entries, and saves.
+Legacy entrypoint retained so older scripts do not fail after the
+ChainedFrameGroup -> StoryboardGrid migration.
 
 Usage:
     python3 $SKILLS_DIR/graph_build_chains --project-dir .
@@ -13,24 +13,28 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from graph.api import build_chained_frame_groups
+from graph.api import build_storyboard_grids
 from graph.store import GraphStore
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Build chained frame groups")
+    parser = argparse.ArgumentParser(
+        description="Build storyboard grids (legacy graph_build_chains alias)"
+    )
     parser.add_argument("--project-dir", default=os.getcwd())
     args = parser.parse_args()
 
     store = GraphStore(args.project_dir)
     graph = store.load()
 
-    chains = build_chained_frame_groups(graph)
+    grids = build_storyboard_grids(graph)
 
     store.save(graph)
-    print(f"SUCCESS: Built {len(chains)} chained frame groups")
-    for chain in chains:
-        print(f"  {chain.chain_id}: {chain.frame_count} frames at {chain.location_id} in {chain.scene_id}")
+    print("WARNING: graph_build_chains is deprecated; use graph_build_grids instead.")
+    print(f"SUCCESS: Built {len(grids)} storyboard grids")
+    for grid in grids:
+        scene_label = ",".join(grid.scene_ids) if grid.scene_ids else "no_scene"
+        print(f"  {grid.grid_id}: {grid.frame_count} frames across {scene_label}")
 
 
 if __name__ == "__main__":

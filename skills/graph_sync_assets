@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
-"""graph_sync_assets — Sync generated asset paths from manifest back into the graph.
+"""graph_sync_assets — Sync generated asset paths into the graph and manifest.
 
-After Image Verifier (Phase 3) generates composites/locations/props,
-their file paths are in the manifest but NOT in the graph.
-This script reads the manifest and updates the graph so that
-prompt assembly can resolve ref_images correctly.
+After asset generation (Phase 3), image files exist on disk but their paths
+are not recorded in the graph or manifest.  This script scans the standard
+asset directories, matches files to graph entities by ID, and updates both
+the graph AND the manifest so that:
+  - prompt assembly can resolve ref_images (reads graph)
+  - quality gates can verify assets (reads manifest)
+
+Scanning strategy: disk-first.  The manifest is a secondary source for paths
+that don't follow the standard naming convention.
 
 Usage:
     python3 $SKILLS_DIR/graph_sync_assets --project-dir .
@@ -13,6 +18,7 @@ Usage:
 import json
 import os
 import sys
+from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from graph.store import GraphStore
@@ -24,30 +30,48 @@ def main():
     parser.add_argument("--project-dir", default=os.getcwd())
     args = parser.parse_args()
 
-    project_dir = args.project_dir
-    manifest_path = os.path.join(project_dir, "project_manifest.json")
+    project_dir = Path(args.project_dir)
+    manifest_path = project_dir / "project_manifest.json"
 
-    if not os.path.exists(manifest_path):
+    if not manifest_path.exists():
         print("ERROR: project_manifest.json not found")
         sys.exit(1)
 
-    manifest = json.loads(open(manifest_path, encoding="utf-8").read())
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     store = GraphStore(project_dir)
     graph = store.load()
 
     synced = 0
 
-    # Sync cast composite paths
+    # ── Cast composites: scan disk first, then manifest fallback ─────────
+    composites_dir = project_dir / "cast" / "composites"
+    if composites_dir.is_dir():
+        for cast_id, cast_node in graph.cast.items():
+            # Standard naming: {cast_id}_ref.png
+            expected = composites_dir / f"{cast_id}_ref.png"
+            if expected.exists():
+                rel_path = f"cast/composites/{cast_id}_ref.png"
+                if cast_node.composite_path != rel_path:
+                    cast_node.composite_path = rel_path
+                    cast_node.composite_status = "generated"
+                    synced += 1
+                    print(f"  Synced cast composite (disk): {cast_id} -> {rel_path}")
+                # Also update manifest
+                _upsert_manifest_entry(manifest, "cast", "castId", cast_id,
+                                       {"compositePath": rel_path})
+
+    # Manifest fallback for non-standard paths
     for mc in manifest.get("cast", []):
         cast_id = mc.get("castId")
         comp_path = mc.get("compositePath")
         if cast_id and comp_path and cast_id in graph.cast:
-            if graph.cast[cast_id].composite_path != comp_path:
+            if not graph.cast[cast_id].composite_path and (project_dir / comp_path).exists():
                 graph.cast[cast_id].composite_path = comp_path
                 graph.cast[cast_id].composite_status = "generated"
                 synced += 1
-                print(f"  Synced cast composite: {cast_id} -> {comp_path}")
+                print(f"  Synced cast composite (manifest): {cast_id} -> {comp_path}")
 
+        # Voice profiles
         voice_path = mc.get("voiceProfilePath")
         if cast_id and voice_path and cast_id in graph.cast:
             if graph.cast[cast_id].voice_profile_path != voice_path:
@@ -55,38 +79,142 @@ def main():
                 graph.cast[cast_id].voice_status = "profiled"
                 synced += 1
 
-    # Sync location image paths
+    # ── Location primary images: scan disk first ─────────────────────────
+    loc_primary_dir = project_dir / "locations" / "primary"
+    if loc_primary_dir.is_dir():
+        for loc_id, loc_node in graph.locations.items():
+            expected = loc_primary_dir / f"{loc_id}.png"
+            if expected.exists():
+                rel_path = f"locations/primary/{loc_id}.png"
+                if loc_node.primary_image_path != rel_path:
+                    loc_node.primary_image_path = rel_path
+                    loc_node.image_status = "generated"
+                    synced += 1
+                    print(f"  Synced location image (disk): {loc_id} -> {rel_path}")
+                _upsert_manifest_entry(manifest, "locations", "locationId", loc_id,
+                                       {"primaryImagePath": rel_path})
+
+    # Manifest fallback
     for ml in manifest.get("locations", []):
         loc_id = ml.get("locationId")
         img_path = ml.get("primaryImagePath")
         if loc_id and img_path and loc_id in graph.locations:
-            if graph.locations[loc_id].primary_image_path != img_path:
+            if not graph.locations[loc_id].primary_image_path and (project_dir / img_path).exists():
                 graph.locations[loc_id].primary_image_path = img_path
                 graph.locations[loc_id].image_status = "generated"
                 synced += 1
-                print(f"  Synced location image: {loc_id} -> {img_path}")
+                print(f"  Synced location image (manifest): {loc_id} -> {img_path}")
 
-    # Sync prop image paths
+    # ── Location direction views: scan disk ──────────────────────────────
+    direction_dir = project_dir / "locations" / "direction"
+    if direction_dir.is_dir():
+        for loc_id, loc_node in graph.locations.items():
+            if not loc_node.directions:
+                continue
+            for cardinal in ("north", "south", "east", "west", "exterior"):
+                view = getattr(loc_node.directions, cardinal, None)
+                if not view or not view.description:
+                    continue
+                expected_path = f"locations/direction/{loc_id}_{cardinal}.png"
+                if (project_dir / expected_path).exists():
+                    if view.image_path != expected_path or view.image_status != "generated":
+                        view.image_path = expected_path
+                        view.image_status = "generated"
+                        synced += 1
+                        print(f"  Synced direction view: {loc_id}/{cardinal} -> {expected_path}")
+
+    # ── Prop images: scan disk first ─────────────────────────────────────
+    props_dir = project_dir / "props" / "generated"
+    if props_dir.is_dir():
+        for prop_id, prop_node in graph.props.items():
+            expected = props_dir / f"{prop_id}.png"
+            if expected.exists():
+                rel_path = f"props/generated/{prop_id}.png"
+                if prop_node.image_path != rel_path:
+                    prop_node.image_path = rel_path
+                    synced += 1
+                    print(f"  Synced prop image (disk): {prop_id} -> {rel_path}")
+                _upsert_manifest_entry(manifest, "props", "propId", prop_id,
+                                       {"imagePath": rel_path})
+
+    # Manifest fallback
     for mp in manifest.get("props", []):
         prop_id = mp.get("propId")
         img_path = mp.get("imagePath")
         if prop_id and img_path and prop_id in graph.props:
-            if graph.props[prop_id].image_path != img_path:
+            if not graph.props[prop_id].image_path and (project_dir / img_path).exists():
                 graph.props[prop_id].image_path = img_path
                 synced += 1
-                print(f"  Synced prop image: {prop_id} -> {img_path}")
+                print(f"  Synced prop image (manifest): {prop_id} -> {img_path}")
 
-    # Sync frame composed image paths
+    # ── Frame composed images: scan disk first ───────────────────────────
+    composed_dir = project_dir / "frames" / "composed"
+    if composed_dir.is_dir():
+        for frame_id, frame_node in graph.frames.items():
+            expected = composed_dir / f"{frame_id}_gen.png"
+            if expected.exists():
+                rel_path = f"frames/composed/{frame_id}_gen.png"
+                if frame_node.composed_image_path != rel_path:
+                    frame_node.composed_image_path = rel_path
+                    synced += 1
+                _upsert_manifest_entry(manifest, "frames", "frameId", frame_id,
+                                       {"generatedImagePath": rel_path})
+
+    # Manifest fallback
     for mf in manifest.get("frames", []):
         frame_id = mf.get("frameId")
         img_path = mf.get("generatedImagePath")
         if frame_id and img_path and frame_id in graph.frames:
-            if graph.frames[frame_id].composed_image_path != img_path:
+            if not graph.frames[frame_id].composed_image_path and (project_dir / img_path).exists():
                 graph.frames[frame_id].composed_image_path = img_path
                 synced += 1
 
+    # ── Storyboard grid composites + cells: scan disk ──────────────────
+    storyboard_dir = project_dir / "frames" / "storyboards"
+    if storyboard_dir.is_dir():
+        for grid_id, grid_node in graph.storyboard_grids.items():
+            grid_dir = storyboard_dir / grid_id
+            if not grid_dir.is_dir():
+                continue
+            # Composite
+            composite = grid_dir / "composite.png"
+            if composite.exists():
+                rel_path = f"frames/storyboards/{grid_id}/composite.png"
+                if grid_node.composite_image_path != rel_path:
+                    grid_node.composite_image_path = rel_path
+                    grid_node.storyboard_status = "generated"
+                    synced += 1
+                    print(f"  Synced grid composite (disk): {grid_id} -> {rel_path}")
+            # Cell images directory
+            frames_subdir = grid_dir / "frames"
+            if frames_subdir.is_dir() and any(frames_subdir.glob("frame_*.png")):
+                rel_cell_dir = f"frames/storyboards/{grid_id}/frames"
+                if grid_node.cell_image_dir != rel_cell_dir:
+                    grid_node.cell_image_dir = rel_cell_dir
+                    synced += 1
+                    print(f"  Synced grid cell dir (disk): {grid_id} -> {rel_cell_dir}")
+
+    # ── Persist ──────────────────────────────────────────────────────────
     store.save(graph)
-    print(f"SUCCESS: Synced {synced} asset paths from manifest into graph")
+
+    # Save updated manifest
+    manifest["version"] = manifest.get("version", 0) + 1
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+    print(f"SUCCESS: Synced {synced} asset paths (disk scan + manifest) into graph and manifest")
+
+
+def _upsert_manifest_entry(manifest: dict, collection: str, key_field: str,
+                           key_value: str, updates: dict) -> None:
+    """Ensure a manifest collection entry exists and merge updates into it."""
+    items = manifest.setdefault(collection, [])
+    for item in items:
+        if item.get(key_field) == key_value:
+            item.update(updates)
+            return
+    new_item = {key_field: key_value}
+    new_item.update(updates)
+    items.append(new_item)
 
 
 if __name__ == "__main__":

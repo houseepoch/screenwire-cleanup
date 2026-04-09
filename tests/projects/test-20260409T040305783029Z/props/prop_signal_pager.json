@@ -1,0 +1,15 @@
+{
+  "propId": "prop_signal_pager",
+  "name": "signal pager",
+  "description": "a scratched black pager with a cracked green screen and a pulsing alert light",
+  "narrativeSignificance": "",
+  "materialContext": [],
+  "scenesUsed": [
+    "scene_01"
+  ],
+  "associatedCast": [
+    "cast_nova"
+  ],
+  "introductionFrame": "f_002",
+  "imagePath": "props/generated/prop_signal_pager.png"
+}

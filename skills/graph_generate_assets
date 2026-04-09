@@ -26,6 +26,7 @@ async def generate_one(client: httpx.AsyncClient, prompt_data: dict, project_dir
     prompt = prompt_data["prompt"]
     size = prompt_data.get("size", "landscape_16_9")
     out_path = prompt_data.get("out_path", "")
+    generation_mode = prompt_data.get("generation_mode", "")
 
     out_abs = project_dir / out_path
     out_abs.parent.mkdir(parents=True, exist_ok=True)
@@ -38,7 +39,7 @@ async def generate_one(client: httpx.AsyncClient, prompt_data: dict, project_dir
     }
     aspect = aspect_map.get(size, "16:9")
 
-    # Resolve reference images (used by directional location views)
+    # Resolve reference images (used by frame generation and location direction edits)
     raw_refs = prompt_data.get("ref_images", [])
     resolved_refs = []
     for ref in raw_refs:
@@ -46,6 +47,7 @@ async def generate_one(client: httpx.AsyncClient, prompt_data: dict, project_dir
         if ref_path.exists():
             resolved_refs.append(str(ref_path))
 
+    endpoint = "/internal/generate-frame"
     body = {
         "prompt": prompt,
         "aspect_ratio": aspect,
@@ -54,10 +56,42 @@ async def generate_one(client: httpx.AsyncClient, prompt_data: dict, project_dir
         "reference_images": resolved_refs,
     }
 
+    if generation_mode == "p_image_edit":
+        input_path = prompt_data.get("input_path", "")
+        if not input_path:
+            return {
+                "success": False,
+                "path": str(out_abs),
+                "error": "direction prompt missing input_path",
+            }
+        source_abs = project_dir / input_path
+        if not source_abs.exists():
+            return {
+                "success": False,
+                "path": str(out_abs),
+                "error": f"source image not found: {source_abs}",
+            }
+        endpoint = "/internal/generate-location-direction"
+        body = {
+            "prompt": prompt,
+            "input_path": str(source_abs),
+            "image_size": size,
+            "output_path": str(out_abs),
+            "output_format": "png",
+            "reference_images": resolved_refs,
+        }
+
     try:
-        resp = await client.post(f"{SERVER_URL}/internal/generate-frame", json=body, timeout=180)
+        resp = await client.post(f"{SERVER_URL}{endpoint}", json=body, timeout=180)
         if resp.status_code == 502:
-            return {"success": False, "path": str(out_abs), "error": "502 prediction failure"}
+            detail = "502 prediction failure"
+            try:
+                payload = resp.json()
+                detail = payload.get("detail", detail)
+            except Exception:
+                if resp.text:
+                    detail = resp.text
+            return {"success": False, "path": str(out_abs), "error": detail}
         resp.raise_for_status()
         return {"success": True, "path": str(out_abs)}
     except Exception as e:
@@ -108,15 +142,18 @@ def main():
     parser.add_argument("--batch-size", type=int, default=10)
     parser.add_argument("--skip-existing", action="store_true",
                         help="Skip generation if output file already exists")
+    parser.add_argument("--types", default="all",
+                        help="Comma-separated asset types to generate: cast,locations,direction,props (default: all)")
     args = parser.parse_args()
 
     project_dir = Path(args.project_dir)
+    types = set(args.types.split(",")) if args.types != "all" else {"cast", "locations", "direction", "props"}
 
-    # Load all prompt files
-    cast_prompts = load_prompts(project_dir / "cast" / "prompts")
-    loc_prompts = load_prompts(project_dir / "locations" / "prompts")
-    loc_dir_prompts = load_prompts(project_dir / "locations" / "direction_prompts")
-    prop_prompts = load_prompts(project_dir / "props" / "prompts")
+    # Load prompt files for requested types only
+    cast_prompts = load_prompts(project_dir / "cast" / "prompts") if "cast" in types else []
+    loc_prompts = load_prompts(project_dir / "locations" / "prompts") if "locations" in types else []
+    loc_dir_prompts = load_prompts(project_dir / "locations" / "direction_prompts") if "direction" in types else []
+    prop_prompts = load_prompts(project_dir / "props" / "prompts") if "props" in types else []
 
     # Filter existing if requested
     if args.skip_existing:

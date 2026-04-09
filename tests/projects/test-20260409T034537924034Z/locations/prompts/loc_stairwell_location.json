@@ -1,0 +1,6 @@
+{
+  "location_id": "loc_stairwell",
+  "prompt": "Generate a 4x4 grid demonstrating this location facing all four directions, of north, south, east, west. Label each grid section with the direction label. You are to use your logic and build a 360 view of this environment captured in 4 images on the grid. live action, clinical midnight thriller photography with hard edge practicals and cool city spill carving subjects out of shadow. Cinematic wide establishing shot. Exit Stairwell: a concrete stairwell with sodium spill from the street above and wet footprints on the steps. humid, echoing, urgent. Mood: urgent, compressed. No characters, environmental focus, professional cinematography composition. North view: the open exit door bleeding streetlight down the stairwell core.",
+  "size": "landscape_16_9",
+  "out_path": "locations/primary/loc_stairwell.png"
+}

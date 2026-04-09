@@ -1,0 +1,27 @@
+{
+  "dialogue": [
+    {
+      "dialogueId": "dlg_001",
+      "sceneId": "scene_01",
+      "frameId": "f_002",
+      "startFrame": "f_002",
+      "endFrame": "f_002",
+      "primaryVisualFrame": "f_002",
+      "reactionFrameIds": [],
+      "speaker": "Nova",
+      "castId": "cast_nova",
+      "line": "[hushed] They're early.",
+      "rawLine": "They're early.",
+      "performanceDirection": "hushed",
+      "envTags": "",
+      "envLocation": null,
+      "envDistance": null,
+      "envMedium": null,
+      "envIntensity": "quiet",
+      "envAtmosphere": [
+        "traffic wash"
+      ],
+      "order": 1
+    }
+  ]
+}

@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from .api import get_frame_cast_state_models, get_frame_prop_state_models
 from .schema import NarrativeGraph
 
 
@@ -351,9 +352,12 @@ def materialize_manifest(graph: NarrativeGraph, manifest_path: Path) -> int:
         if not frame:
             continue
 
-        cast_ids = [cs.cast_id for cs in frame.cast_states
+        cast_states = get_frame_cast_state_models(graph, fid)
+        prop_states = get_frame_prop_state_models(graph, fid)
+
+        cast_ids = [cs.cast_id for cs in cast_states
                     if cs.frame_role not in ("referenced",)]
-        prop_ids = [ps.prop_id for ps in frame.prop_states]
+        prop_ids = [ps.prop_id for ps in prop_states]
 
         manifest["frames"].append({
             "frameId": frame.frame_id,
@@ -384,20 +388,35 @@ def materialize_manifest(graph: NarrativeGraph, manifest_path: Path) -> int:
             "videoPath": frame.video_path,
         })
 
-    # Chained frame groups
-    manifest["chainedFrameGroups"] = [
+    # Storyboard grids
+    manifest["storyboardGrids"] = [
         {
-            "chainId": g.chain_id,
-            "sceneId": g.scene_id,
-            "locationId": g.location_id,
+            "gridId": g.grid_id,
             "frameIds": g.frame_ids,
             "frameCount": g.frame_count,
+            "rows": g.rows,
+            "cols": g.cols,
+            "sceneIds": g.scene_ids,
+            "breakReason": g.break_reason,
+            "previousGridId": g.previous_grid_id,
+            "nextGridId": g.next_grid_id,
+            "compositeImagePath": g.composite_image_path,
+            "cellImageDir": g.cell_image_dir,
+            "cellMap": {str(k): v for k, v in g.cell_map.items()},
             "castPresent": g.cast_present,
             "propsPresent": g.props_present,
-            "storyboardImagePath": g.storyboard_image_path,
             "storyboardStatus": g.storyboard_status,
+            "shotMatchGroups": [
+                {
+                    "groupId": smg.group_id,
+                    "frameIds": smg.frame_ids,
+                    "matchBasis": smg.match_basis,
+                    "confidence": smg.confidence,
+                }
+                for smg in g.shot_match_groups
+            ],
         }
-        for g in graph.chained_frame_groups.values()
+        for g in graph.storyboard_grids.values()
     ]
 
     manifest["dialoguePath"] = "dialogue.json"

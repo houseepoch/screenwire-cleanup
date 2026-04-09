@@ -40,6 +40,8 @@ def main():
         if not has_voice_data and not has_dialogue:
             continue
 
+        # Build provenance from the cast node's voice description
+        prose_chunk = cast_node.voice.voice_description or f"Voice profile for {cast_node.name}"
         voice = VoiceNode(
             voice_id=cast_id,
             cast_id=cast_id,
@@ -55,7 +57,10 @@ def main():
             vocal_style=cast_node.voice.vocal_style,
             voice_profile_path=cast_node.voice_profile_path,
             voice_status=cast_node.voice_status or "pending",
-            provenance=Provenance(source="graph_populate_voices"),
+            provenance=Provenance(
+                source_prose_chunk=prose_chunk,
+                generated_by="graph_populate_voices",
+            ),
         )
 
         graph.voices[cast_id] = voice

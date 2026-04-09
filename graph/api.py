@@ -26,7 +26,7 @@ from .schema import (
     LocationNode, LocationFrameState,
     PropNode, PropFrameState,
     SceneNode, FrameNode, DialogueNode,
-    VoiceNode, ChainedFrameGroup,
+    VoiceNode, StoryboardGrid, ShotMatchGroup,
     GraphEdge, EdgeType, Provenance, canonical_edge_id,
 )
 from .store import GraphStore
@@ -63,7 +63,7 @@ def query_graph(
         "scene": graph.scenes,
         "frame": graph.frames,
         "dialogue": graph.dialogue,
-        "chained_frame_group": graph.chained_frame_groups,
+        "storyboard_grid": graph.storyboard_grids,
         "cast_frame_state": graph.cast_frame_states,
         "prop_frame_state": graph.prop_frame_states,
         "location_frame_state": graph.location_frame_states,
@@ -86,6 +86,60 @@ def query_graph(
         results.append(node_dict)
 
     return results
+
+
+def get_frame_cast_state_models(
+    graph: NarrativeGraph,
+    frame_id: str,
+) -> list[CastFrameState]:
+    """Return cast states for a frame from the most reliable available source."""
+    frame = graph.frames.get(frame_id)
+    if frame is None:
+        raise KeyError(f"Frame {frame_id} not found in graph")
+    if frame.cast_states:
+        return frame.cast_states
+    suffix = f"@{frame_id}"
+    return [
+        state for key, state in graph.cast_frame_states.items()
+        if key.endswith(suffix)
+    ]
+
+
+def get_frame_prop_state_models(
+    graph: NarrativeGraph,
+    frame_id: str,
+) -> list[PropFrameState]:
+    """Return prop states for a frame from the most reliable available source."""
+    frame = graph.frames.get(frame_id)
+    if frame is None:
+        raise KeyError(f"Frame {frame_id} not found in graph")
+    if frame.prop_states:
+        return frame.prop_states
+    suffix = f"@{frame_id}"
+    return [
+        state for key, state in graph.prop_frame_states.items()
+        if key.endswith(suffix)
+    ]
+
+
+def get_frame_location_state_model(
+    graph: NarrativeGraph,
+    frame_id: str,
+    location_id: Optional[str] = None,
+) -> Optional[LocationFrameState]:
+    """Return the location state for a frame, preferring the flat registry."""
+    frame = graph.frames.get(frame_id)
+    if frame is None:
+        raise KeyError(f"Frame {frame_id} not found in graph")
+    resolved_location_id = location_id or frame.location_id
+    if not resolved_location_id:
+        return frame.location_state
+    state = graph.location_frame_states.get(f"{resolved_location_id}@{frame_id}")
+    if state is not None:
+        return state
+    if frame.location_state and frame.location_state.location_id == resolved_location_id:
+        return frame.location_state
+    return None
 
 
 def get_frame_context(graph: NarrativeGraph, frame_id: str) -> dict:
@@ -115,45 +169,51 @@ def get_frame_context(graph: NarrativeGraph, frame_id: str) -> dict:
 
     # Cast nodes + frame states
     # Prefer frame-level cast_states; fall back to graph-level registry if empty
-    frame_cast_states = frame.cast_states
-    if not frame_cast_states:
-        # Hydrate from graph.cast_frame_states registry (keyed "cast_id@frame_id")
-        frame_cast_states = [
-            cfs for key, cfs in graph.cast_frame_states.items()
-            if key.endswith(f"@{frame_id}")
-        ]
+    frame_cast_states = get_frame_cast_state_models(graph, frame_id)
     cast_ids_in_frame = [cs.cast_id for cs in frame_cast_states]
     cast_nodes = [graph.cast[cid].model_dump() for cid in cast_ids_in_frame if cid in graph.cast]
     cast_states = [cs.model_dump() for cs in frame_cast_states]
 
     # Location + state
     loc_node = graph.locations.get(frame.location_id) if frame.location_id else None
-    loc_state_key = f"{frame.location_id}@{frame_id}" if frame.location_id else None
-    loc_state = graph.location_frame_states.get(loc_state_key) if loc_state_key else None
+    loc_state = get_frame_location_state_model(graph, frame_id)
 
     # Props + states
-    prop_ids = list(frame.prop_states) if frame.prop_states else []
-    # Also check prop_roles on frame for IDs
-    if hasattr(frame, 'prop_states') and frame.prop_states:
-        prop_ids_from_states = [ps.prop_id for ps in frame.prop_states]
-    else:
-        prop_ids_from_states = []
-    all_prop_ids = list(set(prop_ids_from_states))
+    frame_prop_states = get_frame_prop_state_models(graph, frame_id)
+    all_prop_ids = list({ps.prop_id for ps in frame_prop_states})
     prop_nodes = [graph.props[pid].model_dump() for pid in all_prop_ids if pid in graph.props]
-    prop_states = [ps.model_dump() for ps in (frame.prop_states or [])]
+    prop_states = [ps.model_dump() for ps in frame_prop_states]
 
-    # Dialogue audible during this frame — union of direct IDs and temporal span
+    # Dialogue for this frame — each frame gets its unique chunk of any
+    # multi-frame dialogue.  No words are repeated across frames.
     dialogue_by_id: dict[str, dict] = {}
     # 1. Direct dialogue_ids on the frame (Morpheus-assigned)
     for did in (frame.dialogue_ids or []):
         dnode = graph.dialogue.get(did)
         if dnode:
             dialogue_by_id[did] = dnode.model_dump()
-    # 2. Temporal span scan (catches J-cuts, L-cuts, and multi-frame spans)
+    # 2. Scan all dialogue whose temporal span covers this frame
     for did, dnode in graph.dialogue.items():
         if did not in dialogue_by_id:
-            if _frame_in_span(graph, frame_id, dnode.start_frame, dnode.end_frame):
+            if dnode.primary_visual_frame == frame_id or \
+               _frame_in_span(graph, frame_id, dnode.start_frame, dnode.end_frame):
                 dialogue_by_id[did] = dnode.model_dump()
+
+    # Split multi-frame dialogue so each frame gets a unique word chunk
+    for did, ddict in dialogue_by_id.items():
+        start_f = ddict.get("start_frame", "")
+        end_f = ddict.get("end_frame", "")
+        if start_f and end_f and start_f != end_f:
+            span_frames = _get_span_frame_ids(graph, start_f, end_f)
+            if len(span_frames) > 1 and frame_id in span_frames:
+                frame_idx = span_frames.index(frame_id)
+                for text_key in ("raw_line", "line"):
+                    full_text = ddict.get(text_key, "")
+                    if full_text:
+                        ddict[text_key] = _split_text_chunk(
+                            full_text, frame_idx, len(span_frames)
+                        )
+
     # Sort by dialogue order
     dialogue_nodes = sorted(
         dialogue_by_id.values(),
@@ -202,6 +262,54 @@ def _frame_in_span(
         return False
 
 
+def _get_span_frame_ids(
+    graph: NarrativeGraph,
+    start_frame: str,
+    end_frame: str,
+) -> list[str]:
+    """Return the ordered list of frame IDs from start_frame to end_frame inclusive."""
+    if start_frame == end_frame:
+        return [start_frame]
+    try:
+        order = graph.frame_order
+        si = order.index(start_frame)
+        ei = order.index(end_frame)
+        return order[si:ei + 1]
+    except ValueError:
+        return [start_frame]
+
+
+def _split_text_chunk(text: str, chunk_index: int, total_chunks: int) -> str:
+    """Split text into total_chunks roughly equal word groups and return chunk_index.
+
+    Splits on sentence boundaries when possible so each frame gets coherent
+    phrases rather than mid-sentence cuts.
+    """
+    import re as _re
+
+    # Try sentence-level split first
+    sentences = [s.strip() for s in _re.split(r'(?<=[.!?…])\s+', text) if s.strip()]
+    if len(sentences) >= total_chunks:
+        # Distribute sentences across chunks
+        per_chunk = len(sentences) / total_chunks
+        start = round(chunk_index * per_chunk)
+        end = round((chunk_index + 1) * per_chunk)
+        return " ".join(sentences[start:end])
+
+    # Fall back to word-level split
+    words = text.split()
+    if not words:
+        return ""
+    per_chunk = len(words) / total_chunks
+    start = round(chunk_index * per_chunk)
+    end = round((chunk_index + 1) * per_chunk)
+    # Ensure at least one word per chunk
+    if start >= len(words):
+        return ""
+    end = max(end, start + 1)
+    return " ".join(words[start:end])
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # UPSERT OPERATIONS
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -239,7 +347,7 @@ def upsert_node(
         "scene": (SceneNode, graph.scenes, "scene_id"),
         "frame": (FrameNode, graph.frames, "frame_id"),
         "dialogue": (DialogueNode, graph.dialogue, "dialogue_id"),
-        "chained_frame_group": (ChainedFrameGroup, graph.chained_frame_groups, "chain_id"),
+        "storyboard_grid": (StoryboardGrid, graph.storyboard_grids, "grid_id"),
     }
 
     if node_type not in type_to_model:
@@ -447,14 +555,19 @@ def check_continuity(graph: NarrativeGraph, frame_id: str) -> list[ContinuityCon
 
     scene = graph.scenes.get(frame.scene_id)
     prev_frame = graph.frames.get(frame.previous_frame_id) if frame.previous_frame_id else None
+    frame_cast_states = get_frame_cast_state_models(graph, frame_id)
+    prev_cast_states = (
+        get_frame_cast_state_models(graph, prev_frame.frame_id)
+        if prev_frame else []
+    )
 
     # 1. Prop possession continuity
-    for cs in frame.cast_states:
+    for cs in frame_cast_states:
         for prop_id in cs.props_held:
             if prev_frame:
                 # Check if anyone else was holding this prop in prev frame
                 prev_holder = None
-                for prev_cs in prev_frame.cast_states:
+                for prev_cs in prev_cast_states:
                     if prop_id in prev_cs.props_held:
                         prev_holder = prev_cs.cast_id
                         break
@@ -478,7 +591,7 @@ def check_continuity(graph: NarrativeGraph, frame_id: str) -> list[ContinuityCon
 
     # 2. Cast scene presence
     if scene:
-        for cs in frame.cast_states:
+        for cs in frame_cast_states:
             if cs.frame_role in ("subject", "object", "background"):
                 if cs.cast_id not in scene.cast_present:
                     conflicts.append(ContinuityConflict(
@@ -497,7 +610,7 @@ def check_continuity(graph: NarrativeGraph, frame_id: str) -> list[ContinuityCon
     for did in frame.dialogue_ids:
         dnode = graph.dialogue.get(did)
         if dnode:
-            cast_ids_in_frame = {cs.cast_id for cs in frame.cast_states
+            cast_ids_in_frame = {cs.cast_id for cs in frame_cast_states
                                  if cs.frame_role != "referenced"}
             if dnode.cast_id not in cast_ids_in_frame:
                 # Not necessarily an error — could be a J-cut (audio before visual)
@@ -769,7 +882,7 @@ def check_continuity(graph: NarrativeGraph, frame_id: str) -> list[ContinuityCon
     #     the dialogue speaker should NOT be the camera subject here.
     for did, dnode in graph.dialogue.items():
         if frame_id in (dnode.reaction_frame_ids or []):
-            for cs in frame.cast_states:
+            for cs in frame_cast_states:
                 if cs.cast_id == dnode.cast_id and cs.frame_role == "subject":
                     conflicts.append(ContinuityConflict(
                         conflict_type="reaction_frame_shows_speaker",
@@ -912,7 +1025,7 @@ def trace_provenance(graph: NarrativeGraph, node_id: str) -> Optional[dict]:
         ("scene", graph.scenes),
         ("frame", graph.frames),
         ("dialogue", graph.dialogue),
-        ("chained_frame_group", graph.chained_frame_groups),
+        ("storyboard_grid", graph.storyboard_grids),
         ("cast_frame_state", graph.cast_frame_states),
         ("prop_frame_state", graph.prop_frame_states),
         ("location_frame_state", graph.location_frame_states),
@@ -1143,77 +1256,216 @@ def propagate_location_state(
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# CHAINED FRAME GROUP DETECTION
+# STORYBOARD GRID BUILDING
 # ═══════════════════════════════════════════════════════════════════════════════
 
+MAX_GRID_SIZE = 16
 
-def build_chained_frame_groups(graph: NarrativeGraph) -> list[ChainedFrameGroup]:
-    """Identify and register all chained frame groups in the graph.
 
-    A chain is 2+ consecutive frames sharing the same scene_id AND location_id.
-    Clears existing groups and rebuilds from scratch.
+def is_large_shift(graph: NarrativeGraph, prev_frame_id: str, curr_frame_id: str) -> bool:
+    """Detect a large visual shift between two consecutive frames.
 
-    Returns the list of chains created.
+    Triggers on:
+      - Different scene_id (always breaks)
+      - Time-of-day change across scenes
+      - INT/EXT flip across scenes
+    Within a single scene, frames flow together regardless of location.
     """
-    graph.chained_frame_groups.clear()
-    chains: list[ChainedFrameGroup] = []
+    prev = graph.frames.get(prev_frame_id)
+    curr = graph.frames.get(curr_frame_id)
+    if not prev or not curr:
+        return False
+
+    # Different scene is always a break
+    if prev.scene_id != curr.scene_id:
+        return True
+
+    # Within the same scene, check for major environmental shifts
+    prev_scene = graph.scenes.get(prev.scene_id)
+    curr_scene = graph.scenes.get(curr.scene_id)
+    if prev_scene and curr_scene and prev_scene.scene_id != curr_scene.scene_id:
+        # Time-of-day change
+        if prev.time_of_day and curr.time_of_day and prev.time_of_day != curr.time_of_day:
+            return True
+        # INT/EXT flip
+        prev_loc = graph.locations.get(prev.location_id)
+        curr_loc = graph.locations.get(curr.location_id)
+        if prev_loc and curr_loc:
+            prev_type = (prev_loc.location_type or "").upper()
+            curr_type = (curr_loc.location_type or "").upper()
+            if (("INT" in prev_type) != ("INT" in curr_type) or
+                    ("EXT" in prev_type) != ("EXT" in curr_type)):
+                return True
+
+    return False
+
+
+def _grid_layout(n: int) -> tuple[int, int]:
+    """Return (rows, cols) for a grid holding n frames.
+
+    Always 4x4 — every storyboard grid is a 16-cell 1:1 square.
+    Frames that don't fill all 16 cells leave trailing cells empty;
+    the grid generator handles padding automatically.
+    """
+    return 4, 4
+
+
+def build_storyboard_grids(graph: NarrativeGraph) -> list[StoryboardGrid]:
+    """Partition frame_order into sequential 4x4 storyboard grids of up to 16 frames.
+
+    Packs frames sequentially across scene boundaries — every grid is always
+    4x4 (16 cells). Grids with fewer than 16 frames leave trailing cells empty.
+    Only splits when reaching MAX_GRID_SIZE (16).
+
+    Clears existing grids and rebuilds from scratch.
+    Returns the list of grids created.
+    """
+    graph.storyboard_grids.clear()
+    grids: list[StoryboardGrid] = []
 
     if not graph.frame_order:
-        return chains
+        return grids
 
-    chain_idx = 0
-    current_chain_frames: list[str] = []
-    current_scene: str | None = None
-    current_location: str | None = None
+    grid_idx = 0
+    current_batch: list[str] = []
 
-    def _flush_chain() -> None:
-        nonlocal chain_idx
-        if len(current_chain_frames) >= 2:
-            chain_id = f"chain_{chain_idx + 1:02d}"
-            # Gather cast/props across all frames in the chain
-            all_cast: set[str] = set()
-            all_props: set[str] = set()
-            for fid in current_chain_frames:
-                frame = graph.frames.get(fid)
-                if frame:
-                    for cs in frame.cast_states:
-                        if cs.frame_role != "referenced":
-                            all_cast.add(cs.cast_id)
-                    for ps in frame.prop_states:
-                        all_props.add(ps.prop_id)
+    def _flush_batch(reason: str) -> None:
+        nonlocal grid_idx
+        if not current_batch:
+            return
 
-            group = ChainedFrameGroup(
-                chain_id=chain_id,
-                scene_id=current_scene or "",
-                location_id=current_location or "",
-                frame_ids=list(current_chain_frames),
-                frame_count=len(current_chain_frames),
-                cast_present=sorted(all_cast),
-                props_present=sorted(all_props),
-            )
-            graph.chained_frame_groups[chain_id] = group
-            chains.append(group)
-            chain_idx += 1
+        grid_id = f"grid_{grid_idx + 1:02d}"
+        rows, cols = _grid_layout(len(current_batch))
+
+        # Gather scene IDs, cast, props
+        scene_ids: set[str] = set()
+        all_cast: set[str] = set()
+        all_props: set[str] = set()
+        for fid in current_batch:
+            frame = graph.frames.get(fid)
+            if frame:
+                scene_ids.add(frame.scene_id)
+                for cs in get_frame_cast_state_models(graph, fid):
+                    if cs.frame_role != "referenced":
+                        all_cast.add(cs.cast_id)
+                for ps in get_frame_prop_state_models(graph, fid):
+                    all_props.add(ps.prop_id)
+
+        cell_map = {i: fid for i, fid in enumerate(current_batch)}
+
+        grid = StoryboardGrid(
+            grid_id=grid_id,
+            frame_ids=list(current_batch),
+            frame_count=len(current_batch),
+            rows=rows,
+            cols=cols,
+            scene_ids=sorted(scene_ids),
+            break_reason=reason,
+            cast_present=sorted(all_cast),
+            props_present=sorted(all_props),
+            cell_map=cell_map,
+            provenance=Provenance(
+                source_prose_chunk=(
+                    f"Auto-built storyboard grid from sequential frames "
+                    f"{current_batch[0]} through {current_batch[-1]} "
+                    f"({reason})."
+                ),
+                generated_by="graph_build_grids",
+                confidence=1.0,
+            ),
+        )
+        graph.storyboard_grids[grid_id] = grid
+        grids.append(grid)
+        grid_idx += 1
 
     for fid in graph.frame_order:
         frame = graph.frames.get(fid)
         if not frame:
-            _flush_chain()
-            current_chain_frames = []
-            current_scene = None
-            current_location = None
             continue
 
-        if (frame.scene_id == current_scene
-                and frame.location_id == current_location):
-            current_chain_frames.append(fid)
-        else:
-            _flush_chain()
-            current_chain_frames = [fid]
-            current_scene = frame.scene_id
-            current_location = frame.location_id
+        # Only split when the batch hits 16 — pack across scenes
+        if len(current_batch) >= MAX_GRID_SIZE:
+            _flush_batch("full")
+            current_batch = []
 
-    _flush_chain()
+        current_batch.append(fid)
 
-    graph.seeded_domains["chained_frame_groups"] = True
-    return chains
+    _flush_batch("end")
+
+    # Wire previous/next pointers
+    grid_ids = [g.grid_id for g in grids]
+    for i, g in enumerate(grids):
+        if i > 0:
+            g.previous_grid_id = grid_ids[i - 1]
+        if i < len(grids) - 1:
+            g.next_grid_id = grid_ids[i + 1]
+
+    graph.seeded_domains["storyboard_grids"] = True
+    return grids
+
+
+def get_frame_cell_image(graph: NarrativeGraph, frame_id: str) -> str | None:
+    """Resolve the grid cell image path for a given frame.
+
+    Finds which grid the frame belongs to, looks up its cell index,
+    and returns the path to the split cell image (frame_NNN.png).
+    """
+    for grid in graph.storyboard_grids.values():
+        if frame_id in grid.frame_ids:
+            if not grid.cell_image_dir:
+                return None
+            # Find cell index from cell_map
+            for idx, fid in grid.cell_map.items():
+                if fid == frame_id:
+                    return f"{grid.cell_image_dir}/frame_{idx:03d}.png"
+            # Fallback: use position in frame_ids
+            try:
+                idx = grid.frame_ids.index(frame_id)
+                return f"{grid.cell_image_dir}/frame_{idx:03d}.png"
+            except ValueError:
+                return None
+    return None
+
+
+def match_shots_in_grid(graph: NarrativeGraph, grid: StoryboardGrid) -> list[ShotMatchGroup]:
+    """Group frames in a grid by shared shot setup for visual consistency.
+
+    Groups by (formula_tag, visible_cast_set, composition.shot, composition.angle).
+    Buckets with 2+ frames become ShotMatchGroups.
+    """
+    from collections import defaultdict
+
+    buckets: dict[str, list[str]] = defaultdict(list)
+
+    for fid in grid.frame_ids:
+        frame = graph.frames.get(fid)
+        if not frame:
+            continue
+
+        tag = str(frame.formula_tag.value if hasattr(frame.formula_tag, 'value') else frame.formula_tag or "")
+        cast_states = get_frame_cast_state_models(graph, fid)
+        visible_cast = tuple(sorted(
+            cs.cast_id for cs in cast_states if cs.frame_role != "referenced"
+        ))
+        shot = frame.composition.shot if frame.composition else ""
+        angle = frame.composition.angle if frame.composition else ""
+
+        key = f"{tag}_{shot}_{angle}_{','.join(visible_cast)}"
+        buckets[key].append(fid)
+
+    groups: list[ShotMatchGroup] = []
+    group_idx = 0
+    for basis, frame_ids in buckets.items():
+        if len(frame_ids) >= 2:
+            smg = ShotMatchGroup(
+                group_id=f"smg_{grid.grid_id}_{group_idx:02d}",
+                frame_ids=frame_ids,
+                match_basis=basis,
+                confidence=1.0,
+            )
+            groups.append(smg)
+            group_idx += 1
+
+    grid.shot_match_groups = groups
+    grid.shot_matching_status = "matched"
+    return groups

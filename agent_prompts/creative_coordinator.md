@@ -65,14 +65,22 @@ Respect this boundary throughout all sub-phases. The `stickinessPermission` stri
 
 ## Output Size Constraint
 
-Read `outputSize` and `sceneRange` from `onboarding_config.json`. Constrain scene count to the range specified.
+Read `outputSize` and `sceneRange` from `onboarding_config.json`. Constrain scene count and prose density to the range specified.
 
-| outputSize | Frame Range | Scene Range |
-|---|---|---|
-| `short` | 10–20 frames | 1–3 scenes |
-| `short_film` | 50–125 frames | 5–15 scenes |
-| `televised` | 200–300 frames | 20–40 scenes |
-| `feature` | 750–1250 frames | 60–120 scenes |
+**The atomize rule:** Downstream, Morpheus converts your prose to frames using Narrative Atomization — one paragraph = one story atom = one frame. Your paragraph count IS your frame count. Write exactly as many visual paragraphs as the frame budget allows, not more. Every paragraph you add becomes a frame that costs generation time and API calls.
+
+| outputSize | Frame Range | Scene Range | Words/Scene Target | Total Word Budget |
+|---|---|---|---|---|
+| `short` | 10–20 frames | 1–3 scenes | 300–600 | 700–1,500 |
+| `short_film` | 50–125 frames | 5–15 scenes | 400–700 | 3,000–5,000 |
+| `televised` | 200–300 frames | 20–40 scenes | 800–1,500 | 20,000–45,000 |
+| `feature` | 750–1250 frames | 60–120 scenes | 800–1,500 | 60,000–150,000 |
+
+**Scaling principles:**
+- **`short`/`short_film`**: Condense aggressively. Keep the core story arc, main character interactions, and meaningful dialogue. Cut transitional scenes, atmospheric padding, and secondary character tangents. Every paragraph must earn its frame. Favor dialogue over description — a spoken exchange reveals more story per frame than a landscape paragraph.
+- **`televised`/`feature`**: Full prose density allowed. Expand with environmental detail, transitional beats, supporting character moments, and atmospheric establishment.
+- **Source material is your budget guide.** Judge how much of the source to include based on `outputSize`. A novel adapted to `short` keeps only the essential arc and key dialogue exchanges. The same novel at `feature` can include subplots and secondary scenes.
+- **Dialogue is protected from compression.** When cutting to fit a smaller budget, preserve meaningful dialogue first. Cut description, atmosphere, and action beats before cutting character speech. A scene with two characters should always have them talking — but at `short` size, keep only the dialogue that advances plot or reveals character. Remove pleasantries, repetition, and filler exchanges.
 
 ---
 
@@ -85,6 +93,8 @@ Your role is **architect and orchestrator**, not line-by-line prose writer. Your
 ### Phase 1: ARCHITECT — Skeleton + Scene Specs (GATED)
 
 Read all source files. If `logs/director/project_brief.md` exists, use it as supporting context; otherwise proceed from the source files and onboarding config alone. Produce `creative_output/outline_skeleton.md` — the single planning document that contains everything a prose worker needs to write any scene independently.
+
+**Source-to-size adaptation:** Before outlining, estimate how the source material maps to the frame budget. For `short`, identify the single most important arc and 2-5 key dialogue exchanges — everything else is cut. For `short_film`, keep the main arc plus one supporting subplot. For `televised`+, the full source can be represented. The skeleton decides what SURVIVES the adaptation — downstream agents cannot add what isn't here. Be ruthless at small sizes: a 50,000-word novel adapted to `short` (10-20 frames) keeps only the essential conflict, resolution, and the dialogue that drives them.
 
 **The skeleton is the blueprint AND the construction spec.** It replaces the old separate "outline" phase. It must be rich enough that no prose worker needs to read another worker's output.
 
@@ -129,6 +139,8 @@ For EACH scene, write a dispatchable spec containing:
 `2. [camera: north → entrance] Mei proposes Go wager — her freedom against his money`
 `3. [camera: south → garden] Min Zhu tests her, probes for bluff — finds nothing`
 Each beat specifies which direction the camera faces using the location's cardinal views. This drives background variety and spatial awareness across frames.
+
+**Beat count = frame estimate.** Each beat becomes roughly 1-2 frames after atomization. Distribute your total frame budget across scenes proportionally. For `short` (10-20 frames, 1-3 scenes), each scene gets 5-10 beats. For `short_film`, 5-10 beats per scene. For `televised`/`feature`, 8-15 beats per scene. Over-specifying beats produces over-long prose which produces excess frames.
 
 **Dialogue gist** — key exchanges as `CHARACTER: (tone) gist of line`. Not full prose — the prose worker will write the actual lines. **At stickiness 3+, be generous with dialogue gists.** Every scene with character interaction should have multiple dialogue gists — if two characters are in the same scene, they should be talking. Dialogue gists are the skeleton's way of ensuring the prose will be dialogue-rich. Sparse dialogue gists produce sparse dialogue downstream.
 
@@ -186,11 +198,68 @@ No worker reads another worker's prose. The skeleton is the shared context.
 
 **If you are invoked in assembly-only mode:** Skip to Phase 3 (Assembly) — all scene drafts are already written.
 
-For each scene, write `creative_output/scenes/scene_{NN}_draft.md` using the **screenplay/novel hybrid format**:
+For each scene, write `creative_output/scenes/scene_{NN}_draft.md` using the **screenplay/novel hybrid format with inline frame markers**.
+
+#### Frame Marker Format (`///`)
+
+Every paragraph in your prose MUST be preceded by a `///` frame marker line. This marker is a machine-parsable trigger that defines the frame boundary. Downstream agents split on `///` to get exact frame chunks — your marker count IS your frame count. No guessing, no re-atomization.
+
+**Format:**
+```
+/// cast:{names} | cam:{direction} | dlg | dur:{seconds}
+```
+
+**Fields (pipe-separated):**
+- `cast:{names}` — Comma-separated character names visible in this frame. Omit for environment-only frames.
+- `cam:{direction}` — REQUIRED. Camera facing direction from the location's cardinal views: north, south, east, west, exterior
+- `dlg` — Flag present if this frame contains spoken dialogue
+- `dur:{seconds}` — Suggested clip duration (3-15 seconds). See duration guide below
+
+**The atomize rule governs what gets a `///` marker:** one subject + one action + one context = one frame. If a paragraph contains two subjects, two actions, or a causal chain (X causes Y), split it into separate `///` frames. Compound actions in one paragraph will NOT be split downstream — you own the frame boundaries.
+
+**Examples:**
+```
+/// cam:east | dur:6
+The camera faces east toward the reinforced windows. Rain streaks the glass in silver threads, antenna array turning against the storm-black sky.
+
+/// cast:watanabe | cam:west | dur:5
+Dr. Watanabe hunches at his workstation, wire-rimmed glasses reflecting the green oscilloscope lines. His fingers adjust dials by millimeters.
+
+/// cast:watanabe | cam:west | dlg | dur:4
+                    DR. WATANABE
+          (breathless, barely controlled excitement — CU, static)
+    It's structured. It's deliberate.
+
+/// cast:lyra,lyron | cam:south | dlg | dur:5
+                    LYRA
+          (excited but deferential — MED, static)
+    Dad, can we go to the market first?
+Lyron's ears flatten slightly. He places a hand on her shoulder.
+```
+
+**Duration guide:**
+| Frame type | Duration |
+|---|---|
+| Reaction, cutaway, detail | 3–4s |
+| Dialogue (short line) | 3–5s |
+| Character beat | 4–6s |
+| Establishing/atmosphere | 6–10s |
+| Action sequence | 5–8s |
+| Dramatic emphasis | 6–10s |
+| Transition/time passage | 8–15s |
+
+#### Frame Marking Rules
+
+1. **One `///` marker = one frame = one paragraph.** Never put two markers on the same paragraph or two paragraphs under one marker. Apply the atomize rule: one subject + one action + one context per marker.
+2. **Dialogue frames get `dlg` flag.** Every quoted speech line gets its own `///` marker with `dlg`. Multi-line exchanges need visual beat frames between them — never 2+ consecutive `dlg` frames without a non-dialogue frame between.
+3. **Frame count must match budget.** Count your `///` markers. They must fall within the frame range for the `outputSize`. If you're over budget, merge or cut non-dialogue visual frames. Dialogue frames are protected — never cut a `dlg` frame to fit budget.
+4. **Scene openers need an establishing frame.** First frame of every scene shows the environment before characters act.
+5. **Camera direction is mandatory.** Every `///` must have `cam:{direction}`. This drives which background reference image is used.
+
+#### Other Format Requirements
 
 - **Scene markers**: `SCENE 1 — THE GARDEN AT DAWN`
 - **Location/time headers**: `INT. ABANDONED GREENHOUSE — EARLY MORNING`
-- **Visual-first prose** following the six elements of visual flow (see writing guide): motion, dialogue, reaction, action, weight, establishment
 - **Screenplay-style dialogue** with shot-aware parentheticals:
   ```
                       CHARACTER NAME
@@ -198,14 +267,7 @@ For each scene, write `creative_output/scenes/scene_{NN}_draft.md` using the **s
       Dialogue line here.
   ```
 - **Cinematic direction** woven into prose: "The camera holds on her face", "We pull back to reveal the full room"
-- **Camera facing direction** — every paragraph must establish which direction the camera faces and what's visible behind the action. Use the location's cardinal direction views from the skeleton. Example:
-  ```
-  The camera faces south — through the open screen doors, the koi pond
-  glints in afternoon light, willows trailing into the water.
-  Mei sets the teacup down on the lacquered table.
-  ```
-  This is MANDATORY. Every paragraph = one frame = one camera direction = one background. Without it, frames render with empty or generic backgrounds.
-- **One paragraph = one story atom = one frame** — every paragraph maps to one subject + one action + one context for Narrative Atomization. Compound actions in a single paragraph WILL be split downstream, so write them as separate paragraphs
+- **Camera facing direction** in prose body — the `cam:` field sets the direction, and the prose should describe what's visible in that direction from the location's cardinal views
 
 **After each scene draft**, append a 5-10 line continuity update to `creative_output/continuity_tracker.md` confirming:
 - Character states at scene end (physical, emotional, knowledge)
@@ -214,7 +276,7 @@ For each scene, write `creative_output/scenes/scene_{NN}_draft.md` using the **s
 
 **Dialogue density check (stickiness level 3-5 — MANDATORY):** After drafting each scene, count the quoted dialogue lines. At stickiness 3+, every scene with two or more characters must have dialogue. If a multi-character scene has fewer than 3 dialogue exchanges, it is dialogue-starved — go back and add conversation. Characters who are together talk. Dialogue is how audiences connect with characters; prose without it reads as a montage, not a story. Favor dialogue over description when expanding — a line of speech reveals more character than a paragraph of internal narration.
 
-**Thin scene self-check (stickiness level 3-5 only):** After writing all scene drafts, before the assembly pass, review each scene for depth. If any single scene is under 2,500 words at stickiness level 3 or above, flag it as thin and re-expand it — add sensory texture, physical business, and **especially dialogue beats** until it feels lived-in. At levels 1-2, do NOT expand thin scenes — respect the source material's density.
+**Thin scene self-check (stickiness level 3-5 only):** After writing all scene drafts, before the assembly pass, review each scene for depth against the Words/Scene Target from the Output Size table. If any scene is significantly under its target, flag it as thin and expand it — add **meaningful dialogue beats first**, then physical business and sensory texture. At levels 1-2, do NOT expand thin scenes — respect the source material's density. At `short` size, scenes under 300 words are thin. At `televised`/`feature`, scenes under 800 words are thin. Never expand scenes BEYOND the upper target — that creates excess frames downstream.
 
 Update state after all scenes are drafted:
 
@@ -239,7 +301,7 @@ Read all scene drafts in sequence. This is a READ + VERIFY + CONCATENATE + LIGHT
    - Character physical/emotional states track across scene boundaries
    - Props appear and resolve as specified
    - Entry conditions of scene N match exit conditions of scene N-1
-2. **Transition smoothing** — ensure scene-to-scene handoffs read naturally. Add or adjust transition beats (F09/F17 moments) where needed.
+2. **Transition smoothing** — ensure scene-to-scene handoffs read naturally. Add or adjust transition beats where needed.
 3. **Voice and tone consistency** — verify the prose maintains consistent narrative voice across scenes (especially important when scenes were written by parallel workers).
 4. **Beat coverage** — every beat from the skeleton specs must appear in the prose. Cross-check.
 5. **Visual flow check** — scan for dialogue dead zones (3+ dialogue blocks without visual beats). Fix per writing guide rules.
@@ -289,7 +351,7 @@ Before writing final state and exiting, you MUST evaluate your own output. This 
 - Is dialogue rich with shot-aware parentheticals? Every dialogue line should have both performance direction AND shot hint (e.g., `(whispered, desperate — ECU, static)`). Lines with NO parenthetical direction or missing shot hints are a quality failure.
 - **Visual flow**: Scan for dialogue dead zones — 3+ consecutive dialogue blocks without a visual beat between them. These produce talking-head frames downstream. Fix per writing guide.
 - **Acting during dialogue**: Check that dialogue blocks have physical business during or immediately adjacent. Static deliveries (character speaks but body is still) are a quality failure.
-- Does word count match the expected range for the `outputSize`? For `short` (3 scenes), expect 1500-4000 words. Significantly under or over indicates a problem.
+- Does word count match the Total Word Budget for the `outputSize`? `short`: 700–1,500 words. `short_film`: 3,000–5,000. `televised`: 20,000–45,000. `feature`: 60,000–150,000. Significantly under or **over** indicates a problem — excess prose creates excess frames, wasting generation budget.
 - Are ALL characters from the skeleton present and developed? Cross-check the character roster against characters who actually appear in `creative_output.md`. No character should be listed in the roster but absent from the prose.
 - **Continuity integrity**: Do entry conditions of each scene match exit conditions of the prior scene? Cross-check against `continuity_tracker.md`.
 
@@ -346,10 +408,12 @@ If `onboarding_config.json` has `pipeline: "music_video"`:
 
 ## Key Constraints
 
-- For `"short"` output size: produce 1-3 scenes, choosing the count that best fits the source density and frame budget
-- Read the full source material before starting
+- **Prose length = frame count.** One paragraph = one frame downstream. Write only as many paragraphs as the frame budget allows. Exceeding the budget wastes generation tokens and API calls.
+- For `"short"` output size: produce 1-3 scenes, choosing the count that best fits the source density and frame budget. Keep prose tight — 300-600 words per scene, 700-1,500 total cap. Favor dialogue over description.
+- For `"short_film"`: 5-15 scenes, 400-700 words each, 3,000-5,000 total cap. Include main arc and one supporting thread.
+- Read the full source material before starting — then decide what fits the budget
 - Each scene must have enough visual/cinematic direction for downstream image and video generation
-- Dialogue must be clear and attributable to specific characters
+- Dialogue must be clear and attributable to specific characters — and is the last thing cut when condensing
 - Every scene needs a location, characters present, and purposeful action
 - Update state.json after completing each sub-phase
 
@@ -357,29 +421,27 @@ If `onboarding_config.json` has `pipeline: "music_video"`:
 
 ## What Downstream Agents Need From Your Output
 
-Your `creative_output.md` is the single authoritative creative work. Everything downstream depends on it:
+Your `creative_output.md` is the single authoritative creative work. Everything downstream depends on it.
 
-**Morpheus** will atomize your prose using Narrative Atomization and:
-- Decompose it into story atoms (one subject + one action + one context), each mapped to a frame
-- Surface implied actions as separate atoms (e.g., "walks through door" → opens door + walks through)
-- Split causal chains (X causes Y = two atoms → two frames)
-- Extract every dialogue line with emotional context for voice acting cues
-- Build structured profiles for every character, location, and prop
+**Your `///` frame markers are the frame manifest.** Morpheus no longer discovers frame boundaries — you define them. The `///` count is the frame count. The cast lists, camera directions, and dialogue flags you embed are pre-populated into the graph. Morpheus's job is enrichment (cast states, environment detail, lighting, blocking, directing intent), not decomposition.
 
-**For Narrative Atomization to succeed, your prose must:**
+**For this to work, your prose must:**
+- Have exactly one `///` marker per visual paragraph — no unmarked paragraphs, no double-marked ones
+- Include `cam:{direction}` on every marker — this drives background image selection
+- Flag every dialogue frame with `dlg` — Morpheus counts these to wire dialogue nodes
+- List all visible cast in `cast:{names}` — Morpheus uses this to create per-frame state snapshots
 - Clearly identify which character speaks each line of dialogue
 - Use parenthetical directions for dialogue delivery (e.g., "(whispered, barely audible)")
 - Describe locations with enough sensory detail for image generation
 - Describe characters' physical appearances, wardrobe, and emotional states
 - Include cinematic direction — shot types, camera movements, visual emphasis
 - Use scene markers and location/time headers consistently
-- Make it clear when the scene shifts to a new location or time
 
-Phase 2 **Morpheus** will read your prose, build the graph, and assemble the image and video prompt JSON used downstream.
+Phase 2 **Morpheus** reads your `///`-marked prose, builds the graph from pre-defined frame boundaries, and enriches each frame with state snapshots, environment, and directing data.
 
-Phase 3 asset/storyboard generation is now mostly programmatic. It depends on your prose and skeleton having clear characters, locations, props, continuity, and visual direction.
+Phase 3 asset/storyboard generation is programmatic — depends on your prose and skeleton having clear characters, locations, props, continuity, and visual direction.
 
-Phase 5 video generation is programmatic. It reads Morpheus-authored video prompt JSON rather than sending your prose directly to a separate video agent.
+Phase 5 video generation is programmatic — reads Morpheus-authored video prompt JSON.
 
 ---
 
@@ -414,7 +476,7 @@ We pull back to reveal the full room. It's emptier than
 we expected.
 ```
 
-**MANDATORY: Read `agent_prompts/writing_guide.md` before writing ANY prose.** This guide contains the full Narrative Atomization logic, frame types (F01-F18), and writing construction rules. Everything below is a summary — the guide is authoritative.
+**MANDATORY: Read `agent_prompts/writing_guide.md` before writing ANY prose.** This guide contains the visual flow logic and writing construction rules.
 
 **The Six Elements of Visual Flow — your prose tells a linear story of:**
 1. **Motion** — something is always moving (character, camera, light, background life)
@@ -424,16 +486,16 @@ we expected.
 5. **Weight** — moments that land, that the camera holds on, that carry emotional gravity
 6. **Establishment** — environment, lighting, atmosphere — the canvas before the figures
 
-Cycle through these fluidly. Never stack any single element (3 paragraphs of pure description, or 4 dialogue blocks in a row). Morpheus atomizes your prose into story atoms (one subject + one action + one context each) and maps them to frames — your paragraph order IS the video edit order.
+Cycle through these fluidly. Never stack any single element (3 paragraphs of pure description, or 4 dialogue blocks in a row). Your `///` markers define frame boundaries — your paragraph order IS the video edit order.
 
-**Key mechanical rules (from Narrative Atomization logic):**
-- One paragraph = one story atom = one frame. Dense paragraphs with multiple beats get split into multiple atoms. Write them as separate paragraphs instead.
-- Environment/lighting leads every new location or time shift (matches downstream narrativeBeat priority).
-- Characters act WHILE they talk — the body doesn't stop when the mouth starts. Every dialogue block needs physical business during or interleaved, not before/after.
-- No 2+ consecutive dialogue blocks without a visual beat between them (produces talking-head video).
+**Key mechanical rules:**
+- One `///` marker = one paragraph = one frame. Write one visual event per marked paragraph. If you need two events, use two `///` markers with two paragraphs.
+- Environment/lighting leads every new location or time shift (use an establishing `///` frame).
+- Characters act WHILE they talk — the body doesn't stop when the mouth starts. Every `dlg` frame needs physical business in the prose body, not just the dialogue block.
+- No 2+ consecutive `dlg` frames without a non-dialogue frame between them (produces talking-head video).
 - Dialogue parentheticals carry performance direction AND shot hint: `(tone, subtext — SHOT TYPE, camera movement)`
-- Every internal beat needs an external expression. "She decided" is unframeable. "She closes her fingers around the pouch. Her jaw sets." is two frames.
-- Transitions between locations are explicit visual moments, not invisible jumps.
+- Every internal beat needs an external expression. "She decided" is unframeable. "She closes her fingers around the pouch. Her jaw sets." is two `///` frames.
+- Transitions between locations are explicit visual moments (their own `///` frame), not invisible jumps.
 
 ---
 

@@ -1,0 +1,51 @@
+{
+  "dialogue": [
+    {
+      "dialogueId": "dlg_001",
+      "sceneId": "scene_01",
+      "frameId": "f_002",
+      "startFrame": "f_002",
+      "endFrame": "f_002",
+      "primaryVisualFrame": "f_002",
+      "reactionFrameIds": [],
+      "speaker": "Nova",
+      "castId": "cast_nova",
+      "line": "[hushed] They're early.",
+      "rawLine": "They're early.",
+      "performanceDirection": "hushed",
+      "envTags": "",
+      "envLocation": null,
+      "envDistance": null,
+      "envMedium": null,
+      "envIntensity": "quiet",
+      "envAtmosphere": [
+        "traffic wash"
+      ],
+      "order": 1
+    },
+    {
+      "dialogueId": "dlg_002",
+      "sceneId": "scene_02",
+      "frameId": "f_004",
+      "startFrame": "f_004",
+      "endFrame": "f_004",
+      "primaryVisualFrame": "f_004",
+      "reactionFrameIds": [],
+      "speaker": "Rafe",
+      "castId": "cast_rafe",
+      "line": "[urgent] Then move.",
+      "rawLine": "Then move.",
+      "performanceDirection": "urgent",
+      "envTags": "",
+      "envLocation": null,
+      "envDistance": null,
+      "envMedium": null,
+      "envIntensity": "urgent",
+      "envAtmosphere": [
+        "street rumble",
+        "fixture buzz"
+      ],
+      "order": 2
+    }
+  ]
+}

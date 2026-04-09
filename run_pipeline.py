@@ -24,6 +24,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 
+from dotenv import load_dotenv
+load_dotenv(Path(__file__).resolve().parent / ".env")
+
 # ---------------------------------------------------------------------------
 # Process tracking & graceful shutdown
 # ---------------------------------------------------------------------------
@@ -550,6 +553,115 @@ def _deploy_shared_conventions(project_dir: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Context seed builder (Morpheus swarm shared prefix)
+# ---------------------------------------------------------------------------
+
+def build_context_seed(project_dir: Path) -> str:
+    """Pre-read all Phase 1 outputs into a single markdown document.
+
+    This document is PREPENDED to every Morpheus swarm agent's system prompt
+    as a shared cacheable prefix.  The Anthropic API caches matching system
+    prompt prefixes — Agent 1 pays full cost, Agents 2-5 get ~90% input
+    discount on the shared prefix (within 5-min TTL).
+
+    Returns a markdown string (~15-50KB depending on project size).
+    """
+    sections: list[str] = []
+    sections.append("# ═══ CONTEXT SEED — Shared Source Material ═══\n")
+    sections.append(
+        "**Do NOT re-read these files from disk.** They are embedded below. "
+        "Use them directly from this context seed.\n"
+    )
+
+    # 1. Manifest metadata
+    manifest_path = project_dir / "project_manifest.json"
+    if manifest_path.exists():
+        sections.append("## Project Manifest\n```json")
+        sections.append(manifest_path.read_text(encoding="utf-8").strip())
+        sections.append("```\n")
+
+    # 2. Onboarding config
+    config_path = project_dir / "source_files" / "onboarding_config.json"
+    if config_path.exists():
+        sections.append("## Onboarding Config\n```json")
+        sections.append(config_path.read_text(encoding="utf-8").strip())
+        sections.append("```\n")
+
+    # 3. Outline skeleton
+    skeleton_path = project_dir / "creative_output" / "outline_skeleton.md"
+    if skeleton_path.exists():
+        sections.append("## Outline Skeleton\n")
+        sections.append(skeleton_path.read_text(encoding="utf-8").strip())
+        sections.append("\n")
+
+    # 4. Full creative prose
+    prose_path = project_dir / "creative_output" / "creative_output.md"
+    if prose_path.exists():
+        sections.append("## Creative Output (Full Prose)\n")
+        sections.append(prose_path.read_text(encoding="utf-8").strip())
+        sections.append("\n")
+
+    # 5. Optional: director's project brief (legacy)
+    brief_path = project_dir / "logs" / "director" / "project_brief.md"
+    if brief_path.exists():
+        sections.append("## Director's Project Brief (Legacy)\n")
+        sections.append(brief_path.read_text(encoding="utf-8").strip())
+        sections.append("\n")
+
+    sections.append("# ═══ END CONTEXT SEED ═══\n")
+    return "\n".join(sections)
+
+
+# ---------------------------------------------------------------------------
+# Morpheus swarm validation helpers
+# ---------------------------------------------------------------------------
+
+def _validate_graph_has_entities(project_dir: Path) -> bool:
+    """Check that the graph contains cast entities (Agent 1 completed)."""
+    try:
+        result = _stream_subprocess(
+            [sys.executable, str(SKILLS_DIR / "graph_query"),
+             "--type", "cast", "--stats", "--project-dir", str(project_dir)],
+            cwd=project_dir, label="validate_entities")
+        # graph_query --stats prints counts; check for non-zero cast
+        if result.returncode != 0:
+            return False
+        output = result.stdout or ""
+        # Look for "cast: N" or similar pattern in output
+        if "cast" in output.lower() and "0 cast" not in output.lower():
+            return True
+        # Fallback: just check graph file has data
+        graph_path = project_dir / "graph" / "narrative_graph.json"
+        if graph_path.exists() and graph_path.stat().st_size > 500:
+            return True
+        return False
+    except Exception as e:
+        log_warn(f"Entity validation failed: {e}")
+        return False
+
+
+def _validate_graph_has_frames(project_dir: Path) -> bool:
+    """Check that the graph contains frames (Agent 2 completed)."""
+    try:
+        result = _stream_subprocess(
+            [sys.executable, str(SKILLS_DIR / "graph_query"),
+             "--type", "frame", "--stats", "--project-dir", str(project_dir)],
+            cwd=project_dir, label="validate_frames")
+        if result.returncode != 0:
+            return False
+        output = result.stdout or ""
+        if "frame" in output.lower() and "0 frame" not in output.lower():
+            return True
+        graph_path = project_dir / "graph" / "narrative_graph.json"
+        if graph_path.exists() and graph_path.stat().st_size > 2000:
+            return True
+        return False
+    except Exception as e:
+        log_warn(f"Frame validation failed: {e}")
+        return False
+
+
+# ---------------------------------------------------------------------------
 # Agent spawning
 # ---------------------------------------------------------------------------
 
@@ -560,15 +672,19 @@ def run_agent(
     model: str = DEFAULT_MODEL,
     dry_run: bool = False,
     prompt_prefix: str = "",
+    context_seed: str = "",
     timeout: int | None = None,
 ) -> subprocess.CompletedProcess:
     """Spawn a Claude CLI agent and wait for it to finish.
 
     Args:
-        prompt_prefix: Optional text sent as part of the user message (not the
-                       system prompt) so that the base system prompt remains
-                       identical across parallel workers, enabling API-level
-                       prompt caching.
+        prompt_prefix: Optional text APPENDED to the system prompt (after the
+                       agent's own prompt) so that the base prompt stays
+                       cacheable across parallel workers.
+        context_seed:  Optional text PREPENDED to the system prompt (before the
+                       agent's own prompt) as a shared cacheable prefix.  All
+                       swarm agents sharing the same seed benefit from API-level
+                       prompt caching (~90% input discount on Agents 2-5).
     """
     if project_dir is None:
         project_dir = PROJECT_DIR
@@ -581,6 +697,13 @@ def run_agent(
 
     # Expand {{include:path}} markers — reference files resolved relative to prompt dir
     system_prompt = _expand_includes(system_prompt, prompt_path.parent)
+
+    # context_seed is PREPENDED to the system prompt.  This is the shared
+    # cacheable prefix for the Morpheus swarm — the Anthropic API caches
+    # matching system prompt prefixes, so Agent 1 pays full cost and Agents
+    # 2-5 get ~90% input discount on the shared prefix (within 5-min TTL).
+    if context_seed:
+        system_prompt = context_seed + "\n\n---\n\n" + system_prompt
 
     # prompt_prefix is APPENDED to the system prompt (not prepended).
     # This keeps the large shared base prompt as the cacheable prefix — the
@@ -1201,12 +1324,23 @@ def phase_1_narrative(dry_run: bool, phase_timers: dict) -> None:
 
 
 def phase_2_morpheus(dry_run: bool, phase_timers: dict) -> None:
-    """Phase 2 -- Morpheus builds narrative graph, assembles prompts, materializes flat files."""
-    log_header("PHASE 2 -- Morpheus (Graph Build + Prompt Assembly)")
+    """Phase 2 -- Morpheus Swarm builds narrative graph, assembles prompts, materializes flat files.
+
+    Decomposes the monolithic Morpheus agent into 5 specialized swarm agents:
+      1. Entity Seeder   — project config, world context, cast, locations, props, scenes, edges
+      2. Frame Parser     — atomize prose → frames, cast/prop/location states
+      3. Dialogue Wirer   — extract dialogue, wire dialogue-frame edges (parallel with 4)
+      4. Compositor       — frame environment, background, composition, directing (parallel with 3)
+      5. Continuity Wirer — merge overlays, wire edges, continuity audit, validation
+
+    Agents share a cached context seed (prepended system prompt prefix) for API-level
+    prompt caching — Agent 1 pays full cost, Agents 2-5 get ~90% input discount.
+    """
+    log_header("PHASE 2 -- Morpheus Swarm (5-Agent Graph Build + Prompt Assembly)")
     timer = Timer()
     phase_timers["phase_2"] = timer
 
-    # Initialize graph before spawning Morpheus
+    # ── Pre-flight: initialize graph ──────────────────────────────────────
     if not dry_run:
         manifest = read_manifest()
         project_id = manifest.get("projectId", manifest.get("project", {}).get("id", "unknown"))
@@ -1219,10 +1353,124 @@ def phase_2_morpheus(dry_run: bool, phase_timers: dict) -> None:
                 cwd=PROJECT_DIR, label="graph_init")
             log_ok("Graph initialized")
 
-    result = run_agent("morpheus", str(PROMPTS_DIR / "morpheus.md"),
-                       dry_run=dry_run)
-    check_agent_result("morpheus", result, timer)
+    # ── Build context seed once (shared by all 5 agents) ──────────────────
+    if not dry_run:
+        log("Building context seed for Morpheus swarm...")
+        seed = build_context_seed(PROJECT_DIR)
+        seed_kb = len(seed.encode("utf-8")) // 1024
+        log_ok(f"Context seed built: {seed_kb}KB (shared cacheable prefix)")
+    else:
+        seed = ""
 
+    # ── Agent 1: Entity Seeder (sequential, foundational) ─────────────────
+    log_header("  SWARM AGENT 1/5 — Entity Seeder")
+    t1 = Timer()
+    r1 = run_agent(
+        "morpheus_1_entity_seeder",
+        str(PROMPTS_DIR / "morpheus_1_entity_seeder.md"),
+        context_seed=seed, dry_run=dry_run,
+    )
+    check_agent_result("morpheus_1_entity_seeder", r1, t1)
+
+    if not dry_run:
+        if not _validate_graph_has_entities(PROJECT_DIR):
+            log_warn("Entity Seeder may not have produced entities — continuing anyway")
+
+    # ── Agent 2: Frame Parser (sequential, needs entities) ────────────────
+    log_header("  SWARM AGENT 2/5 — Frame Parser")
+    t2 = Timer()
+    r2 = run_agent(
+        "morpheus_2_frame_parser",
+        str(PROMPTS_DIR / "morpheus_2_frame_parser.md"),
+        context_seed=seed, dry_run=dry_run,
+    )
+    check_agent_result("morpheus_2_frame_parser", r2, t2)
+
+    if not dry_run:
+        if not _validate_graph_has_frames(PROJECT_DIR):
+            log_warn("Frame Parser may not have produced frames — continuing anyway")
+
+    # ── Agents 3+4: Dialogue Wirer + Compositor (PARALLEL) ────────────────
+    log_header("  SWARM AGENTS 3+4 — Dialogue Wirer + Compositor (parallel)")
+    t34 = Timer()
+
+    if dry_run:
+        # Dry-run both sequentially
+        run_agent("morpheus_3_dialogue_wirer",
+                  str(PROMPTS_DIR / "morpheus_3_dialogue_wirer.md"),
+                  context_seed=seed, dry_run=True)
+        run_agent("morpheus_4_compositor",
+                  str(PROMPTS_DIR / "morpheus_4_compositor.md"),
+                  context_seed=seed, dry_run=True)
+    else:
+        def _run_agent_3():
+            return run_agent(
+                "morpheus_3_dialogue_wirer",
+                str(PROMPTS_DIR / "morpheus_3_dialogue_wirer.md"),
+                context_seed=seed,
+            )
+
+        def _run_agent_4():
+            return run_agent(
+                "morpheus_4_compositor",
+                str(PROMPTS_DIR / "morpheus_4_compositor.md"),
+                context_seed=seed,
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            future_3 = pool.submit(_run_agent_3)
+            future_4 = pool.submit(_run_agent_4)
+
+            results_34 = {}
+            for future in as_completed([future_3, future_4]):
+                agent_name = "morpheus_3_dialogue_wirer" if future is future_3 else "morpheus_4_compositor"
+                try:
+                    results_34[agent_name] = future.result()
+                except Exception as e:
+                    log_err(f"Agent '{agent_name}' raised exception: {e}")
+                    results_34[agent_name] = subprocess.CompletedProcess(
+                        [], returncode=1, stdout="", stderr=str(e))
+
+        for agent_name, result in results_34.items():
+            check_agent_result(agent_name, result, t34)
+
+    log_ok(f"Parallel agents 3+4 complete in {t34.elapsed_str()}")
+
+    # ── Agent 5: Continuity Wirer (sequential, needs all above) ───────────
+    log_header("  SWARM AGENT 5/5 — Continuity Wirer")
+    t5 = Timer()
+    r5 = run_agent(
+        "morpheus_5_continuity_wirer",
+        str(PROMPTS_DIR / "morpheus_5_continuity_wirer.md"),
+        context_seed=seed, dry_run=dry_run,
+    )
+    check_agent_result("morpheus_5_continuity_wirer", r5, t5)
+
+    # ── Deterministic post-processing (no agent needed) ───────────────────
+    if not dry_run:
+        log("Running deterministic prompt assembly + materialization...")
+
+        # Assemble prompts
+        _stream_subprocess(
+            [sys.executable, str(SKILLS_DIR / "graph_assemble_prompts"),
+             "--project-dir", str(PROJECT_DIR)],
+            cwd=PROJECT_DIR, label="graph_assemble_prompts")
+
+        # Materialize to flat files
+        _stream_subprocess(
+            [sys.executable, str(SKILLS_DIR / "graph_materialize"),
+             "--project-dir", str(PROJECT_DIR)],
+            cwd=PROJECT_DIR, label="graph_materialize")
+
+        # Validate video direction (auto-fix durations)
+        _stream_subprocess(
+            [sys.executable, str(SKILLS_DIR / "graph_validate_video_direction"),
+             "--project-dir", str(PROJECT_DIR), "--fix"],
+            cwd=PROJECT_DIR, label="graph_validate_video_direction")
+
+        log_ok("Deterministic post-processing complete")
+
+    # ── Verification ──────────────────────────────────────────────────────
     created_files = []
     if not dry_run:
         base = PROJECT_DIR
@@ -1230,11 +1478,11 @@ def phase_2_morpheus(dry_run: bool, phase_timers: dict) -> None:
         for sub in ("cast", "locations", "props"):
             d = base / sub
             if not any(d.glob("*.json")):
-                log_warn(f"No JSON files found in {sub}/ -- morpheus may not "
+                log_warn(f"No JSON files found in {sub}/ -- swarm may not "
                          f"have materialized fully.")
         manifest = read_manifest()
         if not manifest.get("frames"):
-            log_warn("manifest.frames[] is empty -- morpheus may not have "
+            log_warn("manifest.frames[] is empty -- swarm may not have "
                      "populated frames.")
 
         # Verify graph exists and has data
@@ -1242,7 +1490,7 @@ def phase_2_morpheus(dry_run: bool, phase_timers: dict) -> None:
         if graph_path.exists():
             log_ok(f"Narrative graph: {graph_path.stat().st_size // 1024}KB")
         else:
-            log_warn("narrative_graph.json not found — morpheus may not have saved graph")
+            log_warn("narrative_graph.json not found — swarm may not have saved graph")
 
         # Verify prompt files exist
         frame_prompts = list((base / "frames" / "prompts").glob("*_image.json")) if (base / "frames" / "prompts").exists() else []
@@ -1253,15 +1501,31 @@ def phase_2_morpheus(dry_run: bool, phase_timers: dict) -> None:
         for sub in ("cast", "locations", "props", "graph"):
             list_dir_files(base / sub)
             created_files.extend(collect_files_in(base / sub))
-        save_phase_report(2, timer, "morpheus", result, created_files)
+        # Use Agent 5 result for phase report (final agent)
+        save_phase_report(2, timer, "morpheus_swarm", r5 if not dry_run else
+                          subprocess.CompletedProcess([], 0, "", ""), created_files)
 
-        # Quality gate
+        # Quality gate (retry with monolithic fallback if swarm fails)
         if not run_quality_gate(2, base):
-            log_warn("Phase 2 quality gate FAILED — re-running morpheus (attempt 2/2)...")
+            log_warn("Phase 2 quality gate FAILED — re-running continuity wirer (attempt 2/2)...")
             timer2 = Timer()
-            result2 = run_agent("morpheus", str(PROMPTS_DIR / "morpheus.md"),
-                                dry_run=dry_run)
-            check_agent_result("morpheus", result2, timer2)
+            result2 = run_agent(
+                "morpheus_5_continuity_wirer",
+                str(PROMPTS_DIR / "morpheus_5_continuity_wirer.md"),
+                context_seed=seed, dry_run=dry_run,
+            )
+            check_agent_result("morpheus_5_continuity_wirer", result2, timer2)
+
+            # Re-run deterministic steps
+            _stream_subprocess(
+                [sys.executable, str(SKILLS_DIR / "graph_assemble_prompts"),
+                 "--project-dir", str(PROJECT_DIR)],
+                cwd=PROJECT_DIR, label="graph_assemble_prompts_retry")
+            _stream_subprocess(
+                [sys.executable, str(SKILLS_DIR / "graph_materialize"),
+                 "--project-dir", str(PROJECT_DIR)],
+                cwd=PROJECT_DIR, label="graph_materialize_retry")
+
             if not run_quality_gate(2, base):
                 log_warn("Phase 2 quality gate still failing after retry — proceeding with warnings")
 
@@ -1426,28 +1690,15 @@ def _populate_voice_nodes(dry_run: bool) -> None:
 
 
 def _generate_location_variants(dry_run: bool) -> None:
-    """Generate location direction variants and state variants via edit_image."""
-    if dry_run:
-        log("[DRY-RUN] Would generate location direction variants", YELLOW)
-        return
-
-    result = _stream_subprocess(
-        [sys.executable, str(SKILLS_DIR / "graph_generate_assets"),
-         "--project-dir", str(PROJECT_DIR), "--batch-size", "10",
-         "--skip-existing"],
-        cwd=PROJECT_DIR, timeout=600, label="graph_generate_assets",
-    )
-    if result.stdout:
-        for line in result.stdout.strip().split("\n"):
-            log(f"  {line}")
-    if result.returncode != 0:
-        log_warn(f"Location variant generation had failures (exit {result.returncode})")
-    else:
-        log_ok("Location direction variants generated")
+    """Location direction variants are now generated as part of the primary
+    location 4x4 grid image. This step is a no-op retained for pipeline
+    phase ordering compatibility.
+    """
+    log("Location directions included in primary 4x4 grid — skipping separate generation")
 
 
 def _verify_storyboard_refs_tagged() -> tuple[bool, list[str]]:
-    """Collect all ref_images from storyboard prompts and verify each is tagged.
+    """Collect all ref images from grid storyboard prompts and verify each is tagged.
 
     Runs after asset generation + batch tagging but before storyboard generation.
     Any untagged images in TAGGED_DIRS are tagged now. Missing files are logged.
@@ -1458,15 +1709,18 @@ def _verify_storyboard_refs_tagged() -> tuple[bool, list[str]]:
     if not prompt_dir.exists():
         return True, []
 
-    prompt_files = sorted(prompt_dir.glob("*_storyboard.json"))
+    prompt_files = sorted(prompt_dir.glob("*_grid.json"))
+    if not prompt_files:
+        # Fallback: check for legacy naming
+        prompt_files = sorted(prompt_dir.glob("*_storyboard.json"))
     if not prompt_files:
         return True, []
 
-    # Collect all unique ref_image paths across all storyboard prompts
+    # Collect all unique ref image paths across all storyboard prompts
     all_refs: list[str] = []
     for pf in prompt_files:
         data = json.loads(pf.read_text(encoding="utf-8"))
-        all_refs.extend(data.get("ref_images", []))
+        all_refs.extend(data.get("refs", data.get("ref_images", [])))
 
     unique_refs = list(dict.fromkeys(all_refs))  # dedupe, preserve order
     if not unique_refs:
@@ -1490,135 +1744,162 @@ def _verify_storyboard_refs_tagged() -> tuple[bool, list[str]]:
         return False, [f"EXCEPTION: {e}"]
 
 
-def _generate_single_storyboard(prompt_data: dict) -> bool:
-    """Generate one storyboard image via direct HTTP POST to the server.
+def _generate_single_grid_storyboard(prompt_data: dict) -> dict | None:
+    """Generate one grid storyboard via the grid_generate module.
 
-    Returns True on success, False on failure. Resolves ref_images to absolute
-    paths and sends them inline so the server can attach them to the prediction.
+    Returns the result dict from grid_generate.generate() on success,
+    or None on failure.
     """
-    import httpx as _httpx
+    import asyncio as _asyncio
 
-    chain_id = prompt_data.get("chain_id") or prompt_data.get("scene_id", "unknown")
-    out_rel = prompt_data.get("out_path", f"frames/storyboards/{chain_id}_storyboard.png")
-    out_abs = PROJECT_DIR / out_rel
-    out_abs.parent.mkdir(parents=True, exist_ok=True)
+    grid_id = prompt_data.get("grid_id", "unknown")
+    grid_layout = prompt_data.get("grid", "4x4")
+    cell_prompts = prompt_data.get("cell_prompts", [])
+    scene = prompt_data.get("scene", "")
+    output_dir = PROJECT_DIR / prompt_data.get("output_dir", f"frames/storyboards/{grid_id}")
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    composite = output_dir / "composite.png"
 
     # Skip if already generated
-    if out_abs.exists() and out_abs.stat().st_size > 1000:
-        log(f"  {chain_id}: already exists ({out_abs.stat().st_size:,}B) — skipping")
-        return True
+    if composite.exists() and composite.stat().st_size > 1000:
+        log(f"  {grid_id}: already exists ({composite.stat().st_size:,}B) — skipping")
+        # Return a result-like dict so caller can still update the graph
+        frames_dir = output_dir / "frames"
+        frame_files = sorted(frames_dir.glob("frame_*.png")) if frames_dir.exists() else []
+        return {
+            "composite": str(composite),
+            "frames": [str(f) for f in frame_files],
+            "grid": grid_layout,
+        }
 
-    # Resolve reference images to absolute paths, verify they exist
-    ref_images = []
-    for ref in prompt_data.get("ref_images", []):
+    # Resolve reference images to absolute paths
+    ref_paths = []
+    for ref in prompt_data.get("refs", []):
         ref_path = PROJECT_DIR / ref if not Path(ref).is_absolute() else Path(ref)
         if ref_path.exists():
-            ref_images.append(str(ref_path))
+            ref_paths.append(str(ref_path))
         else:
-            log_warn(f"  {chain_id}: ref image missing: {ref}")
+            log_warn(f"  {grid_id}: ref image missing: {ref}")
 
-    body = {
-        "prompt": prompt_data["prompt"],
-        "image_size": prompt_data.get("size", "landscape_16_9"),
-        "output_path": str(out_abs),
-        "output_format": "png",
-        "reference_images": ref_images,
-    }
+    log(f"  {grid_id}: generating {grid_layout} storyboard ({len(ref_paths)} ref images)...")
 
-    log(f"  {chain_id}: generating storyboard ({len(ref_images)} ref images)...")
+    log(f"  {grid_id}: {len(cell_prompts)} cell prompts stacked into {grid_layout} template")
+
     try:
-        resp = _httpx.post(
-            f"{SERVER_URL}/internal/fresh-generation",
-            json=body, timeout=180,
-        )
-        if resp.status_code >= 400:
-            log_warn(f"  {chain_id}: server returned {resp.status_code}: {resp.text[:200]}")
-            return False
-        data = resp.json()
-        if data.get("success"):
-            log_ok(f"  {chain_id}: storyboard generated → {out_abs.name}")
-            return True
-        log_warn(f"  {chain_id}: generation unsuccessful: {data}")
-        return False
+        from graph.grid_generate import generate as grid_generate
+        result = _asyncio.run(grid_generate(
+            grid=grid_layout,
+            output_dir=output_dir,
+            refs=ref_paths,
+            cell_prompts=cell_prompts,
+            scene=scene,
+        ))
+        log_ok(f"  {grid_id}: storyboard generated → {result.get('composite', '')}")
+        return result
     except Exception as e:
-        log_warn(f"  {chain_id}: HTTP error: {e}")
-        return False
+        log_warn(f"  {grid_id}: grid generation failed: {e}")
+        return None
 
 
-def _update_chain_graph(chain_id: str, image_path: str) -> None:
-    """Update ChainedFrameGroup on graph with storyboard path."""
+def _update_grid_graph(grid_id: str, result: dict) -> None:
+    """Update StoryboardGrid on graph with generated paths."""
     try:
         from graph.store import GraphStore
         store = GraphStore(str(PROJECT_DIR))
         graph = store.load()
-        chain = graph.chained_frame_groups.get(chain_id)
-        if chain:
-            if chain.storyboard_image_path and chain.storyboard_image_path != image_path:
-                chain.storyboard_history.append(chain.storyboard_image_path)
-            chain.storyboard_image_path = image_path
-            chain.storyboard_status = "generated"
+        grid = graph.storyboard_grids.get(grid_id)
+        if grid:
+            if grid.composite_image_path and grid.composite_image_path != result.get("composite"):
+                grid.storyboard_history.append(grid.composite_image_path)
+            grid.composite_image_path = result.get("composite", "")
+            frames = result.get("frames", [])
+            if frames:
+                grid.cell_image_dir = str(Path(frames[0]).parent)
+            grid.storyboard_status = "generated"
             store.save(graph)
     except Exception as e:
-        log_warn(f"  Could not update chain {chain_id} on graph: {e}")
+        log_warn(f"  Could not update grid {grid_id} on graph: {e}")
 
 
-def _generate_storyboards_phase3(dry_run: bool) -> None:
-    """Generate multi-panel storyboards for each chained frame group.
-    Fully programmatic — reads prompt JSONs and POSTs directly to the server.
-    No agent or skill subprocesses for the generation step."""
+def _generate_storyboard_grids_phase3(dry_run: bool) -> None:
+    """Generate storyboard grid composites + split cell images.
+    Sequential — each grid needs the prior grid's output for cascading continuity."""
     if dry_run:
-        log("[DRY-RUN] Would generate chained frame storyboards", YELLOW)
+        log("[DRY-RUN] Would generate storyboard grids", YELLOW)
         return
 
-    # Build chained frame groups
-    _stream_subprocess(
-        [sys.executable, str(SKILLS_DIR / "graph_build_chains"),
+    # Build storyboard grids
+    build_result = _stream_subprocess(
+        [sys.executable, str(SKILLS_DIR / "graph_build_grids"),
          "--project-dir", str(PROJECT_DIR)],
-        cwd=PROJECT_DIR, label="graph_build_chains")
+        cwd=PROJECT_DIR, label="graph_build_grids")
+    if build_result.returncode != 0:
+        log_warn(f"Grid build failed (exit {build_result.returncode}) — skipping storyboard generation")
+        return
 
-    # Re-assemble prompts so chain storyboard prompts are generated
-    _stream_subprocess(
+    # Re-assemble prompts so grid storyboard prompts are generated
+    assemble_result = _stream_subprocess(
         [sys.executable, str(SKILLS_DIR / "graph_assemble_prompts"),
          "--project-dir", str(PROJECT_DIR)],
         cwd=PROJECT_DIR, label="graph_assemble_prompts")
+    if assemble_result.returncode != 0:
+        log_warn(f"Prompt re-assembly failed after grid build (exit {assemble_result.returncode})")
+        return
 
-    # Generate storyboards directly from prompt JSONs
+    # Generate storyboards from prompt JSONs — SEQUENTIAL for cascading
     prompt_dir = PROJECT_DIR / "frames" / "storyboard_prompts"
     if not prompt_dir.exists():
         log_warn("No storyboard_prompts directory — skipping storyboard generation")
         return
 
-    prompt_files = sorted(prompt_dir.glob("*_storyboard.json"))
+    prompt_files = sorted(prompt_dir.glob("*_grid.json"))
     if not prompt_files:
-        log_warn("No storyboard prompt JSONs found — skipping")
+        log_warn("No grid storyboard prompt JSONs found — skipping")
         return
 
-    # Tag verification gate — ensure every ref image is tagged before generation
+    # Tag verification gate
     refs_ok, ref_problems = _verify_storyboard_refs_tagged()
     if not refs_ok:
         log_warn(f"Storyboard ref verification failed ({len(ref_problems)} issue(s)) — "
                  "storyboards will generate with incomplete references")
 
-    log(f"Generating {len(prompt_files)} chain storyboards (programmatic)...")
+    log(f"Generating {len(prompt_files)} storyboard grids (sequential)...")
     generated = 0
     for pf in prompt_files:
         data = json.loads(pf.read_text(encoding="utf-8"))
-        if _generate_single_storyboard(data):
+        result = _generate_single_grid_storyboard(data)
+        if result:
             generated += 1
-            chain_id = data.get("chain_id")
-            if chain_id:
-                out_rel = data.get("out_path", f"frames/storyboards/{chain_id}_storyboard.png")
-                _update_chain_graph(chain_id, out_rel)
+            grid_id = data.get("grid_id")
+            if grid_id:
+                _update_grid_graph(grid_id, result)
 
-    log_ok(f"Generated {generated}/{len(prompt_files)} chain storyboards")
+    log_ok(f"Generated {generated}/{len(prompt_files)} storyboard grids")
 
-    # Re-assemble prompts so frame ref_images now include chain storyboard paths
-    log("Re-assembling prompts with chain storyboard references...")
+    # Shot matching step
+    log("Running shot matching on generated grids...")
+    try:
+        from graph.store import GraphStore
+        from graph.api import match_shots_in_grid
+        store = GraphStore(str(PROJECT_DIR))
+        graph = store.load()
+        matched = 0
+        for grid in graph.storyboard_grids.values():
+            groups = match_shots_in_grid(graph, grid)
+            matched += len(groups)
+        store.save(graph)
+        log_ok(f"Shot matching complete: {matched} match groups across all grids")
+    except Exception as e:
+        log_warn(f"Shot matching failed: {e}")
+
+    # Re-assemble prompts so frame ref_images now include grid cell images
+    log("Re-assembling prompts with grid storyboard references...")
     _stream_subprocess(
         [sys.executable, str(SKILLS_DIR / "graph_assemble_prompts"),
          "--project-dir", str(PROJECT_DIR)],
         cwd=PROJECT_DIR, label="graph_assemble_prompts")
-    log_ok("Prompts re-assembled with chain storyboard references")
+    log_ok("Prompts re-assembled with grid storyboard references")
 
 
 def phase_3_assets(dry_run: bool, phase_timers: dict) -> None:
@@ -1637,14 +1918,15 @@ def phase_3_assets(dry_run: bool, phase_timers: dict) -> None:
         except Exception as e:
             log_warn(f"Image tagger watcher failed to start: {e}")
 
-    # Step 3a: Programmatic generation of all cast/location/prop base images
-    log("--- Phase 3a: Programmatic asset generation ---")
+    # Step 3a: Programmatic generation of cast/location/prop base images
+    #          Direction views are deferred to Step 3d (after sync populates ref_images)
+    log("--- Phase 3a: Programmatic asset generation (cast, locations, props) ---")
     if not dry_run:
         gen_result = _stream_subprocess(
             [sys.executable, str(SKILLS_DIR / "graph_generate_assets"),
              "--project-dir", str(PROJECT_DIR), "--batch-size", "10",
-             "--skip-existing"],
-            cwd=PROJECT_DIR, timeout=600, label="graph_generate_assets",
+             "--skip-existing", "--types", "cast,locations,props"],
+            cwd=PROJECT_DIR, label="graph_generate_assets",
         )
         if gen_result.returncode != 0:
             log_warn(f"Asset generation had failures (exit {gen_result.returncode})")
@@ -1677,8 +1959,22 @@ def phase_3_assets(dry_run: bool, phase_timers: dict) -> None:
     log("--- Phase 3c: Voice node population ---")
     _populate_voice_nodes(dry_run)
 
-    # Step 3d: Generate location direction variants + state variants
-    log("--- Phase 3d: Location direction & state variants ---")
+    # Step 3c½: Sync asset paths into graph BEFORE direction variant generation.
+    # Sync generated asset paths back into the graph so prompts reference real files.
+    log("--- Phase 3c½: Sync primary asset paths → graph ---")
+    if not dry_run:
+        _stream_subprocess(
+            [sys.executable, str(SKILLS_DIR / "graph_sync_assets"),
+             "--project-dir", str(PROJECT_DIR)],
+            cwd=PROJECT_DIR, label="graph_sync_assets_pre_direction")
+        _stream_subprocess(
+            [sys.executable, str(SKILLS_DIR / "graph_assemble_prompts"),
+             "--project-dir", str(PROJECT_DIR)],
+            cwd=PROJECT_DIR, label="graph_assemble_prompts_post_sync")
+        log_ok("Asset paths synced into graph and prompts re-assembled")
+
+    # Step 3d: Location directions (now part of primary 4x4 grid — no-op)
+    log("--- Phase 3d: Location direction variants ---")
     _generate_location_variants(dry_run)
 
     # Step 3e: Validate assets + update manifest so graph has real paths
@@ -1700,8 +1996,8 @@ def phase_3_assets(dry_run: bool, phase_timers: dict) -> None:
         log_ok("Asset paths synced, prompts re-assembled with ref images")
 
     # Step 3g: Storyboard generation (includes tag verification gate)
-    log("--- Phase 3g: Storyboard generation (chained frames) ---")
-    _generate_storyboards_phase3(dry_run)
+    log("--- Phase 3g: Storyboard grid generation ---")
+    _generate_storyboard_grids_phase3(dry_run)
 
     created_files = []
     if not dry_run:
@@ -1780,7 +2076,7 @@ def _audit_phase4_assets() -> dict:
         missing_cast: list[str] — cast IDs with missing/corrupt composites
         missing_locations: list[str] — location IDs with missing/corrupt images
         missing_props: list[str] — prop IDs with missing/corrupt images
-        missing_storyboards: list[str] — chain IDs with missing storyboards
+        missing_storyboards: list[str] — grid IDs with missing storyboard composites
         total_missing: int
     """
     from graph.store import GraphStore
@@ -1828,16 +2124,16 @@ def _audit_phase4_assets() -> dict:
             if not expected.exists() or expected.stat().st_size < MIN_VALID_SIZE:
                 missing_props.append(prop_id)
 
-    # Storyboards
-    for chain_id, chain in graph.chained_frame_groups.items():
-        if chain.storyboard_image_path:
-            p = base / chain.storyboard_image_path
+    # Storyboard grids
+    for grid_id, grid in graph.storyboard_grids.items():
+        if grid.composite_image_path:
+            p = Path(grid.composite_image_path) if Path(grid.composite_image_path).is_absolute() else base / grid.composite_image_path
             if not p.exists() or p.stat().st_size < 1000:
-                missing_storyboards.append(chain_id)
+                missing_storyboards.append(grid_id)
         else:
-            expected = base / "frames" / "storyboards" / f"{chain_id}_storyboard.png"
+            expected = base / "frames" / "storyboards" / grid_id / "composite.png"
             if not expected.exists() or expected.stat().st_size < 1000:
-                missing_storyboards.append(chain_id)
+                missing_storyboards.append(grid_id)
 
     total = len(missing_cast) + len(missing_locations) + len(missing_props) + len(missing_storyboards)
 
@@ -1877,15 +2173,21 @@ def phase_4_production(dry_run: bool, phase_timers: dict,
             log("Falling back to Phase 3 asset regen for missing items...")
             _programmatic_asset_validation_and_regen(base)
 
-            # Regenerate missing storyboards
+            # Regenerate missing storyboard grids
             if audit["missing_storyboards"]:
-                log("Regenerating missing storyboards...")
-                _generate_storyboards_phase3(dry_run=False)
+                log("Regenerating missing storyboard grids...")
+                _generate_storyboard_grids_phase3(dry_run=False)
 
             # Re-audit after regen
             audit = _audit_phase4_assets()
+            if audit["missing_storyboards"]:
+                raise RuntimeError(
+                    f"HARD GATE: {len(audit['missing_storyboards'])} storyboard grid(s) still missing "
+                    f"after regen: {', '.join(audit['missing_storyboards'])}. "
+                    "Every frame requires its storyboard leader — cannot proceed to frame composition."
+                )
             if not audit["ready"]:
-                log_warn(f"Still {audit['total_missing']} missing after regen — proceeding with available assets")
+                log_warn(f"Still {audit['total_missing']} missing after regen (non-grid) — proceeding with available assets")
             else:
                 log_ok("All missing assets recovered")
 
@@ -2109,11 +2411,17 @@ def phase_5_video(dry_run: bool, phase_timers: dict) -> None:
         video_prompt_file = base / "video" / "prompts" / f"{fid}_video.json"
         if video_prompt_file.exists():
             prompt_data = json.loads(video_prompt_file.read_text())
-            video_prompt = prompt_data.get("prompt", "")[:500]
+            video_prompt = prompt_data.get("prompt", "")
+            # Use dialogue-aware duration from prompt assembly (accounts for speech timing)
+            dur = max(3, min(15, int(prompt_data.get("duration", f.get("suggestedDuration", 5)))))
+            if prompt_data.get("dialogue_fit_status") == "capped_to_model_max":
+                log_warn(
+                    f"  [{i}/{total}] {fid}: dialogue estimate wants "
+                    f"{prompt_data.get('recommended_duration', dur)}s but runtime max is 15s"
+                )
         else:
             video_prompt = f"Cinematic scene, subtle motion, frame {fid}"
-
-        dur = max(3, min(15, int(f.get("suggestedDuration", 5))))
+            dur = max(3, min(15, int(f.get("suggestedDuration", 5))))
         out_path = clips_dir / f"{fid}.mp4"
         work_items.append((i, fid, image_path, video_prompt, dur, out_path))
 

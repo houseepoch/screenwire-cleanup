@@ -1,0 +1,5 @@
+Create an image divided into a precise 4x4 grid following the attached reference layout exactly. Clean straight white dividing lines between cells. Equal cell sizes. No text, no labels, no watermarks, no numbers. Each cell is a sequential cinematic frame, photorealistic and self-contained. Fill each cell exactly as described below (left-to-right, top-to-bottom):
+
+[Cell 1] live action, clinical midnight thriller photography with hard edge practicals and cool city spill carving subjects out of shadow. . Nova, at frame_left, standing, eyes scanning, expression carefully neutral, jaw slightly set, looking at distance. camera facing east. the surveillance district skyline blinking beyond the ledge. wide establishing shot
+
+[Cell 2] live action, clinical midnight thriller photography with hard edge practicals and cool city spill carving subjects out of shadow. . Nova, at frame_center, reading the vibrating pager, holding signal pager, eyes steady and focused, jaw set, chin level. camera facing east. the surveillance district skyline blinking beyond the ledge. medium close-up
