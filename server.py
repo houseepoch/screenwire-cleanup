@@ -518,7 +518,7 @@ class KillAgentRequest(BaseModel):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global http_client
-    http_client = httpx.AsyncClient(timeout=httpx.Timeout(300, connect=10))
+    http_client = httpx.AsyncClient(timeout=None)
 
     # Manifest reconciler
     reconciler.load_manifest()
@@ -655,11 +655,35 @@ async def generate_image(req: GenerateImageRequest):
     }
     aspect_ratio = aspect_map.get(req.image_size, "16:9")
 
-    pred_input: dict[str, Any] = {
-        "prompt": req.prompt,
-        "aspect_ratio": aspect_ratio,
-        "disable_safety_checker": True,
+    # p-image max resolution is 1440px. For standard aspect ratios, use custom
+    # width/height to guarantee maximum output size.
+    _PIMAGE_MAX_DIMS: dict[str, tuple[int, int]] = {
+        "9:16": (816, 1440),   # 816/1440 = 0.5667 ≈ 9/16
+        "16:9": (1440, 816),
+        "3:4": (1088, 1440),
+        "4:3": (1440, 1088),
+        "2:3": (960, 1440),
+        "3:2": (1440, 960),
+        "1:1": (1440, 1440),
+        "4:5": (1152, 1440),
+        "5:4": (1440, 1152),
     }
+
+    max_dims = _PIMAGE_MAX_DIMS.get(aspect_ratio)
+    if max_dims:
+        pred_input: dict[str, Any] = {
+            "prompt": req.prompt,
+            "aspect_ratio": "custom",
+            "width": max_dims[0],
+            "height": max_dims[1],
+            "disable_safety_checker": True,
+        }
+    else:
+        pred_input: dict[str, Any] = {
+            "prompt": req.prompt,
+            "aspect_ratio": aspect_ratio,
+            "disable_safety_checker": True,
+        }
     if req.seed is not None:
         pred_input["seed"] = req.seed
 
@@ -705,20 +729,27 @@ async def generate_image(req: GenerateImageRequest):
 IMAGE_MODEL_CHAIN = [
     "google/nano-banana-2",
     "google/nano-banana-pro",
-    "google/nano-banana",
 ]
 
 
 def _adapt_input_for_model(model: str, base_input: dict[str, Any]) -> dict[str, Any]:
-    """Adapt prediction input params for each model's supported schema."""
+    """Adapt prediction input params for each model's supported schema.
+
+    nano-banana-2:  prompt, image_input, aspect_ratio, resolution, google_search, image_search, output_format
+    nano-banana-pro: prompt, image_input, aspect_ratio, resolution, safety_filter_level, allow_fallback_model, output_format
+    nano-banana:     prompt, image_input, aspect_ratio, output_format
+    """
     inp = dict(base_input)
-    if model == "google/nano-banana-pro":
-        # Rename grounding params: google_search → google_search_grounding, image_search → google_image_search
-        if inp.pop("google_search", None):
-            inp["google_search_grounding"] = True
-        if inp.pop("image_search", None):
-            inp["google_image_search"] = True
-        inp.setdefault("safety_tolerance", 4)
+    if model == "google/nano-banana-2":
+        # nano-banana-2 supports google_search + image_search natively
+        # Strip params it doesn't know about
+        inp.pop("safety_filter_level", None)
+        inp.pop("allow_fallback_model", None)
+    elif model == "google/nano-banana-pro":
+        # Pro has safety_filter_level but NOT google_search/image_search
+        inp.pop("google_search", None)
+        inp.pop("image_search", None)
+        inp.setdefault("safety_filter_level", "block_only_high")
     elif model == "google/nano-banana":
         # Base model only supports: prompt, image_input, aspect_ratio, output_format
         allowed = {"prompt", "image_input", "aspect_ratio", "output_format"}
@@ -737,37 +768,77 @@ async def _generate_with_fallback(
 ) -> dict:
     """Try each model in IMAGE_MODEL_CHAIN until one succeeds."""
     import time as _time
+    max_retries = 3
     last_error = None
+    last_error_status: int | None = None
 
     for model in IMAGE_MODEL_CHAIN:
         adapted = _adapt_input_for_model(model, pred_input)
-        try:
-            pred_data = await _replicate_predict(model, adapted, headers)
-        except httpx.HTTPStatusError as exc:
-            log("Fallback", f"{model} HTTP error: {exc.response.status_code}")
-            _log_composition(
-                output_path=str(output), prompt=prompt, model=model,
-                prediction_id="", reference_images=reference_images, success=False,
-                aspect_ratio=aspect_ratio, error=str(exc),
-                duration_ms=int((_time.monotonic() - t0) * 1000),
-            )
-            last_error = exc
-            continue
+        succeeded = False
+        for attempt in range(1, max_retries + 1):
+            try:
+                log("Fallback", f"Trying {model}..." + (f" (attempt {attempt})" if attempt > 1 else ""))
+                pred_data = await _replicate_predict(model, adapted, headers)
+            except httpx.HTTPStatusError as exc:
+                log("Fallback", f"{model} HTTP error: {exc.response.status_code}")
+                _log_composition(
+                    output_path=str(output), prompt=prompt, model=model,
+                    prediction_id="", reference_images=reference_images, success=False,
+                    aspect_ratio=aspect_ratio, error=str(exc),
+                    duration_ms=int((_time.monotonic() - t0) * 1000),
+                )
+                last_error = exc
+                last_error_status = exc.response.status_code
+                if exc.response.status_code in (502, 503, 429) and attempt < max_retries:
+                    await asyncio.sleep(5 * attempt)
+                    continue
+                break
 
-        prediction_id = pred_data.get("id", "")
-        if pred_data.get("status") != "succeeded":
-            pred_data = await _poll_replicate_prediction(prediction_id, headers)
+            prediction_id = pred_data.get("id", "")
+            if pred_data.get("status") != "succeeded":
+                pred_data = await _poll_replicate_prediction(prediction_id, headers)
 
-        if pred_data.get("status") != "succeeded":
-            error_detail = _build_prediction_error(pred_data, prompt)
-            log("Fallback", f"{model} failed: {error_detail.get('failure_type', 'UNKNOWN')} — trying next model")
-            _log_composition(
-                output_path=str(output), prompt=prompt, model=model,
-                prediction_id=prediction_id, reference_images=reference_images, success=False,
-                aspect_ratio=aspect_ratio, error=error_detail.get("failure_type", "UNKNOWN"),
-                duration_ms=int((_time.monotonic() - t0) * 1000),
-            )
-            last_error = error_detail
+            if pred_data.get("status") != "succeeded":
+                error_detail = _build_prediction_error(pred_data, prompt)
+                err_type = error_detail.get("failure_type", "UNKNOWN")
+                err_msg = str(pred_data.get("error", ""))
+                log("Fallback", f"{model} failed: {err_type}")
+                _log_composition(
+                    output_path=str(output), prompt=prompt, model=model,
+                    prediction_id=prediction_id, reference_images=reference_images, success=False,
+                    aspect_ratio=aspect_ratio, error=err_type,
+                    duration_ms=int((_time.monotonic() - t0) * 1000),
+                )
+                last_error = error_detail
+                last_error_status = 503 if error_detail.get("failure_type") == "UPSTREAM_TRANSIENT" else 502
+                if _is_retryable_prediction_failure(error_detail, err_msg) and attempt < max_retries:
+                    await asyncio.sleep(5 * attempt)
+                    continue
+                break
+            succeeded = True
+            break
+
+        if not succeeded and _can_use_pro_capacity_rescue(model, adapted, last_error if isinstance(last_error, dict) else {}):
+            rescue_input = _build_pro_capacity_rescue_input(adapted)
+            log("Fallback", f"{model} transient 4K failure -> retrying with 2K + allow_fallback_model=true")
+            try:
+                pred_data = await _replicate_predict(model, rescue_input, headers)
+                prediction_id = pred_data.get("id", "")
+                if pred_data.get("status") != "succeeded":
+                    pred_data = await _poll_replicate_prediction(prediction_id, headers)
+                if pred_data.get("status") == "succeeded":
+                    succeeded = True
+                    log("Fallback", f"{model} rescue path succeeded")
+                else:
+                    error_detail = _build_prediction_error(pred_data, prompt)
+                    last_error = error_detail
+                    last_error_status = 503 if error_detail.get("failure_type") == "UPSTREAM_TRANSIENT" else 502
+                    log("Fallback", f"{model} rescue path failed: {error_detail.get('failure_type', 'UNKNOWN')}")
+            except httpx.HTTPStatusError as exc:
+                last_error = exc
+                last_error_status = 503 if exc.response.status_code in (429, 502, 503) else exc.response.status_code
+                log("Fallback", f"{model} rescue HTTP error: {exc.response.status_code}")
+        if not succeeded:
             continue
 
         # Success
@@ -790,8 +861,21 @@ async def _generate_with_fallback(
 
     # All models exhausted
     if isinstance(last_error, httpx.HTTPStatusError):
+        if last_error.response.status_code in (429, 502, 503):
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": "Replicate image service is temporarily unavailable",
+                    "failure_type": "UPSTREAM_TRANSIENT",
+                    "is_retryable": True,
+                    "upstream_status": last_error.response.status_code,
+                },
+            )
         raise HTTPException(status_code=last_error.response.status_code, detail=last_error.response.text)
-    raise HTTPException(status_code=502, detail=last_error if isinstance(last_error, dict) else {"error": "All models failed"})
+    raise HTTPException(
+        status_code=last_error_status or 502,
+        detail=last_error if isinstance(last_error, dict) else {"error": "All models failed"},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -830,7 +914,7 @@ async def generate_frame(req: GenerateFrameRequest):
     pred_input: dict[str, Any] = {
         "prompt": req.prompt,
         "aspect_ratio": aspect_ratio,
-        "resolution": "1K",
+        "resolution": "4K",
         "output_format": req.output_format if req.output_format in ("jpg", "png") else "png",
     }
 
@@ -1071,7 +1155,7 @@ async def edit_image(req: EditImageRequest):
         "prompt": req.prompt,
         "image_input": [source_uri],
         "aspect_ratio": aspect_ratio,
-        "resolution": "1K",
+        "resolution": "4K",
         "output_format": req.output_format if req.output_format in ("jpg", "png") else "png",
     }
     if req.seed is not None:
@@ -1130,7 +1214,7 @@ async def fresh_generation(req: FreshGenerationRequest):
     pred_input: dict[str, Any] = {
         "prompt": req.prompt,
         "aspect_ratio": aspect_ratio,
-        "resolution": "1K",
+        "resolution": "4K",
         "output_format": req.output_format if req.output_format in ("jpg", "png") else "png",
     }
     if req.seed is not None:
@@ -1309,6 +1393,116 @@ async def api_upload_to_replicate(req: UploadToReplicateRequest):
     return {"url": url}
 
 
+# ---------------------------------------------------------------------------
+# Layer 1: POST /internal/refine-video-prompts
+# ---------------------------------------------------------------------------
+
+class RefineVideoPromptsRequest(BaseModel):
+    frame_ids: Optional[list[str]] = None  # None = all frames
+    concurrency: int = 3
+
+
+@app.post("/internal/refine-video-prompts")
+async def api_refine_video_prompts(req: RefineVideoPromptsRequest):
+    """Run Grok vision refinement on video prompts.
+
+    Reads each video prompt JSON, sends the frame image + graph prompt
+    to grok-2-vision, and writes back a refined prompt grounded in what
+    the frame actually shows.
+    """
+    from graph.frame_prompt_refiner import refine_video_prompt, refine_all_video_prompts
+
+    if req.frame_ids:
+        # Refine specific frames
+        import json as _json
+        prompt_dir = PROJECT_DIR / "video" / "prompts"
+        results = {"refined": 0, "skipped": 0, "failed": 0}
+        for fid in req.frame_ids:
+            jp = prompt_dir / f"{fid}_video.json"
+            if not jp.exists():
+                results["skipped"] += 1
+                continue
+            data = _json.loads(jp.read_text(encoding="utf-8"))
+            if data.get("refined_by") == "grok-vision":
+                results["skipped"] += 1
+                continue
+            refined = await refine_video_prompt(data, PROJECT_DIR)
+            jp.write_text(
+                _json.dumps(refined, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            if refined.get("refined_by") == "grok-vision":
+                results["refined"] += 1
+            elif "failed" in refined.get("refined_by", ""):
+                results["failed"] += 1
+            else:
+                results["skipped"] += 1
+        return results
+    else:
+        return await refine_all_video_prompts(
+            PROJECT_DIR, concurrency=req.concurrency
+        )
+
+
+# ---------------------------------------------------------------------------
+# Layer 1: POST /internal/correct-frames
+# ---------------------------------------------------------------------------
+
+class CorrectFramesRequest(BaseModel):
+    frame_ids: Optional[list[str]] = None  # None = all frames
+    concurrency: int = 5
+
+
+@app.post("/internal/correct-frames")
+async def api_correct_frames(req: CorrectFramesRequest):
+    """Run Grok vision review + nano-banana-2 correction on frame cells.
+
+    Reviews each extracted grid cell against its expected composition,
+    then edits via nano-banana-2 if correction is needed.
+    """
+    from graph.frame_correction import correct_frame, correct_all_frames
+
+    if req.frame_ids:
+        from graph.store import GraphStore
+        from graph.prompt_assembler import resolve_ref_images, assemble_image_prompt
+        from graph.api import get_frame_cell_image
+
+        store = GraphStore(PROJECT_DIR / "graph")
+        graph = store.load()
+        results = {"passed": 0, "corrected": 0, "failed": 0, "skipped": 0}
+
+        for fid in req.frame_ids:
+            cell_rel = get_frame_cell_image(graph, fid)
+            if not cell_rel:
+                results["skipped"] += 1
+                continue
+            cell_path = PROJECT_DIR / cell_rel
+            if not cell_path.exists():
+                results["skipped"] += 1
+                continue
+
+            try:
+                img_data = assemble_image_prompt(graph, fid, project_dir=PROJECT_DIR)
+                image_prompt = img_data.get("prompt", "")
+            except Exception:
+                image_prompt = ""
+
+            ref_rels = resolve_ref_images(graph, fid, project_dir=PROJECT_DIR)
+            ref_paths = [PROJECT_DIR / r for r in ref_rels if (PROJECT_DIR / r).exists()]
+
+            r = await correct_frame(fid, cell_path, image_prompt, ref_paths, PROJECT_DIR)
+            if r["action"] == "pass":
+                results["passed"] += 1
+            elif r["action"] == "corrected":
+                results["corrected"] += 1
+            else:
+                results["failed"] += 1
+
+        return results
+    else:
+        return await correct_all_frames(
+            PROJECT_DIR, concurrency=req.concurrency
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1319,27 +1513,50 @@ async def api_upload_to_replicate(req: UploadToReplicateRequest):
 _REPLICATE_ERROR_CODES = {
     "E005": "NSFW/safety filter triggered — the prompt or generated output was flagged as sensitive content",
     "E004": "Model timeout — prediction took too long",
-    "E003": "Model error — internal model failure",
+    "E003": "Service unavailable or model at capacity — retry later",
+    "PA": "Prediction interrupted before execution — retry later",
 }
+
+
+def _extract_replicate_error_code(error_msg: str) -> str:
+    """Extract Replicate's symbolic error code from an error message."""
+    error_msg = error_msg or ""
+    import re as _re
+
+    code_match = _re.search(r"\((E\d+)\)", error_msg)
+    if code_match:
+        return code_match.group(1)
+
+    pa_match = _re.search(r"\(code:\s*([A-Z]+)\)", error_msg)
+    if pa_match:
+        return pa_match.group(1)
+
+    return "UNKNOWN"
 
 
 def _classify_replicate_error(error_msg: str, logs: str) -> dict:
     """Parse Replicate error message and logs to classify the failure type."""
     error_msg = error_msg or ""
     logs = logs or ""
-
-    # Extract error code (E005, E004, etc.)
-    import re as _re
-    code_match = _re.search(r'\(E(\d+)\)', error_msg)
-    error_code = f"E{code_match.group(1)}" if code_match else "UNKNOWN"
+    error_code = _extract_replicate_error_code(error_msg)
 
     # Detect specific failure types
     is_safety = ("NSFW" in logs or "flagged as sensitive" in error_msg or error_code == "E005"
                  or "Content Blocked" in error_msg or "IMAGE_SAFETY" in error_msg
                  or "blockReason" in error_msg)
     is_timeout = "timeout" in error_msg.lower() or error_code == "E004"
+    is_capacity = ("high demand" in error_msg.lower() or "at capacity" in error_msg.lower()
+                   or error_code in {"E003", "PA"})
+    is_retryable_transient = ("please retry" in error_msg.lower() or is_capacity)
 
-    failure_type = "SAFETY_FILTER" if is_safety else ("TIMEOUT" if is_timeout else "MODEL_ERROR")
+    if is_safety:
+        failure_type = "SAFETY_FILTER"
+    elif is_timeout:
+        failure_type = "TIMEOUT"
+    elif is_retryable_transient:
+        failure_type = "UPSTREAM_TRANSIENT"
+    else:
+        failure_type = "MODEL_ERROR"
 
     # Build trigger words list for safety failures
     trigger_hints = []
@@ -1359,9 +1576,32 @@ def _classify_replicate_error(error_msg: str, logs: str) -> dict:
         "failure_type": failure_type,
         "error_code": error_code,
         "description": _REPLICATE_ERROR_CODES.get(error_code, error_msg),
-        "is_retryable": is_safety,  # safety failures can be retried with rephrased prompt
+        "is_retryable": is_safety or is_retryable_transient,
         "rephrase_hints": trigger_hints,
     }
+
+
+def _is_retryable_prediction_failure(error_detail: dict, error_msg: str) -> bool:
+    """Return True when Replicate explicitly indicates the prediction should be retried."""
+    return bool(error_detail.get("is_retryable")) or "please retry" in (error_msg or "").lower()
+
+
+def _can_use_pro_capacity_rescue(model: str, pred_input: dict[str, Any], error_detail: dict) -> bool:
+    """Use Replicate Pro's fallback model path only for transient 4K failures."""
+    return (
+        model == "google/nano-banana-pro"
+        and pred_input.get("resolution") == "4K"
+        and error_detail.get("failure_type") == "UPSTREAM_TRANSIENT"
+    )
+
+
+def _build_pro_capacity_rescue_input(pred_input: dict[str, Any]) -> dict[str, Any]:
+    """Downshift a 4K Pro request so Replicate can use its fallback capacity path."""
+    rescue = dict(pred_input)
+    rescue["resolution"] = "2K"
+    rescue["allow_fallback_model"] = True
+    rescue.setdefault("safety_filter_level", "block_only_high")
+    return rescue
 
 
 def _log_composition(

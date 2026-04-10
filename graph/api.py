@@ -1259,7 +1259,7 @@ def propagate_location_state(
 # STORYBOARD GRID BUILDING
 # ═══════════════════════════════════════════════════════════════════════════════
 
-MAX_GRID_SIZE = 16
+MAX_GRID_SIZE = 9
 
 
 def is_large_shift(graph: NarrativeGraph, prev_frame_id: str, curr_frame_id: str) -> bool:
@@ -1303,19 +1303,19 @@ def is_large_shift(graph: NarrativeGraph, prev_frame_id: str, curr_frame_id: str
 def _grid_layout(n: int) -> tuple[int, int]:
     """Return (rows, cols) for a grid holding n frames.
 
-    Always 4x4 — every storyboard grid is a 16-cell 1:1 square.
-    Frames that don't fill all 16 cells leave trailing cells empty;
+    Always 3x3 — every storyboard grid is a 9-cell 16:9 widescreen image.
+    Frames that don't fill all 9 cells leave trailing cells empty;
     the grid generator handles padding automatically.
     """
-    return 4, 4
+    return 3, 3
 
 
 def build_storyboard_grids(graph: NarrativeGraph) -> list[StoryboardGrid]:
-    """Partition frame_order into sequential 4x4 storyboard grids of up to 16 frames.
+    """Partition frame_order into sequential 3x3 storyboard grids of up to 9 frames.
 
     Packs frames sequentially across scene boundaries — every grid is always
-    4x4 (16 cells). Grids with fewer than 16 frames leave trailing cells empty.
-    Only splits when reaching MAX_GRID_SIZE (16).
+    3x3 (9 cells). Grids with fewer than 9 frames leave trailing cells empty.
+    Only splits when reaching MAX_GRID_SIZE (9).
 
     Clears existing grids and rebuilds from scratch.
     Returns the list of grids created.
@@ -1407,23 +1407,16 @@ def build_storyboard_grids(graph: NarrativeGraph) -> list[StoryboardGrid]:
 def get_frame_cell_image(graph: NarrativeGraph, frame_id: str) -> str | None:
     """Resolve the grid cell image path for a given frame.
 
-    Finds which grid the frame belongs to, looks up its cell index,
-    and returns the path to the split cell image (frame_NNN.png).
+    Finds which grid the frame belongs to and returns the path to the
+    split cell image. Checks for frame-ID-named files first ({frame_id}.png),
+    then falls back to legacy indexed naming (frame_NNN.png).
     """
     for grid in graph.storyboard_grids.values():
         if frame_id in grid.frame_ids:
             if not grid.cell_image_dir:
                 return None
-            # Find cell index from cell_map
-            for idx, fid in grid.cell_map.items():
-                if fid == frame_id:
-                    return f"{grid.cell_image_dir}/frame_{idx:03d}.png"
-            # Fallback: use position in frame_ids
-            try:
-                idx = grid.frame_ids.index(frame_id)
-                return f"{grid.cell_image_dir}/frame_{idx:03d}.png"
-            except ValueError:
-                return None
+            # Return frame-ID-named cell path (new naming convention)
+            return f"{grid.cell_image_dir}/{frame_id}.png"
     return None
 
 

@@ -1753,9 +1753,11 @@ def _generate_single_grid_storyboard(prompt_data: dict) -> dict | None:
     import asyncio as _asyncio
 
     grid_id = prompt_data.get("grid_id", "unknown")
-    grid_layout = prompt_data.get("grid", "4x4")
+    grid_layout = prompt_data.get("grid", "3x3")
     cell_prompts = prompt_data.get("cell_prompts", [])
     scene = prompt_data.get("scene", "")
+    frame_ids = prompt_data.get("frame_ids", [])
+    style_prefix = prompt_data.get("style_prefix", "")
     output_dir = PROJECT_DIR / prompt_data.get("output_dir", f"frames/storyboards/{grid_id}")
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1766,7 +1768,10 @@ def _generate_single_grid_storyboard(prompt_data: dict) -> dict | None:
         log(f"  {grid_id}: already exists ({composite.stat().st_size:,}B) — skipping")
         # Return a result-like dict so caller can still update the graph
         frames_dir = output_dir / "frames"
-        frame_files = sorted(frames_dir.glob("frame_*.png")) if frames_dir.exists() else []
+        # Check for frame-ID-named cells first, fall back to legacy frame_NNN.png
+        frame_files = sorted(frames_dir.glob("f_*.png")) if frames_dir.exists() else []
+        if not frame_files:
+            frame_files = sorted(frames_dir.glob("frame_*.png")) if frames_dir.exists() else []
         return {
             "composite": str(composite),
             "frames": [str(f) for f in frame_files],
@@ -1794,6 +1799,8 @@ def _generate_single_grid_storyboard(prompt_data: dict) -> dict | None:
             refs=ref_paths,
             cell_prompts=cell_prompts,
             scene=scene,
+            frame_ids=frame_ids,
+            style_prefix=style_prefix,
         ))
         log_ok(f"  {grid_id}: storyboard generated → {result.get('composite', '')}")
         return result
@@ -1900,6 +1907,7 @@ def _generate_storyboard_grids_phase3(dry_run: bool) -> None:
          "--project-dir", str(PROJECT_DIR)],
         cwd=PROJECT_DIR, label="graph_assemble_prompts")
     log_ok("Prompts re-assembled with grid storyboard references")
+
 
 
 def phase_3_assets(dry_run: bool, phase_timers: dict) -> None:
@@ -2033,39 +2041,62 @@ def phase_3_assets(dry_run: bool, phase_timers: dict) -> None:
     log_ok(f"Phase 3 complete in {timer.elapsed_str()}")
 
 
-def _generate_frame(prompt_json: Path, dry_run: bool) -> subprocess.CompletedProcess | None:
-    """Generate a single composed frame from its prompt JSON. No agent needed."""
-    data = json.loads(prompt_json.read_text())
-    frame_id = data["frame_id"]
-    out_path = data.get("out_path", f"frames/composed/{frame_id}_gen.png")
-    out_abs = PROJECT_DIR / out_path
+def _promote_cell_images(dry_run: bool) -> tuple[int, int, int]:
+    """Promote storyboard grid cell images to frames/composed/.
 
-    # Skip if already generated
-    if out_abs.exists() and out_abs.stat().st_size > 1000:
-        log(f"  {frame_id}: already exists ({out_abs.stat().st_size:,}B) — skipping")
-        return None
+    Instead of generating each frame individually (which causes drift),
+    we use the already-split cell images from nano banana's coherent
+    storyboard grids. Each cell is copied to frames/composed/{frame_id}_gen.png.
 
-    ref_args = ""
-    if data.get("ref_images"):
-        ref_args = ",".join(str(r) for r in data["ref_images"])
+    Returns (promoted, skipped, failed) counts.
+    """
+    import shutil
+    from graph.store import GraphStore
+    from graph.api import get_frame_cell_image
 
-    cmd = [
-        sys.executable, str(SKILLS_DIR / "sw_generate_frame"),
-        "--prompt", data["prompt"],
-        "--out", out_path,
-        "--size", data.get("size", "landscape_16_9"),
-    ]
-    if ref_args:
-        cmd += ["--ref-images", ref_args]
+    store = GraphStore(str(PROJECT_DIR))
+    graph = store.load()
 
-    if dry_run:
-        log(f"  [DRY-RUN] Would generate {frame_id}", YELLOW)
-        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+    composed_dir = PROJECT_DIR / "frames" / "composed"
+    composed_dir.mkdir(parents=True, exist_ok=True)
 
-    return _stream_subprocess(
-        cmd, cwd=PROJECT_DIR, timeout=None, label=f"frame_{frame_id}",
-        env={**os.environ, "PROJECT_DIR": str(PROJECT_DIR), "SKILLS_DIR": str(SKILLS_DIR)},
-    )
+    promoted = 0
+    skipped = 0
+    failed = 0
+    total = len(graph.frame_order)
+
+    for i, frame_id in enumerate(graph.frame_order, 1):
+        out_path = composed_dir / f"{frame_id}_gen.png"
+
+        # Skip if already promoted
+        if out_path.exists() and out_path.stat().st_size > 1000:
+            log(f"  [{i}/{total}] {frame_id}: already exists ({out_path.stat().st_size:,}B) — skipping")
+            skipped += 1
+            continue
+
+        # Resolve cell image from storyboard grid
+        cell_rel = get_frame_cell_image(graph, frame_id)
+        if not cell_rel:
+            log_err(f"  [{i}/{total}] {frame_id}: no grid cell mapping found")
+            failed += 1
+            continue
+
+        cell_path = PROJECT_DIR / cell_rel if not Path(cell_rel).is_absolute() else Path(cell_rel)
+        if not cell_path.exists() or cell_path.stat().st_size < 1000:
+            log_err(f"  [{i}/{total}] {frame_id}: cell image missing or corrupt: {cell_rel}")
+            failed += 1
+            continue
+
+        if dry_run:
+            log(f"  [{i}/{total}] [DRY-RUN] Would promote {frame_id} ← {cell_rel}", YELLOW)
+            promoted += 1
+            continue
+
+        shutil.copy2(cell_path, out_path)
+        log(f"  [{i}/{total}] {frame_id}: promoted from grid cell ({out_path.stat().st_size:,}B)")
+        promoted += 1
+
+    return promoted, skipped, failed
 
 
 def _audit_phase4_assets() -> dict:
@@ -2149,17 +2180,31 @@ def _audit_phase4_assets() -> dict:
 
 def phase_4_production(dry_run: bool, phase_timers: dict,
                        skip_tts: bool = False) -> None:
-    """Phase 4 -- Programmatic frame composition from assembled prompts.
-    No agents — calls sw_generate_frame directly per frame."""
-    log_header("PHASE 4 -- Frame Composition (Programmatic)")
+    """Phase 4 -- Promote storyboard grid cells to composed frames.
+
+    No separate frame generation — uses the already-split cell images from
+    nano banana's coherent storyboard grids (Phase 3). This eliminates drift
+    that occurs when frames are generated individually."""
+    log_header("PHASE 4 -- Frame Promotion from Storyboard Cells")
     timer = Timer()
     phase_timers["phase_4"] = timer
     base = PROJECT_DIR
 
-    # ── Asset readiness gate — fall back to Phase 3 regen if anything missing ──
+    # ── Asset readiness gate — storyboard grids must exist ──
     if not dry_run:
+        from graph.store import GraphStore
+        _store = GraphStore(str(PROJECT_DIR))
+        _graph = _store.load()
+
+        # If grids haven't been built yet (or were cleared), rebuild from scratch
+        if not _graph.storyboard_grids or not _graph.seeded_domains.get("storyboard_grids"):
+            log_warn(f"Phase 4: no storyboard grids in graph — rebuilding")
+            _generate_storyboard_grids_phase3(dry_run=False)
+
         audit = _audit_phase4_assets()
-        if not audit["ready"]:
+
+        # Regen missing cast/location/prop assets
+        if audit["missing_cast"] or audit["missing_locations"] or audit["missing_props"]:
             log_warn(f"Phase 4 asset audit: {audit['total_missing']} missing asset(s)")
             if audit["missing_cast"]:
                 log_warn(f"  Cast: {', '.join(audit['missing_cast'])}")
@@ -2167,100 +2212,54 @@ def phase_4_production(dry_run: bool, phase_timers: dict,
                 log_warn(f"  Locations: {', '.join(audit['missing_locations'])}")
             if audit["missing_props"]:
                 log_warn(f"  Props: {', '.join(audit['missing_props'])}")
-            if audit["missing_storyboards"]:
-                log_warn(f"  Storyboards: {', '.join(audit['missing_storyboards'])}")
-
             log("Falling back to Phase 3 asset regen for missing items...")
             _programmatic_asset_validation_and_regen(base)
 
-            # Regenerate missing storyboard grids
-            if audit["missing_storyboards"]:
-                log("Regenerating missing storyboard grids...")
-                _generate_storyboard_grids_phase3(dry_run=False)
+        # Regen missing storyboard grids
+        if audit["missing_storyboards"]:
+            log_warn(f"Phase 4: {len(audit['missing_storyboards'])} storyboard grid(s) missing")
+            log_warn(f"  Storyboards: {', '.join(audit['missing_storyboards'])}")
 
-            # Re-audit after regen
+            log("Regenerating missing storyboard grids...")
+            _generate_storyboard_grids_phase3(dry_run=False)
+
             audit = _audit_phase4_assets()
             if audit["missing_storyboards"]:
                 raise RuntimeError(
                     f"HARD GATE: {len(audit['missing_storyboards'])} storyboard grid(s) still missing "
                     f"after regen: {', '.join(audit['missing_storyboards'])}. "
-                    "Every frame requires its storyboard leader — cannot proceed to frame composition."
+                    "Every frame requires its storyboard cell — cannot proceed."
                 )
-            if not audit["ready"]:
-                log_warn(f"Still {audit['total_missing']} missing after regen (non-grid) — proceeding with available assets")
-            else:
-                log_ok("All missing assets recovered")
 
-    # Ensure graph has latest asset paths and prompts include ref_images
-    log("Syncing asset paths and re-assembling prompts...")
-    if not dry_run:
-        _stream_subprocess(
-            [sys.executable, str(SKILLS_DIR / "graph_sync_assets"),
-             "--project-dir", str(PROJECT_DIR)],
-            cwd=PROJECT_DIR, label="graph_sync_assets")
-        _stream_subprocess(
-            [sys.executable, str(SKILLS_DIR / "graph_assemble_prompts"),
-             "--project-dir", str(PROJECT_DIR)],
-            cwd=PROJECT_DIR, label="graph_assemble_prompts")
+    # ── Grok vision frame correction — review + edit cells before promotion
+    if not dry_run and os.getenv("XAI_API_KEY"):
+        log("--- Phase 4a: Grok vision frame correction ---")
+        try:
+            import asyncio as _aio
+            from graph.frame_correction import correct_all_frames
+            correction_result = _aio.run(
+                correct_all_frames(PROJECT_DIR, concurrency=5)
+            )
+            log_ok(f"Frame correction: {correction_result.get('passed', 0)} passed, "
+                   f"{correction_result.get('corrected', 0)} corrected, "
+                   f"{correction_result.get('failed', 0)} failed, "
+                   f"{correction_result.get('skipped', 0)} skipped")
+        except Exception as e:
+            log_warn(f"Frame correction failed: {e} — proceeding with uncorrected cells")
+    elif not dry_run:
+        log_warn("Skipping frame correction (XAI_API_KEY not set)")
 
-    prompts_dir = base / "frames" / "prompts"
-    prompt_files = sorted(prompts_dir.glob("*_image.json"))
+    # Promote cell images → frames/composed/
+    log("Promoting storyboard grid cells to composed frames...")
+    promoted, skipped, failed = _promote_cell_images(dry_run)
 
-    if not prompt_files:
-        log_warn("No frame prompt files found in frames/prompts/ — nothing to compose")
-        advance_phase(4, 5, dry_run)
-        return
-
-    total = len(prompt_files)
-    log(f"Composing {total} frames from assembled prompts...")
-
-    generated = 0
-    skipped = 0
-    failed = 0
-
-    FRAME_CONCURRENCY = 10
-
-    def _gen_one(item: tuple[int, Path]) -> tuple[str, int]:
-        """Returns (frame_id, status) where status: 0=ok, 1=fail, 2=skip."""
-        i, pf = item
-        frame_id = pf.stem.replace("_image", "")
-        log(f"[{i}/{total}] {frame_id}")
-        result = _generate_frame(pf, dry_run)
-        if result is None:
-            return frame_id, 2
-        return frame_id, 0 if result.returncode == 0 else 1
-
-    work_items = list(enumerate(prompt_files, 1))
-
-    if dry_run:
-        for item in work_items:
-            fid, status = _gen_one(item)
-            if status == 2:
-                skipped += 1
-            elif status == 0:
-                generated += 1
-            else:
-                failed += 1
-    else:
-        with ThreadPoolExecutor(max_workers=FRAME_CONCURRENCY) as pool:
-            futures = {pool.submit(_gen_one, item): item for item in work_items}
-            for future in as_completed(futures):
-                fid, status = future.result()
-                if status == 0:
-                    generated += 1
-                elif status == 2:
-                    skipped += 1
-                else:
-                    failed += 1
-                    log_err(f"  {fid} failed")
-
-    log_ok(f"Frame composition done: {generated} generated, {skipped} skipped, {failed} failed")
+    log_ok(f"Frame promotion done: {promoted} promoted, {skipped} skipped, {failed} failed")
 
     if not dry_run:
         log("Files created by Phase 4:")
         list_dir_files(base / "frames" / "composed")
         created_files = collect_files_in(base / "frames" / "composed")
-        save_phase_report(4, timer, "phase_4_programmatic", None, created_files)
+        save_phase_report(4, timer, "phase_4_cell_promotion", None, created_files)
 
         if not run_quality_gate(4, base):
             log_warn("Phase 4 quality gate has warnings — proceeding")
@@ -2271,77 +2270,11 @@ def phase_4_production(dry_run: bool, phase_timers: dict,
 
 def phase_4_production_parallel(dry_run: bool, phase_timers: dict,
                                  num_workers: int = 10) -> None:
-    """Phase 4 -- Parallel programmatic frame composition.
-    Splits frames into batches and generates in parallel threads."""
-    log_header("PHASE 4 -- Frame Composition (Parallel)")
-    timer = Timer()
-    phase_timers["phase_4"] = timer
-    base = PROJECT_DIR
+    """Phase 4 -- Promote storyboard grid cells to composed frames (parallel variant).
 
-    # Ensure graph has latest asset paths and prompts include ref_images
-    log("Syncing asset paths and re-assembling prompts...")
-    if not dry_run:
-        _stream_subprocess(
-            [sys.executable, str(SKILLS_DIR / "graph_sync_assets"),
-             "--project-dir", str(PROJECT_DIR)],
-            cwd=PROJECT_DIR, label="graph_sync_assets")
-        _stream_subprocess(
-            [sys.executable, str(SKILLS_DIR / "graph_assemble_prompts"),
-             "--project-dir", str(PROJECT_DIR)],
-            cwd=PROJECT_DIR, label="graph_assemble_prompts")
-
-    prompts_dir = base / "frames" / "prompts"
-    prompt_files = sorted(prompts_dir.glob("*_image.json"))
-    total = len(prompt_files)
-
-    if total == 0:
-        log_warn("No frame prompt files found — nothing to compose")
-        advance_phase(4, 5, dry_run)
-        return
-
-    actual_workers = min(num_workers, total)
-    log(f"Composing {total} frames with {actual_workers} parallel workers...")
-
-    generated = 0
-    skipped = 0
-    failed = 0
-
-    def gen_one(pf: Path) -> tuple[str, int]:
-        """Returns (frame_id, status) where status: 0=ok, 1=fail, 2=skip."""
-        result = _generate_frame(pf, dry_run)
-        fid = pf.stem.replace("_image", "")
-        if result is None:
-            return fid, 2
-        return fid, 0 if result.returncode == 0 else 1
-
-    if dry_run:
-        for pf in prompt_files:
-            gen_one(pf)
-    else:
-        with ThreadPoolExecutor(max_workers=actual_workers) as executor:
-            futures = {executor.submit(gen_one, pf): pf for pf in prompt_files}
-            for future in as_completed(futures):
-                fid, status = future.result()
-                if status == 0:
-                    generated += 1
-                elif status == 2:
-                    skipped += 1
-                else:
-                    failed += 1
-
-    log_ok(f"Parallel composition done: {generated} generated, {skipped} skipped, {failed} failed")
-
-    if not dry_run:
-        log("Files created by Phase 4:")
-        list_dir_files(base / "frames" / "composed")
-        created_files = collect_files_in(base / "frames" / "composed")
-        save_phase_report(4, timer, "phase_4_parallel", None, created_files)
-
-        if not run_quality_gate(4, base):
-            log_warn("Phase 4 quality gate has warnings — proceeding")
-
-    advance_phase(4, 5, dry_run)
-    log_ok(f"Phase 4 (parallel) complete in {timer.elapsed_str()}")
+    Delegates to the same cell promotion logic as phase_4_production.
+    The num_workers param is kept for API compat but not used (promotion is fast I/O)."""
+    phase_4_production(dry_run, phase_timers)
 
 
 def _generate_video_clip(frame_id: str, image_path: Path, prompt: str,
@@ -2371,12 +2304,19 @@ def _generate_video_clip(frame_id: str, image_path: Path, prompt: str,
 
 
 def phase_5_video(dry_run: bool, phase_timers: dict) -> None:
-    """Phase 5 -- Programmatic video clip generation from composed frames.
-    No agents — calls sw_generate_video directly per frame."""
-    log_header("PHASE 5 -- Video Generation (Programmatic)")
+    """Phase 5 -- Pipelined video generation: Grok vision refine → generate per frame.
+
+    Each frame's video prompt is refined by Grok vision, then immediately
+    queued for clip generation — no waiting for all frames to refine first.
+    """
+    log_header("PHASE 5 -- Video Generation (Pipelined Refine → Generate)")
     timer = Timer()
     phase_timers["phase_5"] = timer
     base = PROJECT_DIR
+
+    if not dry_run:
+        if not os.getenv("XAI_API_KEY"):
+            raise RuntimeError("XAI_API_KEY is required — Grok vision refinement is mandatory for video prompts")
 
     # Get frame list from manifest
     manifest = json.loads(MANIFEST_PATH.read_text())
@@ -2391,61 +2331,130 @@ def phase_5_video(dry_run: bool, phase_timers: dict) -> None:
     clips_dir.mkdir(parents=True, exist_ok=True)
 
     total = len(frames)
-    log(f"Generating {total} video clips from composed frames...")
+    log(f"Pipelining {total} frames: refine → generate (as each completes)")
 
-    generated = 0
-    skipped = 0
-    failed = 0
-
-    # Build work items
-    work_items = []
+    # ── Build frame work list
+    frame_items = []
+    missing = 0
     for i, f in enumerate(frames, 1):
         fid = f.get("frameId", "")
         image_path = base / "frames" / "composed" / f"{fid}_gen.png"
-
         if not image_path.exists():
             log_warn(f"  [{i}/{total}] {fid}: composed frame missing — skipping")
-            failed += 1
+            missing += 1
             continue
+        frame_items.append((i, fid, image_path, f))
 
+    # ── Pipelined refine → generate
+    import asyncio as _aio
+    from graph.frame_prompt_refiner import refine_video_prompt
+    import threading
+    from queue import Queue
+
+    VIDEO_CONCURRENCY = 10
+    gen_queue: Queue = Queue()
+    stats = {"refined": 0, "refine_skipped": 0, "refine_failed": 0,
+             "generated": 0, "gen_skipped": 0, "gen_failed": 0}
+    stats_lock = threading.Lock()
+
+    def _refine_and_enqueue(item):
+        """Refine one frame's video prompt, then put it on the gen queue."""
+        idx, fid, image_path, frame_manifest = item
         video_prompt_file = base / "video" / "prompts" / f"{fid}_video.json"
+
         if video_prompt_file.exists():
             prompt_data = json.loads(video_prompt_file.read_text())
+
+            # Refine via Grok vision if not already refined
+            if not dry_run and prompt_data.get("refined_by") != "grok-vision":
+                try:
+                    prompt_data = _aio.run(
+                        refine_video_prompt(prompt_data, base)
+                    )
+                    # Write refined prompt back
+                    video_prompt_file.write_text(
+                        json.dumps(prompt_data, indent=2, ensure_ascii=False),
+                        encoding="utf-8",
+                    )
+                    with stats_lock:
+                        if prompt_data.get("refined_by") == "grok-vision":
+                            stats["refined"] += 1
+                        else:
+                            stats["refine_failed"] += 1
+                except Exception as e:
+                    log_err(f"  {fid}: refinement error: {e}")
+                    with stats_lock:
+                        stats["refine_failed"] += 1
+            else:
+                with stats_lock:
+                    stats["refine_skipped"] += 1
+
             video_prompt = prompt_data.get("prompt", "")
-            # Use dialogue-aware duration from prompt assembly (accounts for speech timing)
-            dur = max(3, min(15, int(prompt_data.get("duration", f.get("suggestedDuration", 5)))))
+            dur = max(3, min(15, int(prompt_data.get("duration",
+                      frame_manifest.get("suggestedDuration", 5)))))
             if prompt_data.get("dialogue_fit_status") == "capped_to_model_max":
-                log_warn(
-                    f"  [{i}/{total}] {fid}: dialogue estimate wants "
-                    f"{prompt_data.get('recommended_duration', dur)}s but runtime max is 15s"
-                )
+                log_warn(f"  [{idx}/{total}] {fid}: dialogue wants "
+                         f"{prompt_data.get('recommended_duration', dur)}s, capped to 15s")
         else:
             video_prompt = f"Cinematic scene, subtle motion, frame {fid}"
-            dur = max(3, min(15, int(f.get("suggestedDuration", 5))))
+            dur = max(3, min(15, int(frame_manifest.get("suggestedDuration", 5))))
+            with stats_lock:
+                stats["refine_skipped"] += 1
+
         out_path = clips_dir / f"{fid}.mp4"
-        work_items.append((i, fid, image_path, video_prompt, dur, out_path))
+        gen_queue.put((idx, fid, image_path, video_prompt, dur, out_path))
 
-    # Generate video clips 10 at a time
-    VIDEO_CONCURRENCY = 10
+    def _gen_from_queue():
+        """Pull refined frames from queue and generate clips."""
+        while True:
+            item = gen_queue.get()
+            if item is None:  # poison pill
+                gen_queue.task_done()
+                break
+            idx, fid, image_path, video_prompt, dur, out_path = item
+            log(f"  [{idx}/{total}] {fid} ({dur}s) → generating clip")
+            result = _generate_video_clip(fid, image_path, video_prompt, dur, out_path, dry_run)
+            with stats_lock:
+                if result is None:
+                    stats["gen_skipped"] += 1
+                elif result.returncode == 0:
+                    stats["generated"] += 1
+                else:
+                    stats["gen_failed"] += 1
+                    log_err(f"  {fid} clip generation failed (exit={result.returncode})")
+            gen_queue.task_done()
 
-    def _gen_one(item):
-        idx, fid, image_path, video_prompt, dur, out_path = item
-        log(f"[{idx}/{total}] {fid} ({dur}s)")
-        return fid, _generate_video_clip(fid, image_path, video_prompt, dur, out_path, dry_run)
+    # Start generator workers — they consume from queue as items arrive
+    gen_workers = []
+    for _ in range(VIDEO_CONCURRENCY):
+        t = threading.Thread(target=_gen_from_queue, daemon=True)
+        t.start()
+        gen_workers.append(t)
 
-    with ThreadPoolExecutor(max_workers=VIDEO_CONCURRENCY) as pool:
-        futures = {pool.submit(_gen_one, item): item for item in work_items}
-        for future in as_completed(futures):
-            fid, result = future.result()
-            if result is None:
-                skipped += 1
-            elif result.returncode == 0:
-                generated += 1
-            else:
-                failed += 1
-                log_err(f"  {fid} clip generation failed (exit={result.returncode})")
+    # Refine frames with concurrency — each pushes to gen_queue when done
+    REFINE_CONCURRENCY = 5
+    with ThreadPoolExecutor(max_workers=REFINE_CONCURRENCY) as refine_pool:
+        refine_futures = [refine_pool.submit(_refine_and_enqueue, item)
+                          for item in frame_items]
+        for future in as_completed(refine_futures):
+            try:
+                future.result()
+            except Exception as e:
+                log_err(f"  Refine worker error: {e}")
 
-    log_ok(f"Video generation done: {generated} generated, {skipped} skipped, {failed} failed")
+    # Wait for all generation to finish
+    gen_queue.join()
+
+    # Send poison pills to stop gen workers
+    for _ in gen_workers:
+        gen_queue.put(None)
+    for t in gen_workers:
+        t.join()
+
+    log_ok(f"Refine: {stats['refined']} refined, {stats['refine_skipped']} skipped, "
+           f"{stats['refine_failed']} failed")
+    log_ok(f"Generate: {stats['generated']} generated, {stats['gen_skipped']} skipped, "
+           f"{stats['gen_failed']} failed")
 
     if not dry_run:
         clips = list(clips_dir.glob("*.mp4"))
@@ -2844,6 +2853,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Auto-detect last completed phase from manifest and continue from the next one.",
     )
+    parser.add_argument(
+        "--correct-frames",
+        action="store_true",
+        help="Run Grok vision frame correction on existing storyboard cells "
+             "(standalone, does not re-run any phase).",
+    )
     return parser.parse_args()
 
 
@@ -2881,6 +2896,21 @@ def main() -> None:
 
     pipeline_timer = Timer()
     phase_timers: dict[str, Timer] = {}
+
+    # ── Standalone frame correction (no server needed)
+    if args.correct_frames:
+        if not os.getenv("XAI_API_KEY"):
+            fail("XAI_API_KEY is required for frame correction")
+        log_header("STANDALONE FRAME CORRECTION")
+        import asyncio as _aio
+        from graph.frame_correction import correct_all_frames
+        result = _aio.run(correct_all_frames(PROJECT_DIR, concurrency=5))
+        log_ok(f"Frame correction: {result.get('passed', 0)} passed, "
+               f"{result.get('corrected', 0)} corrected, "
+               f"{result.get('failed', 0)} failed, "
+               f"{result.get('skipped', 0)} skipped")
+        log_ok(f"Done in {pipeline_timer.elapsed_str()}")
+        return
 
     # Start and verify server (needed even for single-phase runs -- skills call it)
     start_server(dry_run)

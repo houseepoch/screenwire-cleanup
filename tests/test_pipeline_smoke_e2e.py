@@ -476,13 +476,15 @@ def _generate_storyboard_from_prompt(prompt_data: dict, project_dir: Path) -> di
     composite_path = output_dir / "composite.png"
     body = {
         "prompt": prompt,
-        "image_size": "square_hd",
+        "image_size": "landscape_16_9",
         "output_path": str(composite_path),
         "output_format": "png",
         "reference_images": reference_images,
     }
     result = _post_json(f"{SERVER_URL}/internal/generate-frame", body, IMAGE_TIMEOUT_SECONDS)
-    frame_paths = split_grid(composite_path, grid, output_dir / "frames")
+    frame_ids = prompt_data.get("frame_ids", [])
+    frame_paths = split_grid(composite_path, grid, output_dir / "frames",
+                             frame_ids=frame_ids)
     return {
         "response": result,
         "output_path": str(composite_path),
@@ -591,10 +593,17 @@ class PipelineSmokeE2ETest(unittest.TestCase):
 
         cls.materialize_counts, cls.prompt_counts = _materialize_and_prompt(graph, PROJECT_DIR)
 
-        cls.responses["frame_f_002"] = _generate_image_from_prompt(
-            _read_json(PROJECT_DIR / "frames" / "prompts" / "f_002_image.json"),
-            PROJECT_DIR,
-        )
+        # Promote storyboard cell → composed frame (no separate frame generation)
+        import shutil
+        cell_src = PROJECT_DIR / "frames" / "storyboards" / "grid_01" / "frames" / "f_002.png"
+        composed_dst = PROJECT_DIR / "frames" / "composed" / "f_002_gen.png"
+        composed_dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(cell_src, composed_dst)
+        cls.responses["frame_f_002"] = {
+            "response": {"promoted_from": str(cell_src)},
+            "output_path": str(composed_dst),
+            "size_bytes": composed_dst.stat().st_size,
+        }
 
         graph = cls.store.load()
         graph.frames["f_002"].composed_image_path = "frames/composed/f_002_gen.png"
@@ -622,8 +631,8 @@ class PipelineSmokeE2ETest(unittest.TestCase):
             "locations/primary/loc_rooftop.png",
             "props/generated/prop_signal_pager.png",
             "frames/storyboards/grid_01/composite.png",
-            "frames/storyboards/grid_01/frames/frame_000.png",
-            "frames/storyboards/grid_01/frames/frame_001.png",
+            "frames/storyboards/grid_01/frames/f_001.png",
+            "frames/storyboards/grid_01/frames/f_002.png",
             "frames/composed/f_002_gen.png",
             "video/clips/f_002.mp4",
         ]:
@@ -661,7 +670,7 @@ class PipelineSmokeE2ETest(unittest.TestCase):
         self.assertEqual(
             image_prompt["ref_images"],
             [
-                "frames/storyboards/grid_01/frames/frame_001.png",
+                "frames/storyboards/grid_01/frames/f_002.png",
                 "cast/composites/cast_nova_ref.png",
                 "locations/primary/loc_rooftop.png",
                 "props/generated/prop_signal_pager.png",
@@ -679,7 +688,7 @@ class PipelineSmokeE2ETest(unittest.TestCase):
             video_prompt["prompt"],
         )
 
-        self.assertEqual(storyboard_prompt["grid"], "4x4")
+        self.assertEqual(storyboard_prompt["grid"], "3x3")
         self.assertEqual(storyboard_prompt["frame_ids"], ["f_001", "f_002"])
         self.assertEqual(
             storyboard_prompt["refs"],
@@ -708,7 +717,14 @@ class PipelineSmokeE2ETest(unittest.TestCase):
         ]:
             self.assertIn(key, summary["responses"])
             self.assertIn("response", summary["responses"][key])
+
+        # API-generated assets have prediction_id; promoted frames do not
+        for key in ["cast_nova", "loc_rooftop", "prop_signal_pager",
+                    "storyboard_grid_01", "video_f_002"]:
             self.assertIn("prediction_id", summary["responses"][key]["response"])
+
+        # frame_f_002 is promoted from storyboard cell, not API-generated
+        self.assertIn("promoted_from", summary["responses"]["frame_f_002"]["response"])
 
 
 if __name__ == "__main__":

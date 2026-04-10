@@ -16,3 +16,9 @@ dispatch/
 
 # Prompt verifier outputs (runtime generated)
 prompt_composition_verifier_*.md
+
+# IDE
+.idea/
+
+# Test artifacts
+tests/projects/

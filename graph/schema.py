@@ -896,13 +896,13 @@ class ShotMatchGroup(BaseModel):
 
 
 class StoryboardGrid(BaseModel):
-    """Sequential batch of up to 16 frames -> one 4x4 storyboard image.
+    """Sequential batch of up to 9 frames -> one 3x3 16:9 storyboard image.
     Splits on scene breaks / large shifts. Cascades to next grid."""
     grid_id: str                             # "grid_01"
-    frame_ids: list[str] = Field(default_factory=list)  # ordered, max 16
+    frame_ids: list[str] = Field(default_factory=list)  # ordered, max 9
     frame_count: int = 0
-    rows: int = 4
-    cols: int = 4
+    rows: int = 3
+    cols: int = 3
 
     # Context (informational, not grouping keys)
     scene_ids: list[str] = Field(default_factory=list)  # scenes touched by this grid
@@ -919,7 +919,7 @@ class StoryboardGrid(BaseModel):
     # Storyboard generation
     storyboard_prompt_path: Optional[str] = None
     composite_image_path: Optional[str] = None    # full grid composite
-    cell_image_dir: Optional[str] = None          # dir with frame_000.png..frame_015.png
+    cell_image_dir: Optional[str] = None          # dir with {frame_id}.png cells
     storyboard_status: str = "pending"             # pending | generated | archived
     storyboard_history: list[str] = Field(default_factory=list)
 
@@ -997,7 +997,7 @@ class NarrativeGraph(BaseModel):
     frames: dict[str, FrameNode] = Field(default_factory=dict)
     dialogue: dict[str, DialogueNode] = Field(default_factory=dict)
 
-    # Storyboard grids (sequential batches of up to 16 frames -> 4x4 composites)
+    # Storyboard grids (sequential batches of up to 9 frames -> 3x3 composites)
     storyboard_grids: dict[str, StoryboardGrid] = Field(default_factory=dict)
 
     # Per-frame state snapshots (keyed by "{entity_id}@{frame_id}")

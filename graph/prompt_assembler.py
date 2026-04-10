@@ -1350,8 +1350,6 @@ def _build_cell_prompt(graph: NarrativeGraph, frame_id: str) -> str:
     frame = ctx["frame"]
     directing = _extract_directing_data(graph, ctx, frame)
 
-    style_prefix = _resolve_style_prefix(graph)
-
     # ── Characters
     char_segments = []
     for cs in ctx.get("cast_states", []):
@@ -1425,8 +1423,9 @@ def _build_cell_prompt(graph: NarrativeGraph, frame_id: str) -> str:
     if comp.get("shot"):
         shot_desc = comp["shot"]
 
-    # ── Assemble cell prompt: style + characters + environment + shot
-    segments = [s for s in [style_prefix, char_desc, env_desc, shot_desc] if s]
+    # ── Assemble cell prompt: characters + environment + shot
+    # Shared visual style is carried once at the grid level.
+    segments = [s for s in [char_desc, env_desc, shot_desc] if s]
     return ". ".join(segments)
 
 
@@ -1440,7 +1439,7 @@ def assemble_grid_storyboard_prompt(graph: NarrativeGraph, grid_id: str,
 
     Returns dict with:
         grid_id: str
-        grid: str — always "4x4"
+        grid: str — always "3x3"
         cell_prompts: list[str] — one prompt string per cell/frame
         scene: str — legacy compat, joined cell prompts
         refs: list[str] — reference image paths (prev grid composite, cast, etc.)
@@ -1493,6 +1492,7 @@ def assemble_grid_storyboard_prompt(graph: NarrativeGraph, grid_id: str,
     return {
         "grid_id": grid_id,
         "grid": grid_layout,
+        "style_prefix": _resolve_style_prefix(graph),
         "cell_prompts": cell_prompts,
         "scene": "\n".join(f"[Cell {i+1}] {cp}" for i, cp in enumerate(cell_prompts)),
         "refs": refs,
