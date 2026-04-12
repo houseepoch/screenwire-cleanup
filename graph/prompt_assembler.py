@@ -13,10 +13,9 @@ Shared core sections (SHOT INTENT, CONTINUITY, VISUAL ANCHORS, AUDIO CONTEXT)
 are built once by _build_core_sections() and consumed by both
 assemble_image_prompt() and assemble_video_prompt().
 
-Video compression note: The BACKGROUND section is the first to be dropped
-during 4096-char video prompt compression. action_summary should therefore
-bake in critical environmental context (lighting, atmosphere, key location
-detail) so that context survives BACKGROUND section amputation.
+Video prompt note: prompts are preserved in full. action_summary should still
+carry the most important environmental context because it leads the prompt and
+helps downstream refiners/generators prioritize the right beat.
 """
 
 from __future__ import annotations
@@ -37,6 +36,7 @@ from .reference_collector import (
     ReferenceImageCollector,
     cast_bible_snapshot_for_frame,
 )
+from .feature_flags import ENABLE_STORYBOARD_GUIDANCE
 from .store import GraphStore
 from .api import (
     get_frame_context,
@@ -86,8 +86,6 @@ KINETIC_STYLE_HINT: dict[str, str] = {
 # Native runtime floor/ceiling enforced by server.py for grok-video clips.
 MIN_VIDEO_DURATION_SECONDS = 2
 MAX_VIDEO_DURATION_SECONDS = 15
-MAX_VIDEO_PROMPT_CHARS = 4096
-
 # Cinematic tag family → default duration (seconds)
 # D=dialogue, E=establishment, R=revealer, A=action, C=cast/portrait,
 # T=transitional, S=stylistic, M=music
@@ -146,7 +144,7 @@ DIALOGUE_SHOT_COMPOSITION_LIBRARY = {
     "speaker_sync": {
         "label": "speaker sync",
         "image_rule": "Keep the active speaker dominant and fully readable; the listener can stay secondary or partial, but eyelines and geography must stay locked.",
-        "video_rule": "Let expression, breath, and small hand behavior carry the line. Preserve staging and vary only crop, angle, or a gentle push.",
+        "video_rule": "Let expression, breath, and small hand behavior carry the line. Do not restage the room. Preserve staging and vary only crop, angle, or a gentle push.",
         "duration_weight": 1.35,
         "padding_weight": 0.75,
     },
@@ -174,7 +172,7 @@ DIALOGUE_SHOT_COMPOSITION_LIBRARY = {
     "bridge_coverage": {
         "label": "bridge coverage",
         "image_rule": "Bridge between adjacent dialogue angles while holding the same cast positions, prop placement, and room geography.",
-        "video_rule": "This clip should stitch the exchange together with minimal variation: one visual axis may change, but not the whole blocking plan.",
+        "video_rule": "Do not restage the room. This clip should stitch the exchange together with minimal variation: one visual axis may change, but not the whole blocking plan.",
         "duration_weight": 1.05,
         "padding_weight": 0.5,
     },
@@ -472,21 +470,456 @@ def _shot_intent_lines(packet) -> list[str]:
     ]
 
 
-def _continuity_lines(packet) -> list[str]:
+_PURE_BLACK_TOKENS = (
+    "pure black",
+    "black screen",
+    "cuts abruptly to pure black",
+    "fade to black",
+    "fades to black",
+    "fades fully to black",
+    "image fades to black",
+)
+_LOADING_WHEEL_TOKENS = (
+    "loading wheel",
+    "loading spinner",
+    "spinner on black",
+)
+_SCREEN_MEDIATED_TOKENS = (
+    "screen within screen",
+    "laptop screen",
+    "video feed",
+    "virtual window",
+    "camera on",
+    "camera off",
+    "chat explodes",
+    "inset video",
+)
+_HAND_ACTION_TOKENS = (
+    "hand",
+    "hands",
+    "finger",
+    "fingers",
+    "thumb",
+    "forefinger",
+)
+_HAND_MANIPULATION_TOKENS = (
+    "driven",
+    "grinding",
+    "crushing",
+    "probe",
+    "probing",
+    "extract",
+    "lifted",
+    "dropped",
+)
+_OBJECT_MACRO_TOKENS = (
+    "cutting board",
+    "bowl",
+    "cherries",
+    "cherry",
+    "mortar",
+    "pestle",
+    "splatter",
+    "powder",
+    "pit",
+    "pulp",
+)
+_LANDSCAPE_TRANSITION_TOKENS = (
+    "sunset",
+    "horizon",
+    "canyon",
+    "sky",
+    "landscape",
+)
+_TITLE_CARD_TOKENS = (
+    "title card",
+    "burns brightly",
+    "screen suddenly flashes",
+    "flashes with a bold title card",
+)
+_SINGLE_SUBJECT_DIRECTIVE_TOKENS = (
+    "single person",
+    "single speaker",
+    "isolated framing",
+    "clean single",
+    "single_subject",
+)
+_PROFILE_TWO_SHOT_TOKENS = (
+    "profile 50/50",
+    "profile view",
+    "facing each other",
+    "frame split evenly",
+)
+
+
+def _frame_text(frame) -> str:
+    parts = [
+        frame.get("narrative_beat", "") if isinstance(frame, dict) else getattr(frame, "narrative_beat", ""),
+        frame.get("action_summary", "") if isinstance(frame, dict) else getattr(frame, "action_summary", ""),
+        frame.get("source_text", "") if isinstance(frame, dict) else getattr(frame, "source_text", ""),
+    ]
+    return " ".join(_compact_text(str(part)) for part in parts if _compact_text(str(part))).lower()
+
+
+def _classify_prompt_mode(packet, frame) -> str:
+    text = _frame_text(frame)
+    if any(token in text for token in _PURE_BLACK_TOKENS):
+        return "pure_black"
+    if any(token in text for token in _LOADING_WHEEL_TOKENS):
+        return "loading_wheel"
+    if any(token in text for token in _TITLE_CARD_TOKENS):
+        return "title_card"
+    if any(token in text for token in _SCREEN_MEDIATED_TOKENS):
+        return "screen_presence"
+    if not packet.visible_cast_ids and any(token in text for token in _HAND_ACTION_TOKENS):
+        return "hand_object_action"
+    if packet.subject_count == 0 and any(token in text for token in _OBJECT_MACRO_TOKENS):
+        if any(token in text for token in _HAND_MANIPULATION_TOKENS):
+            return "hand_object_action"
+        return "object_macro"
+    if packet.subject_count == 0 and any(token in text for token in _LANDSCAPE_TRANSITION_TOKENS):
+        return "environment_transition"
+    return "standard"
+
+
+def _effective_subject_count(packet, mode: str) -> int:
+    if packet.subject_count:
+        return packet.subject_count
+    if mode in {"screen_presence", "hand_object_action"}:
+        return 1
+    return 0
+
+
+def _special_handling_lines(mode: str) -> list[str]:
+    if mode == "pure_black":
+        return [
+            "This beat is an intentional authored blackout transition.",
+            "Render a clean full-frame black screen only.",
+            "No visible objects, no silhouettes, no gradients, no light leaks, and no film grain texture.",
+        ]
+    if mode == "loading_wheel":
+        return [
+            "This beat is a minimal UI-like transition card, not a cinematic scene.",
+            "Render a single white loading spinner centered on pure black.",
+            "No browser chrome, no window frame, no text, no logos, and no extra icons.",
+        ]
+    if mode == "screen_presence":
+        return [
+            "The visible person is mediated through the laptop or video-call screen.",
+            "Keep the on-screen caller or listener visibly present rather than replacing the beat with a UI-only insert.",
+        ]
+    if mode == "title_card":
+        return [
+            "This beat is an authored graphic title-card insert, not a photographed room scene.",
+            "Render only the intended slogan or title treatment from the beat description with clean bold typography.",
+        ]
+    if mode == "hand_object_action":
+        return [
+            "This beat is carried by anonymous hands and object interaction, not a full human portrait.",
+            "If hands are visible, keep them anonymous and tightly framed; do not invent a face, torso, or extra people.",
+        ]
+    if mode == "object_macro":
+        return [
+            "This beat is carried by tightly framed objects, surfaces, and material detail rather than a human portrait.",
+            "Keep the frame macro and tactile; do not introduce faces, bodies, or unrelated environment expansion.",
+        ]
+    if mode == "environment_transition":
+        return [
+            "This beat is a landscape or environmental transition with no visible human subject.",
+            "Keep the frame focused on atmosphere, horizon, and place rather than introducing people or close-up objects.",
+        ]
+    return []
+
+
+def _is_single_subject_dialogue_coverage(packet, mode: str) -> bool:
+    if mode != "standard":
+        return False
+    if _effective_subject_count(packet, mode) != 1:
+        return False
+    if not packet.audio.dialogue_present:
+        return False
+    shot = _compact_text(packet.shot_intent.shot).lower()
+    return shot in {"close_up", "medium_shot", "medium_close_up", "closeup"}
+
+
+def _is_group_cast_frame(packet, mode: str) -> bool:
+    return mode == "standard" and _effective_subject_count(packet, mode) >= 3
+
+
+def _cast_name_tokens(graph: NarrativeGraph) -> set[str]:
+    names: set[str] = set()
+    for cast in graph.cast.values():
+        name = _compact_text(getattr(cast, "name", "") or "")
+        if name:
+            names.add(name.lower())
+    return names
+
+
+def _line_name(line: str) -> str:
+    return _compact_text((line or "").split("|", 1)[0].strip("- ").strip())
+
+
+def _screen_position_rank(value: str) -> int:
+    token = (value or "").strip().lower()
+    order = {
+        "frame_left_edge": 0,
+        "frame_left": 1,
+        "frame_left_third": 2,
+        "frame_center_left": 3,
+        "frame_center": 4,
+        "frame_center_right": 5,
+        "frame_right_third": 6,
+        "frame_right": 7,
+        "frame_right_edge": 8,
+    }
+    if token in order:
+        return order[token]
+    if "left" in token:
+        return 1
+    if "right" in token:
+        return 7
+    if "center" in token:
+        return 4
+    return 4
+
+
+def _line_screen_position_rank(line: str) -> int:
+    match = re.search(r"\|\s*at\s+([^|]+)", line or "", flags=re.IGNORECASE)
+    if match:
+        return _screen_position_rank(match.group(1))
+    return 4
+
+
+def _image_background_lines(
+    graph: NarrativeGraph,
+    packet,
+    *,
+    mode: str,
+    single_subject_dialogue: bool,
+) -> list[str]:
+    lines = [
+        line for line in packet.background
+        if not _compact_text(line).lower().startswith("sound cue ")
+    ]
+    if single_subject_dialogue:
+        cast_names = _cast_name_tokens(graph)
+        lines = [
+            line for line in lines
+            if not any(name in _compact_text(line).lower() for name in cast_names)
+        ]
+        return lines[:4]
+    if _is_large_group_cast_frame(packet, mode):
+        visual_lines = [line for line in lines if "sound cue " not in _compact_text(line).lower()]
+        return visual_lines[:3]
+    if _is_group_cast_frame(packet, mode):
+        visual_lines = [line for line in lines if "sound cue " not in _compact_text(line).lower()]
+        return visual_lines[:4]
+    return lines
+
+
+def _image_location_lines(packet, *, mode: str, single_subject_dialogue: bool) -> list[str]:
+    lines = list(packet.location_invariants)
+    if _is_large_group_cast_frame(packet, mode):
+        return lines[:4]
+    if _is_group_cast_frame(packet, mode):
+        return lines[:5]
+    if single_subject_dialogue:
+        return lines[:5]
+    return lines
+
+
+def _is_large_group_cast_frame(packet, mode: str) -> bool:
+    return _is_group_cast_frame(packet, mode) and _effective_subject_count(packet, mode) >= 6
+
+
+def _image_cast_lines(packet, *, mode: str) -> list[str]:
+    lines = list(packet.cast_invariants)
+    if not _is_group_cast_frame(packet, mode):
+        return lines
+
+    ordered_names = [
+        _line_name(line)
+        for line in sorted(packet.blocking, key=_line_screen_position_rank)
+        if _line_name(line)
+    ]
+    if not ordered_names:
+        ordered_names = [_line_name(line) for line in lines if _line_name(line)]
+    if _is_large_group_cast_frame(packet, mode):
+        anchors = ordered_names[:5]
+        summary = [
+            "Use the stitched group cast reference as the authority for each visible character's identity, wardrobe, and relative placement.",
+            f"Preserve the full visible ensemble as one coherent group tableau with {_effective_subject_count(packet, mode)} people.",
+        ]
+        if anchors:
+            summary.append("Primary left-to-right anchors: " + ", ".join(anchors) + ".")
+        summary.append("Keep any remaining visible cast in stitched-sheet order without inventing extras.")
+        return summary
+    visible_names = ", ".join(ordered_names) if ordered_names else "the visible group"
+    return [
+        "Use the stitched group cast reference as the authority for each visible character's identity, wardrobe, and relative placement.",
+        f"Visible cast left-to-right in the frame: {visible_names}.",
+    ]
+
+
+def _line_action(line: str) -> str:
+    parts = [_compact_text(part) for part in (line or "").split("|")]
+    if len(parts) >= 4 and parts[3]:
+        return parts[3]
+    return "holds position"
+
+
+def _blocking_names(lines: list[str]) -> list[str]:
+    names: list[str] = []
+    seen: set[str] = set()
+    for line in lines:
+        name = _line_name(line)
+        key = name.lower()
+        if name and key not in seen:
+            names.append(name)
+            seen.add(key)
+    return names
+
+
+def _shot_descriptor_text(packet, frame) -> str:
+    parts = [
+        _resolve_shot_description(frame),
+        _compact_text(packet.shot_intent.shot),
+        _compact_text(packet.shot_intent.dramatic_purpose),
+        _compact_text(packet.current_beat),
+    ]
+    return " ".join(part for part in parts if part).lower()
+
+
+def _is_single_subject_focus(packet, mode: str, frame, blocking_lines: list[str]) -> bool:
+    if mode != "standard":
+        return False
+    if len(_blocking_names(blocking_lines)) != 1:
+        return False
+    shot_text = _shot_descriptor_text(packet, frame)
+    return any(token in shot_text for token in _SINGLE_SUBJECT_DIRECTIVE_TOKENS)
+
+
+def _is_profile_two_shot(packet, mode: str, frame, blocking_lines: list[str]) -> bool:
+    if mode != "standard":
+        return False
+    if len(_blocking_names(blocking_lines)) != 2:
+        return False
+    shot_text = _shot_descriptor_text(packet, frame)
+    return any(token in shot_text for token in _PROFILE_TWO_SHOT_TOKENS)
+
+
+def _filter_pose_snapshot(snapshot: dict | None, allowed_names: list[str]) -> dict | None:
+    if not snapshot or not allowed_names:
+        return snapshot
+    allowed = {name.lower() for name in allowed_names}
+    characters = [
+        character
+        for character in snapshot.get("characters", [])
+        if _compact_text(str(character.get("name") or character.get("character_id") or "")).lower() in allowed
+    ]
+    if not characters:
+        return None
+    filtered = dict(snapshot)
+    filtered["characters"] = characters
+    return filtered
+
+
+def _image_blocking_lines(packet, *, mode: str, profile_two_shot: bool = False) -> list[str]:
+    lines = list(packet.blocking)
+    if profile_two_shot:
+        names = _blocking_names(lines)
+        if len(names) == 2:
+            left_action = _line_action(lines[0])
+            right_action = _line_action(lines[1]) if len(lines) > 1 else "holds position"
+            return [
+                f"{names[0]} | at frame_left | facing profile_right | {left_action} | looking at {names[1]}",
+                f"{names[1]} | at frame_right | facing profile_left | {right_action} | looking at {names[0]}",
+            ]
+    if not _is_group_cast_frame(packet, mode):
+        return lines
+
+    ordered = sorted(lines, key=_line_screen_position_rank)
+    anchors = ordered[:3] if _is_large_group_cast_frame(packet, mode) else ordered[:4]
+    remaining = [_line_name(line) for line in ordered[4:] if _line_name(line)]
+    summary = [
+        "Use the stitched group cast reference as the authoritative left-to-right blocking map. Preserve relative spacing and screen positions."
+    ]
+    summary.extend(anchors)
+    if remaining:
+        summary.append(
+            "Additional visible group members remain established in the stitched reference: "
+            + ", ".join(remaining)
+            + "."
+        )
+    if _is_large_group_cast_frame(packet, mode):
+        summary.append("Treat the remaining visible cast as one coherent moving cluster rather than isolated hero poses.")
+    return summary
+
+
+def _subject_count_lines(packet, mode: str, override: int | None = None) -> list[str]:
+    effective_count = override if override is not None else _effective_subject_count(packet, mode)
+    if mode == "screen_presence":
+        return [f"Exactly {effective_count} visible subject(s), counted within the laptop or video-call screen."]
+    if mode == "hand_object_action":
+        return [f"Exactly {effective_count} visible human subject(s), expressed only as anonymous hands if present."]
+    if mode in {"pure_black", "loading_wheel", "title_card", "environment_transition", "object_macro"}:
+        return ["Exactly 0 visible human subject(s)."]
+    return [f"Exactly {effective_count} visible subject(s)."]
+
+
+def _continuity_lines(packet, *, mode: str = "standard") -> list[str]:
     lines = []
     if packet.previous_beat:
         lines.append(f"Previous beat: {packet.previous_beat.narrative_beat or packet.previous_beat.action_summary or packet.previous_beat.frame_id}")
     lines.append(f"Current beat: {packet.current_beat}")
     if packet.next_beat:
         lines.append(f"Next beat: {packet.next_beat.narrative_beat or packet.next_beat.action_summary or packet.next_beat.frame_id}")
-    lines.extend(packet.continuity_deltas)
+    continuity_deltas = list(packet.continuity_deltas)
+    if mode == "screen_presence":
+        continuity_deltas = [
+            line for line in continuity_deltas
+            if not line.startswith("Cast leaving frame:")
+        ]
+    elif mode == "title_card":
+        continuity_deltas = [
+            line for line in continuity_deltas
+            if not (line.startswith("Cast leaving frame:") or line.startswith("Cast entering frame:"))
+        ]
+    lines.extend(continuity_deltas)
     return lines
 
 
-def _negative_constraints(packet, *, dialogue_present: bool, guidance_only: bool = False) -> list[str]:
+def _image_continuity_lines(
+    packet,
+    *,
+    mode: str,
+    single_subject_focus: bool = False,
+    large_group_frame: bool = False,
+) -> list[str]:
+    lines = _continuity_lines(packet, mode=mode)
+    if single_subject_focus:
+        lines = [line for line in lines if not line.startswith("Cast leaving frame:")]
+    if large_group_frame:
+        lines = [
+            line for line in lines
+            if not (line.startswith("Cast entering frame:") or line.startswith("Cast leaving frame:"))
+        ]
+    return lines
+
+
+def _negative_constraints(
+    packet,
+    *,
+    dialogue_present: bool,
+    guidance_only: bool = False,
+    mode: str = "standard",
+    subject_count_override: int | None = None,
+) -> list[str]:
     lines = [
         "Do not add or remove cast, props, wardrobe, architecture, or light sources.",
-        "No subtitles, captions, speech bubbles, lyric text, labels, watermarks, or UI overlays.",
+        "No subtitles, captions, speech bubbles, lyric text, labels, watermarks, or UI overlays."
+        if mode != "title_card"
+        else "Do not add captions, subtitles, browser chrome, logos, or any extra UI beyond the authored title text.",
         "Keep anatomy, hands, faces, prop scale, and object physics coherent.",
     ]
     if guidance_only:
@@ -495,8 +928,25 @@ def _negative_constraints(packet, *, dialogue_present: bool, guidance_only: bool
         lines.append("Dialogue is conveyed through performance and native audio only; do not render spoken words visually.")
     else:
         lines.append("No spoken dialogue should be implied visually through text.")
-    if packet.subject_count:
-        lines.append(f"Do not exceed {packet.subject_count} visible subject(s).")
+    effective_subject_count = subject_count_override if subject_count_override is not None else _effective_subject_count(packet, mode)
+    if mode == "pure_black":
+        lines.append("Render pure black only. No imagery, no silhouettes, no texture, and no visible subject.")
+    elif mode == "loading_wheel":
+        lines.append("Render only a minimal white loading spinner on black. No extra UI, no browser chrome, and no additional symbols.")
+    elif mode == "screen_presence":
+        lines.append("Treat the on-screen caller or listener as the visible subject; do not reduce the frame to a faceless interface.")
+    elif mode == "title_card":
+        lines.append("Render only the intended title-card wording from the beat. Do not add extra copy, slogans, labels, or logos.")
+    elif mode == "hand_object_action":
+        lines.append("Do not invent a face, torso, or additional people around the hand-driven action.")
+    elif mode == "object_macro":
+        lines.append("Do not introduce people, faces, or extra room geography into this macro object beat.")
+    elif mode == "environment_transition":
+        lines.append("Do not introduce people, faces, or hands into this transition beat.")
+    if effective_subject_count:
+        lines.append(f"Do not exceed {effective_subject_count} visible subject(s).")
+    else:
+        lines.append("Keep visible human subject count at zero.")
     return lines
 
 
@@ -717,7 +1167,7 @@ def _load_cast_bible_snapshot(
     return cast_bible_snapshot_for_frame(cast_bible, graph, frame_id, cast_ids=cast_ids)
 
 
-def _pose_lock_lines(snapshot: dict | None) -> list[str]:
+def _pose_lock_lines(snapshot: dict | None, *, include_history: bool = True) -> list[str]:
     if not snapshot:
         return []
 
@@ -739,7 +1189,7 @@ def _pose_lock_lines(snapshot: dict | None) -> list[str]:
             line += " Locked modifiers: " + ", ".join(modifiers) + "."
 
         recent_history = character.get("recent_pose_history") or []
-        if recent_history:
+        if include_history and recent_history:
             trail = [
                 _compact_text(str(item.get("pose") or ""))
                 for item in recent_history
@@ -760,6 +1210,7 @@ def _build_core_sections(
     graph: "NarrativeGraph",
     refs: dict | None = None,
     pose_snapshot: dict | None = None,
+    include_pose_history: bool = True,
 ) -> dict[str, str]:
     """Build the shared prompt sections consumed by both image and video assembly.
 
@@ -786,7 +1237,7 @@ def _build_core_sections(
     # built by each caller so their section keys are preserved for video compression)
     continuity = _format_section("CONTINUITY", _continuity_lines(packet))
 
-    pose_lock = _format_section("POSE LOCK", _pose_lock_lines(pose_snapshot))
+    pose_lock = _format_section("POSE LOCK", _pose_lock_lines(pose_snapshot, include_history=include_pose_history))
 
     # VISUAL ANCHORS — reference images listed with their role labels
     visual_anchors = ""
@@ -901,46 +1352,8 @@ def _shrink_section(section_infos: list[dict[str, object]], key: str) -> bool:
 
 
 def _serialize_video_prompt_sections(sections: list[str]) -> str:
-    """Fit the assembled video prompt without damaging Tier 1 continuity blocks."""
-    prompt = "\n\n".join(section for section in sections if section).strip()
-    if len(prompt) <= MAX_VIDEO_PROMPT_CHARS:
-        return prompt
-
-    section_infos = [_parse_prompt_section(section) for section in sections if section]
-
-    for key in _VIDEO_PROMPT_TIER3_DROP_ORDER:
-        if _drop_section(section_infos, key):
-            prompt = _serialize_prompt_sections(section_infos)
-            if len(prompt) <= MAX_VIDEO_PROMPT_CHARS:
-                return prompt
-
-    changed = True
-    while len(prompt) > MAX_VIDEO_PROMPT_CHARS and changed:
-        changed = False
-        for key in _VIDEO_PROMPT_TIER2_SHRINK_ORDER:
-            if _shrink_section(section_infos, key):
-                prompt = _serialize_prompt_sections(section_infos)
-                changed = True
-                if len(prompt) <= MAX_VIDEO_PROMPT_CHARS:
-                    return prompt
-                break
-
-    for key in _VIDEO_PROMPT_TIER2_DROP_ORDER:
-        if _drop_section(section_infos, key):
-            prompt = _serialize_prompt_sections(section_infos)
-            if len(prompt) <= MAX_VIDEO_PROMPT_CHARS:
-                return prompt
-
-    tier1_sizes = {
-        str(info["key"]).rstrip(":").lower().replace(" ", "_"): len(_render_prompt_section(info))
-        for info in section_infos
-        if info.get("key") in _VIDEO_PROMPT_TIER1_KEYS
-    }
-    raise ValueError(
-        "Video prompt exceeds "
-        f"{MAX_VIDEO_PROMPT_CHARS} chars after dropping Tier 3 blocks and shrinking Tier 2 blocks; "
-        f"tier1_block_sizes={tier1_sizes}"
-    )
+    """Serialize the assembled video prompt sections without length capping."""
+    return "\n\n".join(section for section in sections if section).strip()
 
 
 def _tempo_units_per_second(tempo: str = "", env_intensity: str = "") -> float:
@@ -1174,51 +1587,120 @@ def assemble_image_prompt(graph: NarrativeGraph, frame_id: str,
     )
     size = SIZE_PRESET_MAP.get(graph.project.aspect_ratio, "landscape_16_9")
     dialogue_coverage = _build_dialogue_coverage(graph, frame_id, ctx, packet)
+    prompt_mode = _classify_prompt_mode(packet, frame)
+    group_cast_frame = _is_group_cast_frame(packet, prompt_mode)
+    large_group_frame = _is_large_group_cast_frame(packet, prompt_mode)
+    special_handling = _format_section("SPECIAL HANDLING", _special_handling_lines(prompt_mode))
 
-    lead_lines = [
-        f"{style_prefix}Generate one final cinematic frame.",
-        "This is a single finished image, not a storyboard grid or contact sheet.",
-        (frame.get("action_summary") if isinstance(frame, dict) else getattr(frame, "action_summary", None)) or packet.current_beat,
-    ]
+    if prompt_mode == "pure_black":
+        lead_lines = [
+            "Generate one final finished frame.",
+            "Output clean pure black only.",
+        ]
+    elif prompt_mode == "loading_wheel":
+        lead_lines = [
+            "Generate one final finished frame.",
+            "Output a simple white loading spinner centered on pure black.",
+        ]
+    elif prompt_mode == "title_card":
+        lead_lines = [
+            "Generate one final finished frame.",
+            "Render a bold authored title-card insert using only the wording described in this beat.",
+            (frame.get("action_summary") if isinstance(frame, dict) else getattr(frame, "action_summary", None)) or packet.current_beat,
+        ]
+    else:
+        lead_lines = [
+            f"{style_prefix}Generate one final cinematic frame.",
+            "This is a single finished image, not a storyboard grid or contact sheet.",
+            (frame.get("action_summary") if isinstance(frame, dict) else getattr(frame, "action_summary", None)) or packet.current_beat,
+        ]
     if scene.get("mood_keywords"):
         lead_lines.append("Mood: " + ", ".join(scene["mood_keywords"]))
 
     # Cinematic tag composition directive — inject before audio section
     shot_desc = _resolve_shot_description(frame)
-    if shot_desc:
+    if shot_desc and prompt_mode not in {"pure_black", "loading_wheel", "title_card"}:
         lead_lines.append(shot_desc)
     _ct_img = frame.get("cinematic_tag") if isinstance(frame, dict) else getattr(frame, "cinematic_tag", {})
     _ct_img = _ct_img or {}
     _ct_img_definition = _ct_field(_ct_img, "definition")
-    if _ct_img_definition:
+    if _ct_img_definition and prompt_mode not in {"pure_black", "loading_wheel", "title_card"}:
         lead_lines.append(_ct_img_definition)
     _ct_img_dof = _ct_field(_ct_img, "dof_guidance")
-    if _ct_img_dof:
+    if _ct_img_dof and prompt_mode not in {"pure_black", "loading_wheel", "title_card"}:
         lead_lines.append(_ct_img_dof)
     _ct_img_lens = _ct_field(_ct_img, "lens_guidance")
-    if _ct_img_lens:
+    if _ct_img_lens and prompt_mode not in {"pure_black", "loading_wheel", "title_card"}:
         lead_lines.append(_ct_img_lens)
 
+    raw_blocking_lines = list(packet.blocking)
+    profile_two_shot = _is_profile_two_shot(packet, prompt_mode, frame, raw_blocking_lines)
+    image_blocking_lines = _image_blocking_lines(
+        packet,
+        mode=prompt_mode,
+        profile_two_shot=profile_two_shot,
+    )
+    single_subject_focus = _is_single_subject_focus(packet, prompt_mode, frame, image_blocking_lines)
+    single_subject_dialogue = single_subject_focus or _is_single_subject_dialogue_coverage(packet, prompt_mode)
+    subject_count_override = 1 if single_subject_focus else None
+    pose_snapshot = cast_bible_snapshot
+    if single_subject_focus:
+        pose_snapshot = _filter_pose_snapshot(cast_bible_snapshot, _blocking_names(image_blocking_lines))
+
     # Shared core: SHOT INTENT, CONTINUITY, VISUAL ANCHORS, AUDIO CONTEXT
-    core = _build_core_sections(packet, frame, graph, refs=refs, pose_snapshot=cast_bible_snapshot)
+    core = _build_core_sections(
+        packet,
+        frame,
+        graph,
+        refs=refs,
+        pose_snapshot=pose_snapshot,
+        include_pose_history=False,
+    )
+
+    image_location_lines = _image_location_lines(
+        packet,
+        mode=prompt_mode,
+        single_subject_dialogue=single_subject_dialogue,
+    )
+    image_background_lines = _image_background_lines(
+        graph,
+        packet,
+        mode=prompt_mode,
+        single_subject_dialogue=single_subject_dialogue,
+    )
+    image_cast_lines = _image_cast_lines(packet, mode=prompt_mode)
 
     sections = [
         "\n".join(_compact_text(line) for line in lead_lines if _compact_text(line)),
+        special_handling,
         core["shot_intent"],
-        core["continuity"],
-        core["pose_lock"],
-        core["visual_anchors"],
-        _format_section("SUBJECT COUNT", [f"Exactly {packet.subject_count} visible subject(s)."]),
-        _format_section("CAST INVARIANTS", packet.cast_invariants),
-        _format_section("PROP INVARIANTS", packet.prop_invariants),
-        _format_section("LOCATION INVARIANTS", packet.location_invariants),
-        _format_section("DIALOGUE COVERAGE", _dialogue_coverage_lines(dialogue_coverage, for_video=False)),
-        _format_section("BLOCKING", packet.blocking),
-        _format_section("BACKGROUND", packet.background),
+        _format_section(
+            "CONTINUITY",
+            _image_continuity_lines(
+                packet,
+                mode=prompt_mode,
+                single_subject_focus=single_subject_focus,
+                large_group_frame=large_group_frame,
+            ),
+        ),
+        core["pose_lock"] if prompt_mode not in {"pure_black", "loading_wheel", "screen_presence", "environment_transition", "title_card", "hand_object_action"} and not group_cast_frame and not profile_two_shot else "",
+        core["visual_anchors"] if prompt_mode not in {"pure_black", "loading_wheel", "title_card"} else "",
+        _format_section("SUBJECT COUNT", _subject_count_lines(packet, prompt_mode, override=subject_count_override)),
+        _format_section("CAST INVARIANTS", image_cast_lines) if prompt_mode not in {"pure_black", "loading_wheel", "title_card"} else "",
+        _format_section("PROP INVARIANTS", packet.prop_invariants) if prompt_mode not in {"pure_black", "loading_wheel", "screen_presence", "object_macro", "environment_transition", "title_card"} else "",
+        _format_section("LOCATION INVARIANTS", image_location_lines) if prompt_mode not in {"pure_black", "loading_wheel", "screen_presence", "object_macro", "environment_transition", "title_card", "hand_object_action"} else "",
+        _format_section("DIALOGUE COVERAGE", _dialogue_coverage_lines(dialogue_coverage, for_video=False)) if prompt_mode not in {"screen_presence", "title_card"} else "",
+        _format_section("BLOCKING", image_blocking_lines) if prompt_mode not in {"pure_black", "loading_wheel", "screen_presence", "object_macro", "environment_transition", "title_card", "hand_object_action"} else "",
+        _format_section("BACKGROUND", image_background_lines) if prompt_mode not in {"pure_black", "loading_wheel", "screen_presence", "object_macro", "hand_object_action"} else "",
         core["audio_context"],
         _format_section(
             "NEGATIVE CONSTRAINTS",
-            _negative_constraints(packet, dialogue_present=packet.audio.dialogue_present),
+            _negative_constraints(
+                packet,
+                dialogue_present=packet.audio.dialogue_present,
+                mode=prompt_mode,
+                subject_count_override=subject_count_override,
+            ),
         ),
     ]
     full_prompt = "\n\n".join(section for section in sections if section).strip()
@@ -1262,9 +1744,9 @@ def assemble_video_prompt(graph: NarrativeGraph, frame_id: str,
               mapping role label strings to image paths. When provided, a VISUAL
               ANCHORS section is injected listing each reference by role.
 
-    Note on action_summary: The BACKGROUND section is the first dropped during
-    4096-char compression. Bake critical environmental context (lighting,
-    atmosphere, location atmosphere) into action_summary so it survives.
+    Note on action_summary: it should still carry the most important
+    environmental context (lighting, atmosphere, location atmosphere) because
+    it leads the prompt and anchors downstream refinement.
     """
     ctx = get_frame_context(graph, frame_id)
     frame = ctx["frame"]
@@ -1305,19 +1787,39 @@ def assemble_video_prompt(graph: NarrativeGraph, frame_id: str,
         else getattr(frame, "action_summary", "")
     )
     compressed_lead = packet.video_optimized_prompt_block or frame_video_block or frame_action_summary
+    prompt_mode = _classify_prompt_mode(packet, frame)
+    special_handling = _format_section("SPECIAL HANDLING", _special_handling_lines(prompt_mode))
 
-    lead_lines = ["Generate a cinematic motion clip with native audio."]
-    if kinetic_hint:
+    if prompt_mode == "pure_black":
+        lead_lines = [
+            "Generate a cinematic motion clip with native audio.",
+            "Hold on full-frame pure black with no visible imagery.",
+        ]
+    elif prompt_mode == "loading_wheel":
+        lead_lines = [
+            "Generate a cinematic motion clip with native audio.",
+            "Hold on a simple white loading spinner centered on pure black.",
+        ]
+    elif prompt_mode == "title_card":
+        lead_lines = [
+            "Generate a cinematic motion clip with native audio.",
+            "Render a bold authored title-card insert using only the wording described in this beat.",
+            compressed_lead or packet.current_beat,
+        ]
+    else:
+        lead_lines = ["Generate a cinematic motion clip with native audio."]
+    if kinetic_hint and prompt_mode not in {"pure_black", "loading_wheel", "title_card"}:
         lead_lines.append(kinetic_hint)
-    lead_lines.extend([
-        compressed_lead or packet.current_beat,
-        f"Shot type: {packet.shot_intent.shot or shot_type}.",
-        f"Camera motion: {camera_movement}.",
-    ])
+    if prompt_mode not in {"pure_black", "loading_wheel", "title_card"}:
+        lead_lines.extend([
+            compressed_lead or packet.current_beat,
+            f"Shot type: {packet.shot_intent.shot or shot_type}.",
+            f"Camera motion: {camera_movement}.",
+        ])
     if scene.get("mood_keywords"):
         lead_lines.append("Mood: " + ", ".join(scene["mood_keywords"]))
     _ct_vid_dof = _ct_field(_ct_vid, "dof_guidance")
-    if _ct_vid_dof:
+    if _ct_vid_dof and prompt_mode not in {"pure_black", "loading_wheel", "title_card"}:
         lead_lines.append(_ct_vid_dof)
 
     dialogue_turn_lines: list[str] = []
@@ -1393,22 +1895,23 @@ def assemble_video_prompt(graph: NarrativeGraph, frame_id: str,
 
     sections = [
         "\n".join(_compact_text(line) for line in lead_lines if _compact_text(line)),
+        special_handling,
         core["shot_intent"],
-        core["continuity"],
-        core["pose_lock"],
-        core["visual_anchors"],
-        _format_section("SUBJECT COUNT", [f"Exactly {packet.subject_count} visible subject(s)."]),
-        _format_section("CAST INVARIANTS", packet.cast_invariants),
-        _format_section("PROP INVARIANTS", packet.prop_invariants),
-        _format_section("LOCATION INVARIANTS", packet.location_invariants),
-        _format_section("DIALOGUE COVERAGE", _dialogue_coverage_lines(dialogue_coverage, for_video=True)),
-        _format_section("BLOCKING", packet.blocking),
-        _format_section("BACKGROUND", packet.background),
+        _format_section("CONTINUITY", _continuity_lines(packet, mode=prompt_mode)),
+        core["pose_lock"] if prompt_mode not in {"pure_black", "loading_wheel", "screen_presence", "environment_transition", "title_card", "hand_object_action"} else "",
+        core["visual_anchors"] if prompt_mode not in {"pure_black", "loading_wheel", "title_card"} else "",
+        _format_section("SUBJECT COUNT", _subject_count_lines(packet, prompt_mode)),
+        _format_section("CAST INVARIANTS", packet.cast_invariants) if prompt_mode not in {"pure_black", "loading_wheel", "title_card"} else "",
+        _format_section("PROP INVARIANTS", packet.prop_invariants) if prompt_mode not in {"pure_black", "loading_wheel", "screen_presence", "object_macro", "environment_transition", "title_card"} else "",
+        _format_section("LOCATION INVARIANTS", packet.location_invariants) if prompt_mode not in {"pure_black", "loading_wheel", "screen_presence", "object_macro", "environment_transition", "title_card", "hand_object_action"} else "",
+        _format_section("DIALOGUE COVERAGE", _dialogue_coverage_lines(dialogue_coverage, for_video=True)) if prompt_mode != "title_card" else "",
+        _format_section("BLOCKING", packet.blocking) if prompt_mode not in {"pure_black", "loading_wheel", "screen_presence", "object_macro", "environment_transition", "title_card", "hand_object_action"} else "",
+        _format_section("BACKGROUND", packet.background) if prompt_mode not in {"pure_black", "loading_wheel", "screen_presence", "object_macro", "hand_object_action"} else "",
         _format_section("MOTION CONTINUITY", _motion_continuity_lines(frame, packet)),
         _format_section("AUDIO", audio_lines),
         _format_section(
             "NEGATIVE CONSTRAINTS",
-            _negative_constraints(packet, dialogue_present=packet.audio.dialogue_present),
+            _negative_constraints(packet, dialogue_present=packet.audio.dialogue_present, mode=prompt_mode),
         ),
     ]
     sections = [s for s in sections if s]
@@ -1619,7 +2122,7 @@ def resolve_ref_images(graph: NarrativeGraph, frame_id: str,
     collector = ReferenceImageCollector(graph, base)
     frame_refs = collector.get_frame_references(frame_id)
     refs: list[str] = []
-    if frame_refs.storyboard_cell and frame_refs.storyboard_cell.exists():
+    if ENABLE_STORYBOARD_GUIDANCE and frame_refs.storyboard_cell and frame_refs.storyboard_cell.exists():
         refs.append(frame_refs.storyboard_cell.relative_to(base).as_posix())
     refs.extend(
         path.relative_to(base).as_posix()
@@ -1826,6 +2329,19 @@ def assemble_all_prompts(graph: NarrativeGraph, project_dir: str | Path) -> dict
     for d in [frame_prompt_dir, shot_packet_dir, video_prompt_dir, cast_prompt_dir, loc_prompt_dir, prop_prompt_dir, storyboard_prompt_dir]:
         d.mkdir(parents=True, exist_ok=True)
 
+    stale_prompt_patterns = {
+        frame_prompt_dir: "*_image.json",
+        shot_packet_dir: "*.json",
+        video_prompt_dir: "*_video.json",
+        cast_prompt_dir: "*_composite.json",
+        loc_prompt_dir: "*_location.json",
+        prop_prompt_dir: "*_prop.json",
+        storyboard_prompt_dir: "*_grid.json",
+    }
+    for directory, pattern in stale_prompt_patterns.items():
+        for existing in directory.glob(pattern):
+            existing.unlink()
+
     counts = {"image_prompts": 0, "shot_packets": 0, "video_prompts": 0, "composite_prompts": 0,
               "location_prompts": 0, "prop_prompts": 0, "storyboard_prompts": 0}
 
@@ -1893,18 +2409,19 @@ def assemble_all_prompts(graph: NarrativeGraph, project_dir: str | Path) -> dict
         except Exception as e:
             print(f"WARNING: Failed to assemble prop for {prop_id}: {e}")
 
-    # Grid storyboard prompts — one per StoryboardGrid
-    for grid_id, grid in graph.storyboard_grids.items():
-        try:
-            sb = assemble_grid_storyboard_prompt(graph, grid_id, project_dir=project_dir)
-            (storyboard_prompt_dir / f"{grid_id}_grid.json").write_text(
-                json.dumps(sb, indent=2, ensure_ascii=False), encoding="utf-8"
-            )
-            # Update the grid's prompt path on the graph
-            grid.storyboard_prompt_path = f"frames/storyboard_prompts/{grid_id}_grid.json"
-            counts["storyboard_prompts"] += 1
-        except Exception as e:
-            print(f"WARNING: Failed to assemble storyboard for {grid_id}: {e}")
+    # Grid storyboard prompts — optional guidance layer
+    if ENABLE_STORYBOARD_GUIDANCE:
+        for grid_id, grid in graph.storyboard_grids.items():
+            try:
+                sb = assemble_grid_storyboard_prompt(graph, grid_id, project_dir=project_dir)
+                (storyboard_prompt_dir / f"{grid_id}_grid.json").write_text(
+                    json.dumps(sb, indent=2, ensure_ascii=False), encoding="utf-8"
+                )
+                # Update the grid's prompt path on the graph
+                grid.storyboard_prompt_path = f"frames/storyboard_prompts/{grid_id}_grid.json"
+                counts["storyboard_prompts"] += 1
+            except Exception as e:
+                print(f"WARNING: Failed to assemble storyboard for {grid_id}: {e}")
 
     return counts
 

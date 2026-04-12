@@ -162,6 +162,7 @@ async def generate(grid: str, output_dir: Path,
                    scene: str = "",
                    frame_ids: list[str] | None = None,
                    style_prefix: str = "",
+                   grid_id: str = "",
                    run_id: str = "",
                    phase: str = "") -> dict:
     """Generate a grid storyboard image and extract individual cells.
@@ -237,7 +238,7 @@ async def generate(grid: str, output_dir: Path,
     handler = get_handler("storyboard", replicate_token=REPLICATE_API_TOKEN)
     try:
         handler_result = await handler.generate(StoryboardInput(
-            grid_id=grid,
+            grid_id=grid_id or grid,
             prompt=prompt,
             reference_images=ref_paths,
             layout=grid,

@@ -2,6 +2,7 @@
   "projectId": "__PROJECT_ID__",
   "projectName": "__PROJECT_NAME__",
   "slug": "__SLUG__",
+  "creativeFreedom": "balanced",
   "status": "scaffold",
   "version": 1,
   "phases": {

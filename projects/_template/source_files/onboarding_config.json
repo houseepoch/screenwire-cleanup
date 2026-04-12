@@ -1,9 +1,65 @@
 {
   "projectName": "__PROJECT_NAME__",
   "projectId": "__PROJECT_ID__",
-  "stickinessLevel": 3,
-  "stickinessPermission": "Expand. Follow the source material's direction but round out incomplete areas. Add transitional scenes, supporting details, and environmental context the source implies but doesn't show. All additions must serve what's already demonstrated — supporting information, not new story.",
-  "outputSize": "short",
+  "creativeFreedom": "balanced",
+  "creativeFreedomPermission": "Minor organic moments, natural pauses, slight framing tweaks, and delivery smoothing are allowed, but the source meaning and intent must stay intact.",
+  "creativeFreedomFailureModes": "Dialogue can drift into sounding more natural and quietly change meaning. Prevent this by allowing only light delivery smoothing and forbidding new lines or new plot material.",
+  "dialoguePolicy": "Minor re-phrasing for natural delivery only. No new lines. No added reactions. Changes must preserve exact meaning and intent.",
+  "dialogueWorkflow": {
+    "enabled": true,
+    "version": "grok-4.2-recovery-universal",
+    "agents": [
+      {
+        "name": "extraction_recovery",
+        "promptFile": "agent_prompts/dialogue_extraction_recovery.md",
+        "runsOn": "skeleton_load",
+        "alwaysRun": true
+      },
+      {
+        "name": "mapping_assignment",
+        "promptFile": "agent_prompts/dialogue_mapping_assignment.md",
+        "runsOn": "after_extraction",
+        "usesCreativeFreedomTier": true
+      },
+      {
+        "name": "confirmation_validation",
+        "promptFile": "agent_prompts/dialogue_confirmation_validation.md",
+        "runsOn": "before_prompt_generation",
+        "enforcesCreativeFreedomTier": true
+      }
+    ],
+    "recoveryPass": {
+      "forceUniversal": true,
+      "fallbackToContext": true
+    },
+    "tierEnforcement": {
+      "strict": {
+        "addDialogue": false,
+        "alterDialogue": "none",
+        "reactionLines": false,
+        "mustPreserveMeaningAndVoice": true
+      },
+      "balanced": {
+        "addDialogue": false,
+        "alterDialogue": "light",
+        "reactionLines": false,
+        "mustPreserveMeaningAndVoice": true
+      },
+      "creative": {
+        "addDialogue": "short_reactions_only",
+        "alterDialogue": "moderate",
+        "reactionLines": true,
+        "mustPreserveMeaningAndVoice": true
+      },
+      "unbounded": {
+        "addDialogue": "full_freedom",
+        "alterDialogue": "full_freedom",
+        "reactionLines": true,
+        "mustPreserveMeaningAndVoice": false
+      }
+    }
+  },
+  "frameBudget": "auto",
   "mediaStyle": "live_clear",
   "pipeline": "story_upload",
   "aspectRatio": "16:9",

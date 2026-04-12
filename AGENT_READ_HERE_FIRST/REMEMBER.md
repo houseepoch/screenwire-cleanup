@@ -12,7 +12,7 @@
 
 **Status:** APPROVED — Implementation ACTIVE. Full spec at `build_specs/cc_first_deterministic_spec.md` (1072 lines).
 
-**Decision:** Eliminate LLM-based entity seeding, frame parsing, dialogue wiring, and composition. Replace with deterministic Python parsers + Haiku enrichment + Grok cinematic tagging.
+**Decision:** Eliminate LLM-based entity seeding, frame parsing, dialogue wiring, and composition. Replace with deterministic Python parsers + frame enrichment + Grok cinematic tagging.
 
 ### Architecture
 ```
@@ -25,7 +25,7 @@ Step 2a: Python parser (graph/cc_parser.py) — deterministic, <5 seconds
   → DialogueNodes via ///DLG excerpt pointers (verbatim source text, never copied)
   → All edges (FOLLOWS, APPEARS_IN, AT_LOCATION, DIALOGUE_SPANS, etc.)
                  ↓
-Step 2b: Parallel Haiku workers (graph/haiku_enricher.py) — ~$0.005/100 frames
+Step 2b: Parallel frame enricher workers (graph/frame_enricher.py) — ~$0.005/100 frames
   → CastFrameState: screen_position, looking_at, emotion, posture, facing_direction, action
     (anchored by ///SCENE_STAGING start/mid/end beats from CC)
   → FrameComposition: shot, angle, movement, focus (from prose context)
@@ -47,7 +47,7 @@ Step 2d: Prompt assembly + materialization (existing code, unchanged)
 ### Key Design Decisions
 - **Entity rosters** use schema-ready `///CAST`, `///LOCATION`, `///LOCATION_DIR`, `///PROP` tags mapping directly to schema fields
 - **Dialogue** uses `///DLG` excerpt pointers (src_start/src_end/src_lines) — parser extracts verbatim from creative_output.md, CC never copies text
-- **Scene staging** uses `///SCENE_STAGING` with start/mid/end beats defining screen_position, looking_at, facing_direction per character — Haiku workers anchor to these
+- **Scene staging** uses `///SCENE_STAGING` with start/mid/end beats defining screen_position, looking_at, facing_direction per character — frame enricher workers anchor to these
 - **Frame markers** are lean: `cast`, `cam`, `dlg`, `cast_states` only — NO tag, shot, angle, movement, or duration
 - **Cinematic tags** assigned POST-GRAPH by Grok tagger, not by CC or Haiku. Tag definitions are textual composition directives injected into prompts
 - **visible_description REMOVED** from Haiku output — redundant with location.directions[camera_facing] (api.py fallback handles it)
@@ -60,14 +60,14 @@ Step 2d: Prompt assembly + materialization (existing code, unchanged)
 | Agent 1 (Entity Seeder, Opus) | Python parser | $0 |
 | Agent 2 (Frame Parser, Opus) | Python parser | $0 |
 | Agent 3 (Dialogue Wirer, Opus) | Python parser | $0 |
-| Agent 4 (Compositor, Opus) | Haiku workers | ~$0.005/100 frames |
+| Agent 4 (Compositor, Opus) | frame enricher workers | ~$0.005/100 frames |
 | Agent 5 (Continuity, Opus) | Python validator | $0 |
 | F01-F18 formula tags | Grok cinematic tagger (60+ tags) | ~$0.01/100 frames |
 
 ### Implementation Order
 1. `graph/schema.py` — Add StagingBeat, CinematicTag; replace FormulaTag enum
 2. `graph/cc_parser.py` — Python parser (new)
-3. `graph/haiku_enricher.py` — Haiku worker dispatch (new)
+3. `graph/frame_enricher.py` — frame enricher dispatch (new)
 4. `graph/grok_tagger.py` — Grok cinematic frame tagger (new)
 5. `graph/continuity_validator.py` — Rule-based validation (new)
 6. `graph/prompt_assembler.py` — Replace FORMULA_SHOT/FORMULA_VIDEO with CinematicTag.ai_prompt_language

@@ -1,0 +1,12 @@
+#!/usr/bin/env python3
+"""graph_validate_dialogue — Validate dialogue mapping and tier compliance."""
+
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from graph.dialogue_validator import main
+
+
+if __name__ == "__main__":
+    main()

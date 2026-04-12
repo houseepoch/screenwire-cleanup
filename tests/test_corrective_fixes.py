@@ -224,7 +224,7 @@ class TestRefineStatusKind:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Task 5 — _serialize_video_prompt_sections Tier 1 preservation
+# Task 5 — _serialize_video_prompt_sections preservation
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TestSerializeVideoPromptTier1:
@@ -239,26 +239,25 @@ class TestSerializeVideoPromptTier1:
         ]
 
     def test_short_prompt_passes_through(self):
-        """A prompt well under 4096 chars should be returned unchanged."""
+        """A prompt should be returned unchanged."""
         sections = self._make_sections()
         result = _serialize_video_prompt_sections(sections)
         assert "AUDIO:" in result
         assert "MOTION CONTINUITY:" in result
 
-    def test_tier3_dropped_before_tier1(self):
-        """When over the limit, Tier 3 blocks are dropped before Tier 1 blocks."""
-        # Generate enough BACKGROUND bloat to push over 4096 chars
+    def test_tier3_is_preserved_when_prompt_is_large(self):
+        """Large prompts should preserve Tier 3 blocks too."""
         sections = self._make_sections(bloat_chars=4000)
-        # Should not raise — Tier 3 BACKGROUND is dropped to fit
         result = _serialize_video_prompt_sections(sections)
+        assert "BACKGROUND:" in result
         assert "AUDIO:" in result, "Tier 1 AUDIO block was dropped — must not happen"
         assert "MOTION CONTINUITY:" in result, "Tier 1 MOTION CONTINUITY was dropped — must not happen"
 
-    def test_raises_when_tier1_alone_exceeds_limit(self):
-        """If Tier 1 blocks alone exceed the char limit, a ValueError must be raised."""
-        from graph.prompt_assembler import MAX_VIDEO_PROMPT_CHARS
-        huge_audio = "AUDIO:\n" + ("dialogue words " * (MAX_VIDEO_PROMPT_CHARS // 10))
-        huge_continuity = "MOTION CONTINUITY:\n" + ("carry forward " * (MAX_VIDEO_PROMPT_CHARS // 10))
+    def test_tier1_can_exceed_legacy_limit_without_raising(self):
+        """Large Tier 1 blocks should no longer trigger overflow errors."""
+        huge_audio = "AUDIO:\n" + ("dialogue words " * 500)
+        huge_continuity = "MOTION CONTINUITY:\n" + ("carry forward " * 500)
         sections = [huge_audio, huge_continuity]
-        with pytest.raises(ValueError, match="tier1_block_sizes"):
-            _serialize_video_prompt_sections(sections)
+        result = _serialize_video_prompt_sections(sections)
+        assert "AUDIO:" in result
+        assert "MOTION CONTINUITY:" in result

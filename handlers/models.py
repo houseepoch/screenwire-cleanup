@@ -104,6 +104,7 @@ class HandlerInput(BaseModel):
     output_format: str = "png"
     run_id: Optional[str] = None
     phase: str = ""
+    sensitive_context: bool = False
 
 
 class HandlerOutput(BaseModel):

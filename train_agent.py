@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """ScreenWire AI — Agent Training Mode
 
-Spawns individual pipeline agents as interactive Claude CLI sessions so you
+Spawns individual pipeline agents as interactive Grok-backed sessions so you
 can talk to them directly, see their full terminal output, and iterate on
 their behavior in real time.
 
@@ -19,6 +19,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from llm.xai_client import DEFAULT_REASONING_MODEL
+
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
@@ -28,7 +30,7 @@ PROMPTS_DIR = APP_DIR / "agent_prompts"
 SKILLS_DIR = APP_DIR / "skills"
 PROJECTS_DIR = APP_DIR / "projects"
 
-DEFAULT_MODEL = "claude-opus-4-6"
+DEFAULT_MODEL = DEFAULT_REASONING_MODEL
 
 _INCLUDE_RE = re.compile(r'\{\{include:(.+?)\}\}')
 
@@ -196,12 +198,17 @@ def spawn_session(agent_id: str, project_dir: Path, model: str) -> int:
     }
     # Prevent nested-session detection
     env.pop("CLAUDECODE", None)
+    existing_pythonpath = env.get("PYTHONPATH", "")
+    repo_root = str(APP_DIR)
+    env["PYTHONPATH"] = repo_root if not existing_pythonpath else f"{repo_root}{os.pathsep}{existing_pythonpath}"
 
     cmd = [
-        "claude",
+        sys.executable,
+        "-m", "llm.agent_runner",
         "--system-prompt", system_prompt,
         "--model", model,
         "--dangerously-skip-permissions",
+        "--task-hint", agent_id,
     ]
 
     desc = dict(AGENTS).get(agent_id, agent_id)
@@ -235,7 +242,7 @@ def main():
     )
     parser.add_argument(
         "--model", default=DEFAULT_MODEL,
-        help=f"Claude model to use (default: {DEFAULT_MODEL})",
+        help=f"Model to use (default: {DEFAULT_MODEL})",
     )
     parser.add_argument(
         "--project", default=None,

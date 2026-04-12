@@ -27,31 +27,87 @@ echo "╚═══════════════════════�
 echo -e "${RESET}"
 
 # ───────────────────────────────────────────────────────────────
-# Check for existing projects that can be resumed
+# Check for existing projects that can be resumed or healed
 # ───────────────────────────────────────────────────────────────
 RESUMABLE=()
 RESUMABLE_DISPLAY=()
 for proj_dir in "$SCRIPT_DIR"/projects/*/; do
+    [[ ! -d "$proj_dir" ]] && continue
     [[ "$(basename "$proj_dir")" == "_template" ]] && continue
     manifest="$proj_dir/project_manifest.json"
     [[ ! -f "$manifest" ]] && continue
 
-    # Find first incomplete phase
-    next_phase=$(python3 -c "
-import json, sys
-m = json.loads(open('$manifest').read())
-phases = m.get('phases', {})
+    resume_info="$(python3 - <<PY
+import json
+from pathlib import Path
+import run_pipeline
+
+project_dir = Path(r"$proj_dir").resolve()
+manifest_path = project_dir / "project_manifest.json"
+run_pipeline.PROJECT_DIR = project_dir
+run_pipeline.MANIFEST_PATH = manifest_path
+
+manifest = json.loads(manifest_path.read_text())
+project_name = manifest.get("projectName", project_dir.name)
+phases = manifest.get("phases", {})
+next_phase = 7
+reason = "complete"
+issue = ""
+
 for i in range(7):
-    if phases.get(f'phase_{i}', {}).get('status') != 'complete':
-        print(i); sys.exit()
-print(7)
-" 2>/dev/null)
+    status = phases.get(f"phase_{i}", {}).get("status")
+    if status != "complete":
+        next_phase = i
+        reason = status or "not_started"
+        break
+    reusable, issues = run_pipeline._phase_reuse_status(i, project_dir)
+    if not reusable:
+        next_phase = i
+        reason = "heal"
+        issue = issues[0] if issues else ""
+        break
+
+print(json.dumps({
+    "project_name": project_name,
+    "next_phase": next_phase,
+    "reason": reason,
+    "issue": issue,
+}))
+PY
+)"
+
+    next_phase="$(python3 - <<PY
+import json
+data = json.loads('''$resume_info''')
+print(data["next_phase"])
+PY
+)"
 
     if [[ "$next_phase" -lt 7 ]]; then
-        proj_name=$(python3 -c "import json; print(json.loads(open('$manifest').read()).get('projectName','?'))" 2>/dev/null)
-        proj_id=$(basename "$proj_dir")
+        proj_id="$(basename "$proj_dir")"
+        proj_name="$(python3 - <<PY
+import json
+data = json.loads('''$resume_info''')
+print(data["project_name"])
+PY
+)"
+        resume_reason="$(python3 - <<PY
+import json
+data = json.loads('''$resume_info''')
+reason = data["reason"]
+issue = data["issue"]
+if reason == "heal" and issue:
+    print(f"heal Phase {data['next_phase']} ({issue})")
+elif reason == "ready":
+    print(f"Phase {data['next_phase']} ready")
+elif reason == "not_started":
+    print(f"Phase {data['next_phase']} not started")
+else:
+    print(f"Phase {data['next_phase']} ({reason})")
+PY
+)"
         RESUMABLE+=("$proj_id")
-        RESUMABLE_DISPLAY+=("$proj_name  →  Phase $next_phase (${PHASE_NAMES[$next_phase]})")
+        RESUMABLE_DISPLAY+=("$proj_name  →  $resume_reason")
     fi
 done
 
@@ -59,13 +115,13 @@ MODE="new"
 PROJECT_ID=""
 
 if [[ ${#RESUMABLE[@]} -gt 0 ]]; then
-    echo -e "${BOLD}Existing projects with progress:${RESET}"
+    echo -e "${BOLD}Existing projects that can resume or heal:${RESET}"
     for i in "${!RESUMABLE[@]}"; do
         echo -e "  ${GREEN}$((i+1)))${RESET} ${RESUMABLE_DISPLAY[$i]}"
     done
     echo -e "  ${CYAN}N)${RESET} New project"
     echo ""
-    read -rp "$(echo -e "${BOLD}Resume or New? [1-${#RESUMABLE[@]}/N]:${RESET} ")" PICK
+    read -rp "$(echo -e "${BOLD}Resume/heal or New? [1-${#RESUMABLE[@]}/N]:${RESET} ")" PICK
     PICK="${PICK:-N}"
 
     if [[ "$PICK" =~ ^[0-9]+$ ]] && [[ "$PICK" -ge 1 ]] && [[ "$PICK" -le ${#RESUMABLE[@]} ]]; then
@@ -95,7 +151,6 @@ if [[ "$MODE" == "new" ]]; then
     echo -e "All files will be copied into the project's source_files/.${RESET}"
     read -rp "$(echo -e "${BOLD}Source path:${RESET} ")" SOURCE_PATH
 
-    # Strip surrounding quotes if drag-dropped from file manager
     SOURCE_PATH="${SOURCE_PATH%\"}"
     SOURCE_PATH="${SOURCE_PATH#\"}"
     SOURCE_PATH="${SOURCE_PATH%\'}"
@@ -110,31 +165,34 @@ if [[ "$MODE" == "new" ]]; then
         exit 1
     fi
 
-    # ── 4. Stickiness (creative freedom) ──
+    # ── 4. Creative Freedom ──
     echo ""
-    echo -e "${BOLD}Stickiness (creative freedom):${RESET}"
-    echo "  1 = Reformat          2 = Remaster"
-    echo "  3 = Expand            4 = Reimagine"
-    echo "  5 = Create"
-    read -rp "$(echo -e "${BOLD}Stickiness${RESET} [3]: ")" STICKINESS
-    STICKINESS="${STICKINESS:-3}"
-
-    # ── 5. Size ──
-    echo ""
-    echo -e "${BOLD}Project size:${RESET}"
-    echo "  1) short       (10-20 frames)"
-    echo "  2) short_film  (50-125 frames)"
-    echo "  3) televised   (200-300 frames)"
-    echo "  4) feature     (750-1250 frames)"
-    read -rp "$(echo -e "${BOLD}Size${RESET} [1]: ")" SIZE_CHOICE
-    SIZE_CHOICE="${SIZE_CHOICE:-1}"
-    case "$SIZE_CHOICE" in
-        1) SIZE="short" ;;
-        2) SIZE="short_film" ;;
-        3) SIZE="televised" ;;
-        4) SIZE="feature" ;;
+    echo -e "${BOLD}Creative freedom:${RESET}"
+    echo "  1) strict      2) balanced"
+    echo "  3) creative    4) unbounded"
+    read -rp "$(echo -e "${BOLD}Creative freedom${RESET} [2]: ")" CREATIVE_CHOICE
+    CREATIVE_CHOICE="${CREATIVE_CHOICE:-2}"
+    case "$CREATIVE_CHOICE" in
+        1) CREATIVE_FREEDOM="strict" ;;
+        2) CREATIVE_FREEDOM="balanced" ;;
+        3) CREATIVE_FREEDOM="creative" ;;
+        4) CREATIVE_FREEDOM="unbounded" ;;
         *) echo -e "${RED}Invalid choice. Pick 1-4.${RESET}"; exit 1 ;;
     esac
+
+    # ── 5. Frame Budget ──
+    echo ""
+    echo -e "${BOLD}Frame budget:${RESET}"
+    echo "  Enter ${CYAN}auto${RESET} for uncapped coverage."
+    echo "  Auto means: spare no expense, use as many frames as needed,"
+    echo "  prioritize the richest project quality, and preserve full-story coverage."
+    echo "  Or enter a positive integer frame cap (for example: 60, 180, 320)."
+    read -rp "$(echo -e "${BOLD}Frame budget${RESET} [auto]: ")" FRAME_BUDGET
+    FRAME_BUDGET="${FRAME_BUDGET:-auto}"
+    if [[ ! "$FRAME_BUDGET" =~ ^auto$|^[1-9][0-9]*$ ]]; then
+        echo -e "${RED}Invalid frame budget. Use 'auto' or a positive integer.${RESET}"
+        exit 1
+    fi
 
     # ── 6. Media style ──
     echo ""
@@ -160,11 +218,11 @@ if [[ "$MODE" == "new" ]]; then
     # ── Summary ──
     echo ""
     echo -e "${CYAN}────────────────────────────────────────────${RESET}"
-    echo -e "${BOLD}  Name:${RESET}        $PROJECT_NAME"
-    echo -e "${BOLD}  Source:${RESET}      $SOURCE_PATH"
-    echo -e "${BOLD}  Stickiness:${RESET}  $STICKINESS"
-    echo -e "${BOLD}  Size:${RESET}        $SIZE"
-    echo -e "${BOLD}  Style:${RESET}       $MEDIA_STYLE"
+    echo -e "${BOLD}  Name:${RESET}            $PROJECT_NAME"
+    echo -e "${BOLD}  Source:${RESET}          $SOURCE_PATH"
+    echo -e "${BOLD}  Creative Freedom:${RESET} $CREATIVE_FREEDOM"
+    echo -e "${BOLD}  Frame Budget:${RESET}    $FRAME_BUDGET"
+    echo -e "${BOLD}  Style:${RESET}           $MEDIA_STYLE"
     echo -e "${CYAN}────────────────────────────────────────────${RESET}"
     echo ""
     read -rp "$(echo -e "${BOLD}Proceed? [Y/n]:${RESET} ")" CONFIRM
@@ -179,23 +237,23 @@ if [[ "$MODE" == "new" ]]; then
     if [[ -f "$SOURCE_PATH" ]]; then
         SEED_FILE="$SOURCE_PATH"
     elif [[ -d "$SOURCE_PATH" ]]; then
-        SEED_FILE=$(find "$SOURCE_PATH" -maxdepth 1 -type f \( -name '*.md' -o -name '*.txt' \) | head -1)
+        SEED_FILE=$(find "$SOURCE_PATH" -maxdepth 1 -type f | head -1)
     fi
 
     # ── Create project ──
     echo -e "${GREEN}▸ Creating project...${RESET}"
-    SEED_ARGS=()
+    CREATE_CMD=(
+        python3 create_project.py
+        --name "$PROJECT_NAME"
+        --id "$PROJECT_ID"
+        --creative-freedom "$CREATIVE_FREEDOM"
+        --frame-budget "$FRAME_BUDGET"
+        --media-style "$MEDIA_STYLE"
+    )
     if [[ -n "$SEED_FILE" ]]; then
-        SEED_ARGS=(--seed "$SEED_FILE")
+        CREATE_CMD+=(--seed "$SEED_FILE")
     fi
-
-    python3 create_project.py \
-        --name "$PROJECT_NAME" \
-        --id "$PROJECT_ID" \
-        --stickiness "$STICKINESS" \
-        --size "$SIZE" \
-        --media-style "$MEDIA_STYLE" \
-        "${SEED_ARGS[@]+"${SEED_ARGS[@]}"}"
+    "${CREATE_CMD[@]}"
 
     PROJECT_SOURCE_DIR="$SCRIPT_DIR/projects/$PROJECT_ID/source_files"
 
@@ -208,17 +266,19 @@ if [[ "$MODE" == "new" ]]; then
     fi
 
     # Update onboarding_config.json sourceFiles array with actual files
-    SOURCE_LIST=$(find "$PROJECT_SOURCE_DIR" -maxdepth 1 -type f ! -name 'onboarding_config.json' -printf 'source_files/%f\n' | sort)
-    python3 -c "
+    SOURCE_LIST="$(find "$PROJECT_SOURCE_DIR" -maxdepth 1 -type f ! -name 'onboarding_config.json' -printf 'source_files/%f\n' | sort)"
+    python3 - <<PY
 import json
-cfg_path = '$PROJECT_SOURCE_DIR/onboarding_config.json'
-cfg = json.loads(open(cfg_path).read())
-cfg['sourceFiles'] = [l for l in '''$SOURCE_LIST'''.strip().split('\n') if l]
-open(cfg_path, 'w').write(json.dumps(cfg, indent=2) + '\n')
-"
+from pathlib import Path
+
+cfg_path = Path(r"$PROJECT_SOURCE_DIR") / "onboarding_config.json"
+cfg = json.loads(cfg_path.read_text())
+cfg["sourceFiles"] = [line for line in """$SOURCE_LIST""".strip().splitlines() if line]
+cfg_path.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
+PY
 
     echo -e "${GREEN}▸ Source files in project:${RESET}"
-    ls -1 "$PROJECT_SOURCE_DIR" | grep -v onboarding_config.json
+    ls -1 "$PROJECT_SOURCE_DIR" | grep -v onboarding_config.json || true
 
     PIPELINE_FLAGS=""
 fi
@@ -229,7 +289,7 @@ fi
 if [[ "$MODE" == "resume" ]]; then
     PIPELINE_FLAGS="--resume"
     echo ""
-    echo -e "${GREEN}▸ Resuming project: ${PROJECT_ID}${RESET}"
+    echo -e "${GREEN}▸ Resuming/healing project: ${PROJECT_ID}${RESET}"
 fi
 
 # ───────────────────────────────────────────────────────────────

@@ -315,3 +315,168 @@ Returns a single JPG image URL.
 - Pruna also offers a direct API at `https://api.pruna.ai/v1/predictions` (separate from Replicate)
 - Supports async (polling) and sync (`Try-Sync: true` header) generation modes via Pruna's own API
 - Good for: retail product shots, gaming assets, advertising creatives, concept art
+
+bytedance/seedream-4.5 – Full Replicate API Specification
+
+**Model**  
+- **Owner / Name**: `bytedance/seedream-4.5`  
+- **Latest Version Hash**: `be890c6ee7cc6e7e49db329916e7881400d53d32fd2cdc9cfbe43efaab72178a`  
+- **Description**: Seedream 4.5 is ByteDance’s upgraded image generation model. It features cinematic aesthetics, stronger spatial understanding, precise instruction following, world knowledge, and native support for 4K (4096 px) output. Supports both text-to-image and image-to-image / multi-reference generation.
+
+**Stats (as of April 2026)**  
+- Runs: ~7M+  
+- Pricing: **$0.04 per output image**
+
+---
+
+## How to Run (Replicate API)
+
+### 1. Python (recommended)
+```python
+import replicate
+
+output = replicate.run(
+    "bytedance/seedream-4.5",
+    input={
+        "prompt": "A warm, nostalgic film-style interior of a cozy café...",
+        "size": "4K",
+        "aspect_ratio": "16:9",
+        # other optional params below
+    }
+)
+
+# output is a list of image URLs (strings)
+print(output)
+2. Node.js / JavaScript
+JavaScriptconst Replicate = require("replicate");
+const replicate = new Replicate();
+
+const output = await replicate.run("bytedance/seedream-4.5", {
+  input: {
+    prompt: "Your prompt here",
+    size: "4K",
+    aspect_ratio: "16:9"
+  }
+});
+3. cURL (raw HTTP)
+Bashcurl -X POST \
+  -H "Authorization: Token $REPLICATE_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "version": "be890c6ee7cc6e7e49db329916e7881400d53d32fd2cdc9cfbe43efaab72178a",
+    "input": {
+      "prompt": "A cinematic shot of...",
+      "size": "2K"
+    }
+  }' \
+  https://api.replicate.com/v1/predictions
+
+Input Schema (Complete)
+All parameters are passed inside the input object.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ParameterTypeDefaultRequiredDescription / Constraintspromptstring—YesText prompt for image generation. Supports detailed natural-language instructions.image_inputarray[file][]NoReference images (img2img or multi-reference). 1–14 images allowed.sizestring"2K"NoOutput resolution. Options: "2K" (2048 px), "4K" (4096 px), "custom". Note: 1K is not supported.widthinteger—No*Custom width (only when size="custom"). Range: 1024–4096.heightinteger—No*Custom height (only when size="custom"). Range: 1024–4096.aspect_ratiostring"match_input_image" (when images provided) or autoNoAspect ratio (used when size is not custom). Common values: "16:9", "9:16", "1:1", "match_input_image", etc.max_imagesinteger1NoNumber of images to generate. Range: 1–15.sequential_image_generationstring"disabled"NoControls sequential / multi-image consistency. Options: "disabled", "auto".
+*width and height are only used when size = "custom".
+Additional Notes on Inputs
+
+Total pixel limits apply for custom sizes (roughly 3.6 M – 16.7 M pixels depending on hardware).
+When using image_input, the model supports strong multi-reference consistency and style transfer.
+Current live schema note: `enhance_prompt` is rejected by the deployed Seedream 4.5 endpoint used by this pipeline and should not be sent.
+
+
+Output Schema
+
+Type: array[string]
+Description: List of URLs pointing to the generated PNG images (one URL per image).
+The number of URLs matches the max_images value (or 1 by default).
+Images are hosted on Replicate’s CDN and are publicly accessible for a limited time.
+
+Example output
+JSON[
+  "https://replicate.delivery/.../seedream-4.5-abc123.png",
+  "https://replicate.delivery/.../seedream-4.5-def456.png"
+]
+
+Full API Reference Links (Replicate)
+
+Model page: https://replicate.com/bytedance/seedream-4.5
+Live schema: https://replicate.com/bytedance/seedream-4.5/api/schema
+API examples: https://replicate.com/bytedance/seedream-4.5/api
+
+
+License & Usage
+Commercial use is permitted. Check the model card on Replicate for the latest license details.
+Let me know if you need a specific language SDK example, OpenAPI JSON export, or help integrating this into your code!

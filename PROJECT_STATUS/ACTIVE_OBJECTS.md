@@ -12,7 +12,7 @@
 - **Implementation steps:**
   1. [ ] `graph/schema.py` — Add StagingBeat, CinematicTag models; replace FormulaTag enum
   2. [ ] `graph/cc_parser.py` — Python parser: skeleton ///TAGs → entities, frame markers → frames + dialogue
-  3. [ ] `graph/haiku_enricher.py` — Haiku worker dispatch: per-frame enrichment (cast states, composition, environment, directing)
+  3. [ ] `graph/frame_enricher.py` — frame enricher dispatch: per-frame enrichment (cast states, composition, environment, directing)
   4. [ ] `graph/grok_tagger.py` — Grok cinematic frame tagger: reads frame nodes, assigns D/E/R/A/C/T/S/M tags with definitions
   5. [ ] `graph/continuity_validator.py` — Deterministic Python graph integrity checks
   5b. [ ] `agent_prompts/morpheus_graph_auditor.md` — Lean QA auditor prompt (outline + graph only, no source material)
@@ -30,4 +30,4 @@
 ## OBJ-003: NAC Test Run (Paused)
 - **Status:** PAUSED — Will re-run after OBJ-001 as the validation test
 - **Project:** nac_corrective_test_001
-- **Config:** Stickiness 1 (Reformat), short_film, live_retro_grain
+- **Config:** strict creative freedom, frame budget auto, live_retro_grain

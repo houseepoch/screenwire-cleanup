@@ -29,8 +29,15 @@ from .models import (
     StoryboardInput,
     StoryboardOutput,
 )
+from .reference_pack import build_reference_pack, prompt_image_retry_threshold
 
 logger = logging.getLogger("handlers.storyboard")
+
+
+def _should_retry_with_prompt_image(prompt: str, detail: dict[str, object]) -> bool:
+    if len(prompt) < prompt_image_retry_threshold():
+        return False
+    return str(detail.get("failure_type", "")) in {"UPSTREAM_TRANSIENT", "MODEL_ERROR", "TIMEOUT"}
 
 
 class StoryboardHandler(BaseHandler):
@@ -50,35 +57,42 @@ class StoryboardHandler(BaseHandler):
         spec = RESOLUTION_SPECS[self.handler_name]
 
         # Build output paths
-        out_dir = inp.output_dir / "storyboards"
-        out_dir.mkdir(parents=True, exist_ok=True)
-        composite_path = out_dir / f"{inp.grid_id}_composite.{inp.output_format}"
-        cells_dir = out_dir / "cells" / inp.grid_id
+        inp.output_dir.mkdir(parents=True, exist_ok=True)
+        composite_path = inp.output_dir / f"composite.{inp.output_format}"
+        cells_dir = inp.output_dir / "frames"
         cells_dir.mkdir(parents=True, exist_ok=True)
 
         # Upload reference images (cast composites, prop images, location images)
         image_uris: list[str] = []
-        if inp.reference_images:
-            existing = [p for p in inp.reference_images if p.exists()]
-            if existing:
-                image_uris = await self.upload_many(existing)
-                logger.info(
-                    "Uploaded %d/%d reference images for storyboard %s",
-                    len(image_uris),
-                    len(inp.reference_images),
-                    inp.grid_id,
-                )
+        existing_refs: list[Path] = []
+        packed_refs = build_reference_pack(
+            pack_dir=inp.output_dir / "_packed_refs",
+            prompt_text=inp.prompt,
+            reference_images=[p for p in inp.reference_images if p.exists()],
+            storyboard_image=None,
+        )
+        existing_refs = list(packed_refs.reference_images)
+        if existing_refs:
+            image_uris = await self.upload_many(existing_refs)
+            logger.info(
+                "Uploaded %d/%d reference images for storyboard %s",
+                len(image_uris),
+                len(inp.reference_images),
+                inp.grid_id,
+            )
 
         # Build prediction input
-        pred_input: dict = {
+        full_prompt_input: dict = {
             "prompt": inp.prompt,
             "aspect_ratio": spec.aspect_ratio,  # "1:1"
             "resolution": spec.resolution,  # "2K"
             "output_format": inp.output_format,
         }
+        pred_input: dict = dict(full_prompt_input)
         if image_uris:
             pred_input["image_input"] = image_uris
         if inp.seed is not None:
+            full_prompt_input["seed"] = inp.seed
             pred_input["seed"] = inp.seed
         request_headers = self._build_request_headers(
             run_id=inp.run_id or "",
@@ -103,27 +117,74 @@ class StoryboardHandler(BaseHandler):
 
         if prediction.get("status") != "succeeded":
             error_msg = prediction.get("error", "Generation failed")
-            return StoryboardOutput(
-                success=False,
-                grid_id=inp.grid_id,
-                model_used=model_used,
-                error=error_msg,
-                error_detail=classify_replicate_error(error_msg),
-                elapsed_s=time.monotonic() - t0,
+            logs = prediction.get("logs", "") or ""
+            detail = classify_replicate_error(error_msg, logs)
+
+            if _should_retry_with_prompt_image(inp.prompt, detail):
+                logger.info(
+                    "Retrying storyboard %s with prompt-sheet overflow image (%d chars -> split)",
+                    inp.grid_id,
+                    len(inp.prompt),
+                )
+                retry_pack = build_reference_pack(
+                    pack_dir=inp.output_dir / "_packed_refs_prompt_image",
+                    prompt_text=inp.prompt,
+                    reference_images=[p for p in inp.reference_images if p.exists()],
+                    storyboard_image=None,
+                    include_prompt_image=True,
+                )
+                existing_refs = list(retry_pack.reference_images)
+                retry_image_uris = await self.upload_many(existing_refs) if existing_refs else []
+                retry_input = dict(full_prompt_input)
+                retry_input["prompt"] = retry_pack.prompt_text
+                if retry_image_uris:
+                    retry_input["image_input"] = retry_image_uris
+                prediction, model_used = await self._run_model_chain(
+                    self.handler_name,
+                    retry_input,
+                    extra_headers=request_headers,
+                )
+                pred_input = retry_input
+                error_msg = prediction.get("error", "Generation failed")
+                logs = prediction.get("logs", "") or ""
+                detail = classify_replicate_error(error_msg, logs)
+
+            xai_rescue = await self._try_xai_image_rescue(
+                full_prompt_input,
+                reference_paths=existing_refs,
+                output_path=composite_path,
+                error_detail=detail,
+                sensitive_context=inp.sensitive_context,
+                extra_headers=request_headers,
             )
+            if xai_rescue:
+                prediction, model_used = xai_rescue
+            else:
+                return StoryboardOutput(
+                    success=False,
+                    grid_id=inp.grid_id,
+                    model_used=model_used,
+                    error=error_msg,
+                    error_detail=detail,
+                    elapsed_s=time.monotonic() - t0,
+                )
 
         # Download composite
-        output_url = self.extract_output_url(prediction)
-        if not output_url:
-            return StoryboardOutput(
-                success=False,
-                grid_id=inp.grid_id,
-                model_used=model_used,
-                error="No output URL in prediction response",
-                elapsed_s=time.monotonic() - t0,
-            )
+        local_output_path = prediction.get("local_output_path")
+        if local_output_path:
+            composite_path = Path(local_output_path)
+        else:
+            output_url = self.extract_output_url(prediction)
+            if not output_url:
+                return StoryboardOutput(
+                    success=False,
+                    grid_id=inp.grid_id,
+                    model_used=model_used,
+                    error="No output URL in prediction response",
+                    elapsed_s=time.monotonic() - t0,
+                )
 
-        await self.download_output(output_url, composite_path)
+            await self.download_output(output_url, composite_path)
         logger.info(
             "Storyboard composite generated for %s via %s", inp.grid_id, model_used
         )
@@ -192,7 +253,7 @@ class StoryboardHandler(BaseHandler):
 
                 # Name by frame_id when available, else by grid position
                 if idx < len(frame_ids):
-                    name = f"{frame_ids[idx]}_cell.png"
+                    name = f"{frame_ids[idx]}.png"
                 else:
                     name = f"cell_{r}_{c}.png"
 

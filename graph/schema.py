@@ -31,7 +31,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Optional
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -208,6 +208,27 @@ def _default_pose_state() -> "PoseState":
     return PoseState(pose="standing_neutral")
 
 
+def _coerce_optional_text(value: Any) -> Any:
+    """Collapse list-like textual values into a single optional string."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        cleaned = value.strip()
+        return cleaned or None
+    if isinstance(value, (list, tuple, set)):
+        parts: list[str] = []
+        for item in value:
+            normalized = _coerce_optional_text(item)
+            if isinstance(normalized, str) and normalized:
+                parts.append(normalized)
+        if not parts:
+            return None
+        return ", ".join(dict.fromkeys(parts))
+    if isinstance(value, (int, float, bool)):
+        return str(value)
+    return value
+
+
 class PoseState(BaseModel):
     """Canonical pose lock for a character at a specific frame boundary."""
 
@@ -241,8 +262,36 @@ class CharacterSheet(BaseModel):
     frame_poses: dict[str, PoseState] = Field(default_factory=dict)
     appearance_notes: dict[str, str] = Field(default_factory=dict)
 
+    @staticmethod
+    def _frame_sequence(frame_id: str | None) -> int:
+        try:
+            return int(str(frame_id or "").split("_")[-1])
+        except (TypeError, ValueError):
+            return -1
+
     def pose_for_frame(self, frame_id: str) -> Optional[PoseState]:
-        return self.frame_poses.get(frame_id) or self.current_pose
+        exact = self.frame_poses.get(frame_id)
+        if exact is not None:
+            return exact
+
+        target_seq = self._frame_sequence(frame_id)
+        if target_seq < 0:
+            return self.current_pose
+
+        candidates: list[PoseState] = []
+        for pose in self.frame_poses.values():
+            if self._frame_sequence(pose.frame_id) <= target_seq:
+                candidates.append(pose)
+        for pose in self.pose_history:
+            if self._frame_sequence(pose.frame_id) <= target_seq:
+                candidates.append(pose)
+        current_seq = self._frame_sequence(self.current_pose.frame_id)
+        if current_seq >= 0 and current_seq <= target_seq:
+            candidates.append(self.current_pose)
+
+        if not candidates:
+            return None
+        return max(candidates, key=lambda pose: self._frame_sequence(pose.frame_id))
 
 
 class CastBible(BaseModel):
@@ -347,12 +396,15 @@ class ProjectNode(BaseModel):
     project_id: str
     title: str = ""
     pipeline: str = "story_upload"  # story_upload | pitch_idea | music_video
-    stickiness_level: int = 3
-    stickiness_permission: str = ""
-    output_size: str = "short"
-    output_size_label: str = ""
-    frame_range: list[int] = Field(default_factory=lambda: [10, 20])
-    scene_range: list[int] = Field(default_factory=lambda: [1, 3])
+    creative_freedom: str = "balanced"
+    creative_freedom_permission: str = ""
+    creative_freedom_failure_modes: str = ""
+    dialogue_policy: str = ""
+    frame_budget: Optional[int] = None
+    output_size: str = "auto"
+    output_size_label: str = "Auto"
+    frame_range: list[int] = Field(default_factory=list)
+    scene_range: list[int] = Field(default_factory=list)
     media_style: str = "live_clear"
     media_style_prefix: str = ""
     aspect_ratio: str = "16:9"
@@ -413,6 +465,8 @@ class CastNode(BaseModel):
 
     cast_id: str
     name: str
+    display_name: str = ""
+    source_name: str = ""
     entity_type: EntityType = EntityType.CAST
 
     identity: CastIdentity = Field(default_factory=CastIdentity)
@@ -440,6 +494,16 @@ class CastNode(BaseModel):
     state_variants: dict[str, CastStateVariant] = Field(default_factory=dict)
 
     provenance: Provenance = Field(default_factory=Provenance)
+
+    @model_validator(mode="after")
+    def _sync_names(self) -> "CastNode":
+        if not self.display_name:
+            self.display_name = self.name or self.source_name
+        if not self.source_name:
+            self.source_name = self.name or self.display_name
+        if not self.name:
+            self.name = self.display_name or self.source_name
+        return self
 
 
 # ─── Cast State (per-frame ABSOLUTE SNAPSHOT) ────────────────────────────────
@@ -734,6 +798,11 @@ class FrameAtmosphere(BaseModel):
     weather: Optional[str] = None           # "rain", "snow", "fog", "clear"
     ambient_motion: Optional[str] = None    # "curtain_sway", "candle_flicker", "leaves_rustling"
     temperature_feel: Optional[str] = None  # "humid", "cold", "stifling"
+
+    @field_validator("particles", "weather", "ambient_motion", "temperature_feel", mode="before")
+    @classmethod
+    def _normalize_text_fields(cls, value: Any) -> Any:
+        return _coerce_optional_text(value)
 
 
 class FrameEnvironment(BaseModel):

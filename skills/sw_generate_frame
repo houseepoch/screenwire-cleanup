@@ -26,6 +26,7 @@ def main():
     parser.add_argument("--storyboard-image", default="", help="Path to storyboard cell image (PRIMARY composition reference)")
     parser.add_argument("--run-id", default=os.environ.get("SCREENWIRE_RUN_ID", ""), help="Pipeline run ID for telemetry correlation")
     parser.add_argument("--phase", default=os.environ.get("SCREENWIRE_PHASE", ""), help="Pipeline phase label for telemetry correlation")
+    parser.add_argument("--sensitive-context", action="store_true", help="Allow last-resort Seedream rescue with safety disabled")
     args = parser.parse_args()
 
     project_dir = os.environ.get("PROJECT_DIR", PROJECT_DIR_DEFAULT)
@@ -64,6 +65,7 @@ def main():
         "frame_id": args.frame_id or None,
         "run_id": args.run_id or None,
         "phase": args.phase,
+        "sensitive_context": args.sensitive_context,
     }
     if storyboard_image:
         body["storyboard_image"] = storyboard_image
@@ -71,7 +73,11 @@ def main():
         body["seed"] = args.seed
 
     try:
-        resp = httpx.post("http://localhost:8000/internal/generate-frame", json=body, timeout=180)
+        resp = httpx.post(
+            "http://localhost:8000/internal/generate-frame",
+            json=body,
+            timeout=httpx.Timeout(900.0, connect=30.0),
+        )
         if resp.status_code == 502:
             _handle_prediction_failure(resp, args.prompt, out_abs)
             return

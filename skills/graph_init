@@ -15,6 +15,12 @@ from pathlib import Path
 # Add project root to path for graph imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from graph.store import GraphStore
+from screenwire_contracts import (
+    derive_frame_range_from_budget,
+    derive_output_size_from_frame_budget,
+    derive_output_size_label_from_frame_budget,
+    normalize_frame_budget,
+)
 
 
 def main():
@@ -38,15 +44,26 @@ def main():
 
     if onboarding_path.exists():
         cfg = json.loads(onboarding_path.read_text(encoding="utf-8"))
+        frame_budget = normalize_frame_budget(
+            cfg.get("frameBudget", cfg.get("frame_budget"))
+        )
         project_kwargs.update({
             "title": cfg.get("projectName", args.title),
             "pipeline": cfg.get("pipeline", "story_upload"),
-            "stickiness_level": cfg.get("stickinessLevel", 3),
-            "stickiness_permission": cfg.get("stickinessPermission", ""),
-            "output_size": cfg.get("outputSize", "short"),
-            "output_size_label": cfg.get("outputSizeLabel", ""),
-            "frame_range": cfg.get("frameRange", [10, 20]),
-            "scene_range": cfg.get("sceneRange", [1, 3]),
+            "creative_freedom": cfg.get("creativeFreedom", "balanced"),
+            "creative_freedom_permission": cfg.get("creativeFreedomPermission", ""),
+            "creative_freedom_failure_modes": cfg.get("creativeFreedomFailureModes", ""),
+            "dialogue_policy": cfg.get("dialoguePolicy", ""),
+            "frame_budget": frame_budget,
+            "output_size": derive_output_size_from_frame_budget(
+                cfg.get("frameBudget", cfg.get("outputSize", "auto"))
+            ),
+            "output_size_label": derive_output_size_label_from_frame_budget(
+                cfg.get("frameBudget", cfg.get("outputSizeLabel", "auto"))
+            ),
+            "frame_range": derive_frame_range_from_budget(
+                cfg.get("frameBudget", cfg.get("frameRange"))
+            ),
             "media_style": cfg.get("mediaStyle", "live_clear"),
             "media_style_prefix": cfg.get("mediaStylePrefix", ""),
             "aspect_ratio": cfg.get("aspectRatio", "16:9"),
@@ -59,8 +76,9 @@ def main():
         print(f"  Seeded from onboarding_config.json:")
         print(f"    media_style: {project_kwargs['media_style']}")
         print(f"    media_style_prefix: {project_kwargs['media_style_prefix'][:60]}...")
+        print(f"    frame_budget: {project_kwargs['frame_budget'] if project_kwargs['frame_budget'] is not None else 'auto'}")
         print(f"    output_size: {project_kwargs['output_size']}")
-        print(f"    stickiness: {project_kwargs['stickiness_level']}")
+        print(f"    creative_freedom: {project_kwargs['creative_freedom']}")
     else:
         print(f"  WARNING: No onboarding_config.json at {onboarding_path}")
         print(f"  Graph initialized with defaults — media_style will need manual setting")

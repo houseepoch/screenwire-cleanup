@@ -30,19 +30,16 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
-import httpx
-
-from .prompt_assembler import MAX_VIDEO_PROMPT_CHARS
+from llm.xai_client import XAIClient, build_prompt_cache_key
 
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
 
 XAI_API_KEY = os.getenv("XAI_API_KEY", "")
-XAI_BASE_URL = "https://api.x.ai/v1"
-GROK_VISION_MODEL = "grok-4-1-fast-non-reasoning"
+GROK_VISION_MODEL = "grok-4-1-fast-reasoning"
 
-# Max tokens for the refined prompt — keeps it within grok-video's 4096 char limit
+# Max tokens for the refined prompt response body.
 MAX_REFINE_TOKENS = 1200
 
 
@@ -124,6 +121,8 @@ Rules:
   direction language.
 """
 
+REFINER_CACHE_KEY = build_prompt_cache_key("frame-prompt-refiner", REFINER_SYSTEM_PROMPT)
+
 
 # ---------------------------------------------------------------------------
 # Core API call
@@ -174,27 +173,18 @@ async def _call_grok_vision(
     ]
 
     payload = {
-        "model": GROK_VISION_MODEL,
         "messages": messages,
-        "max_tokens": MAX_REFINE_TOKENS,
-        "temperature": 0.3,
     }
 
-    headers = {
-        "Authorization": f"Bearer {key}",
-        "Content-Type": "application/json",
-    }
-
-    async with httpx.AsyncClient(timeout=None) as client:
-        resp = await client.post(
-            f"{XAI_BASE_URL}/chat/completions",
-            json=payload,
-            headers=headers,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-
-    return data["choices"][0]["message"]["content"].strip()
+    client = XAIClient(api_key=key)
+    return await client.generate_text(
+        messages=payload["messages"],
+        model=GROK_VISION_MODEL,
+        task_hint="vision_prompt_refinement",
+        temperature=0.3,
+        max_tokens=MAX_REFINE_TOKENS,
+        cache_key=REFINER_CACHE_KEY,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -252,14 +242,6 @@ async def refine_video_prompt(
         return video_prompt
 
     elapsed = round(time.monotonic() - t0, 1)
-
-    if len(refined) > MAX_VIDEO_PROMPT_CHARS:
-        _log(
-            frame_id,
-            f"Refined prompt exceeded {MAX_VIDEO_PROMPT_CHARS} chars ({len(refined)}), keeping graph prompt",
-        )
-        video_prompt["refined_by"] = "failed:PromptOverflow"
-        return video_prompt
 
     video_prompt["original_graph_prompt"] = graph_prompt
     video_prompt["prompt"] = refined

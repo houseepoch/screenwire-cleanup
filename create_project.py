@@ -5,7 +5,7 @@ Usage:
     python3 create_project.py --name "My Story" --id my_story_001
     python3 create_project.py --name "My Story" --id my_story_001 --seed /path/to/pitch.md
     python3 create_project.py --name "My Story" --id my_story_001 --seed /path/to/pitch.md \
-        --stickiness 3 --size short --media-style chiaroscuro_live
+        --creative-freedom creative --frame-budget 220 --media-style chiaroscuro_live
 """
 
 import argparse
@@ -15,32 +15,28 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+from screenwire_contracts import (
+    FRAME_BUDGET_PRESETS,
+    creative_freedom_contract,
+    default_dialogue_workflow,
+    normalize_frame_budget,
+)
+
 APP_DIR = Path(__file__).resolve().parent
 PROJECTS_DIR = APP_DIR / "projects"
 TEMPLATE_DIR = PROJECTS_DIR / "_template"
 
 # ---------------------------------------------------------------------------
-# Stickiness scale (1-5) — creative freedom levels
+# Creative freedom tiers
 # ---------------------------------------------------------------------------
 
-STICKINESS_PERMISSIONS = {
-    1: "Reformat. Restructure and rewrite the source material into operational format without altering story content. No new characters, scenes, dialogue, or events. The source dictates what exists — you dictate how it reads on the page.",
-    2: "Remaster. Adhere to the source material faithfully while enriching quality. Smooth transitions, add sensory detail, deepen descriptions, fill gaps that make scenes feel complete. Same story, higher fidelity. No new plot elements, characters, or narrative departures.",
-    3: "Expand. Follow the source material's direction but round out incomplete areas. Add transitional scenes, supporting details, and environmental context the source implies but doesn't show. All additions must serve what's already demonstrated — supporting information, not new story.",
-    4: "Reimagine. Use the source's story, narrative, and themes as a creative foundation. You may introduce new cast, locations, and writing to serve existing arcs. The original tone, themes, and trajectory are respected — but the canvas is wider.",
-    5: "Create. The source is a seed idea. Write an original story inspired by its guidance, introducing rich characters, props, locations, and story events to fill out the targeted output size. Full creative ownership.",
-}
+CREATIVE_FREEDOM_TIERS = ("strict", "balanced", "creative", "unbounded")
 
 # ---------------------------------------------------------------------------
-# Project size definitions — frame count ranges
+# Legacy size aliases — translated into nominal frame budgets
 # ---------------------------------------------------------------------------
 
-PROJECT_SIZES = {
-    "short":      {"label": "Short",        "frame_range": [10, 20],    "scene_range": [1, 3]},
-    "short_film": {"label": "Short Film",   "frame_range": [50, 125],   "scene_range": [5, 15]},
-    "televised":  {"label": "Televised",    "frame_range": [200, 300],  "scene_range": [20, 40]},
-    "feature":    {"label": "Feature",      "frame_range": [750, 1250], "scene_range": [60, 120]},
-}
+PROJECT_SIZES = FRAME_BUDGET_PRESETS
 
 # ---------------------------------------------------------------------------
 # Media style → image generation prefix
@@ -78,8 +74,8 @@ def create_project(
     project_id: str,
     project_name: str,
     seed_file: Path | None = None,
-    stickiness: int = 3,
-    size: str = "short",
+    creative_freedom: str = "balanced",
+    frame_budget: int | str | None = None,
     media_style: str = "live_clear",
     pipeline_type: str = "story_upload",
 ) -> Path:
@@ -93,14 +89,18 @@ def create_project(
         print(f"ERROR: Template directory not found: {TEMPLATE_DIR}")
         sys.exit(1)
 
-    # Validate stickiness
-    if stickiness not in range(1, 6):
-        print(f"ERROR: Stickiness must be 1-5, got {stickiness}")
+    # Validate creative freedom
+    if creative_freedom not in CREATIVE_FREEDOM_TIERS:
+        print(
+            f"ERROR: creative freedom must be one of {CREATIVE_FREEDOM_TIERS}, got '{creative_freedom}'"
+        )
         sys.exit(1)
 
-    # Validate size
-    if size not in PROJECT_SIZES:
-        print(f"ERROR: Size must be one of {list(PROJECT_SIZES.keys())}, got '{size}'")
+    # Validate frame budget
+    try:
+        normalized_budget = normalize_frame_budget(frame_budget)
+    except ValueError as exc:
+        print(f"ERROR: {exc}")
         sys.exit(1)
 
     # Validate media style
@@ -131,16 +131,16 @@ def create_project(
         source_files.append("source_files/pitch.md")
 
     # Write onboarding config with full detail
-    size_def = PROJECT_SIZES[size]
+    freedom = creative_freedom_contract(creative_freedom)
     onboarding = {
         "projectName": project_name,
         "projectId": f"sw_lg_{project_id}",
-        "stickinessLevel": stickiness,
-        "stickinessPermission": STICKINESS_PERMISSIONS[stickiness],
-        "outputSize": size,
-        "outputSizeLabel": size_def["label"],
-        "frameRange": size_def["frame_range"],
-        "sceneRange": size_def["scene_range"],
+        "creativeFreedom": creative_freedom,
+        "creativeFreedomPermission": freedom["permission"],
+        "creativeFreedomFailureModes": freedom["failure_modes"],
+        "dialoguePolicy": freedom["dialogue_policy"],
+        "dialogueWorkflow": default_dialogue_workflow(),
+        "frameBudget": "auto" if normalized_budget is None else normalized_budget,
         "mediaStyle": media_style,
         "mediaStylePrefix": MEDIA_STYLE_PREFIX[media_style],
         "pipeline": pipeline_type,
@@ -168,8 +168,15 @@ def create_project(
     print(f"  ID:         {project_id}")
     print(f"  Name:       {project_name}")
     print(f"  Slug:       {slug}")
-    print(f"  Stickiness: {stickiness} — {STICKINESS_PERMISSIONS[stickiness][:60]}...")
-    print(f"  Size:       {size} ({size_def['frame_range'][0]}-{size_def['frame_range'][1]} frames)")
+    print(f"  Creative:   {creative_freedom} — {freedom['permission'][:60]}...")
+    print(
+        "  Frame Cap:  "
+        + (
+            "auto (uncapped, maximum-quality full coverage)"
+            if normalized_budget is None
+            else str(normalized_budget)
+        )
+    )
     print(f"  Style:      {MEDIA_STYLE_DISPLAY.get(media_style, media_style)}")
     print(f"\nNext steps:")
     print(f"  1. Add your source material to {project_dir}/source_files/")
@@ -183,12 +190,23 @@ def main():
     parser.add_argument("--name", required=True, help="Human-readable project name")
     parser.add_argument("--id", required=True, help="Project directory ID (e.g., orchids_gambit_001)")
     parser.add_argument("--seed", default=None, help="Path to source/pitch file to copy into project")
-    parser.add_argument("--stickiness", type=int, default=3,
-                        choices=[1, 2, 3, 4, 5],
-                        help="Creative freedom (1=reformat, 2=remaster, 3=expand, 4=reimagine, 5=create)")
-    parser.add_argument("--size", default="short",
-                        choices=list(PROJECT_SIZES.keys()),
-                        help="Project size (short=10-20 frames, short_film=50-125, televised=200-300, feature=750-1250)")
+    parser.add_argument("--creative-freedom", default="balanced",
+                        choices=list(CREATIVE_FREEDOM_TIERS),
+                        help="Creative freedom tier (strict, balanced, creative, unbounded)")
+    parser.add_argument(
+        "--frame-budget",
+        default="auto",
+        help=(
+            "Maximum frame count as a positive integer, or 'auto' for uncapped, "
+            "highest-effort full-story coverage"
+        ),
+    )
+    parser.add_argument(
+        "--size",
+        default=None,
+        choices=list(PROJECT_SIZES.keys()),
+        help=argparse.SUPPRESS,
+    )
     parser.add_argument("--media-style", default="live_clear",
                         choices=list(MEDIA_STYLE_PREFIX.keys()),
                         help="Media style determines image generation prefix")
@@ -197,12 +215,16 @@ def main():
                         help="Pipeline entry type")
     args = parser.parse_args()
 
+    frame_budget = args.frame_budget
+    if args.size and str(frame_budget).strip().lower() == "auto":
+        frame_budget = PROJECT_SIZES[args.size]
+
     create_project(
         project_id=args.id,
         project_name=args.name,
         seed_file=Path(args.seed) if args.seed else None,
-        stickiness=args.stickiness,
-        size=args.size,
+        creative_freedom=args.creative_freedom,
+        frame_budget=frame_budget,
         media_style=args.media_style,
         pipeline_type=args.pipeline_type,
     )

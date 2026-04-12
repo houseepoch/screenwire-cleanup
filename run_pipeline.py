@@ -3,7 +3,7 @@
 
 Drives the full ScreenWire AI pipeline from Phase 0 -> Phase 6 without
 human input. Starts the FastAPI server, polls /health until ready, spawns
-Claude CLI agents for each phase sequentially, then runs Phase 6 export
+local Grok-backed agent runners for each phase sequentially, then runs Phase 6 export
 programmatically via ffmpeg.
 
 Usage:
@@ -12,21 +12,39 @@ Usage:
 
 import argparse
 import atexit
+import hashlib
 import json
 import math
 import os
 import re
 import signal
+import shutil
 import subprocess
 import sys
 import tempfile
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, as_completed, wait
 from datetime import datetime, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
+from graph.feature_flags import ENABLE_STORYBOARD_GUIDANCE
+from llm.xai_client import (
+    DEFAULT_REASONING_MODEL,
+    DEFAULT_STAGE1_REASONING_MODEL,
+    build_prompt_cache_key,
+)
+from screenwire_contracts import (
+    creative_freedom_contract,
+    default_dialogue_workflow,
+    derive_frame_range_from_budget,
+    derive_output_size_from_frame_budget,
+    derive_output_size_label_from_frame_budget,
+    minimum_scene_count_for_frame_budget,
+    normalize_frame_budget,
+)
 from telemetry import PHASE_ENV, RUN_ID_ENV, emit_event, generate_run_id, with_run_context
+from video_prompt_projection import build_video_request_projection, generate_video_prompt_projection
 load_dotenv(Path(__file__).resolve().parent / ".env")
 
 # ---------------------------------------------------------------------------
@@ -111,18 +129,27 @@ PHASE_TIMEOUT = None       # No timeout — agents run until complete
 SERVER_START_TIMEOUT = 30  # seconds to wait for server to come up
 SERVER_POLL_INTERVAL = 1   # seconds between /health polls
 
-DEFAULT_MODEL = "claude-opus-4-6"
+DEFAULT_MODEL = DEFAULT_REASONING_MODEL
 AUDIT_PHASE2 = False  # Set to True via --audit flag to spawn graph auditor agent after Step 2c
+FRAME_GEN_CONCURRENCY = 10
+VIDEO_GEN_CONCURRENCY = max(1, int(os.getenv("SCREENWIRE_VIDEO_CONCURRENCY", "2")))
+VIDEO_REFINE_CONCURRENCY = max(1, int(os.getenv("SCREENWIRE_VIDEO_REFINE_CONCURRENCY", "5")))
+VIDEO_GEN_RETRIES = max(1, int(os.getenv("SCREENWIRE_VIDEO_RETRIES", "3")))
 
-# Resolve claude CLI path (Windows subprocess.run can't find bare "claude")
-import shutil as _shutil
-CLAUDE_CLI = _shutil.which("claude") or "claude"
+AGENT_RUNNER_CMD = [sys.executable, "-m", "llm.agent_runner"]
 
 LOGS_DIR: Path | None = None          # Set in main() after --project
 PIPELINE_LOGS_DIR: Path | None = None  # Set in main() after --project
 PIPELINE_RUN_ID = ""
 LIVE_MODE = False
 LIVE_ENV = "SCREENWIRE_LIVE"
+
+
+def _with_repo_pythonpath(env: dict[str, str]) -> dict[str, str]:
+    repo_root = str(APP_DIR)
+    existing = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = repo_root if not existing else f"{repo_root}{os.pathsep}{existing}"
+    return env
 
 # Phase names for reporting
 PHASE_NAMES = {
@@ -227,7 +254,7 @@ def _stream_subprocess(
 
     Uses os.read() on non-blocking file descriptors instead of readline()
     so that output appears immediately even when the child process doesn't
-    emit newlines (e.g. claude --print buffering).
+    emit newlines (e.g. agent runner buffering).
 
     Returns a subprocess.CompletedProcess with stdout/stderr populated.
     """
@@ -611,6 +638,40 @@ def _deploy_shared_conventions(project_dir: Path) -> None:
     log(f"Deployed CLAUDE.md → {target.relative_to(project_dir)}")
 
 
+def _deploy_project_reporting_assets(project_dir: Path) -> None:
+    """Ensure each project has the concatenation script and report dirs."""
+    template_script = PROJECTS_DIR / "_template" / "scripts" / "concatenate_project_snapshot.py"
+    target_script = project_dir / "scripts" / "concatenate_project_snapshot.py"
+    target_script.parent.mkdir(parents=True, exist_ok=True)
+    (project_dir / "reports" / "archive").mkdir(parents=True, exist_ok=True)
+
+    if not template_script.exists():
+        log_warn(f"Project report template missing: {template_script}")
+        return
+
+    source_text = template_script.read_text(encoding="utf-8")
+    current_text = target_script.read_text(encoding="utf-8") if target_script.exists() else None
+    if current_text != source_text:
+        target_script.write_text(source_text, encoding="utf-8")
+        target_script.chmod(0o755)
+        log(f"Deployed project report script → {target_script.relative_to(project_dir)}")
+
+
+def _run_project_report(project_dir: Path) -> None:
+    """Generate the per-project concatenated report after prompts are assembled."""
+    _deploy_project_reporting_assets(project_dir)
+    report_script = project_dir / "scripts" / "concatenate_project_snapshot.py"
+    report_result = _stream_subprocess(
+        [sys.executable, str(report_script), "--project-dir", str(project_dir)],
+        cwd=project_dir,
+        label="project_report",
+    )
+    if report_result.returncode != 0:
+        raise RuntimeError("Project report generation failed after prompt assembly.")
+    generate_video_prompt_projection(project_dir)
+    log_ok("Project report generated")
+
+
 # ---------------------------------------------------------------------------
 # Context seed builder (Morpheus swarm shared prefix)
 # ---------------------------------------------------------------------------
@@ -619,9 +680,8 @@ def build_context_seed(project_dir: Path) -> str:
     """Pre-read all Phase 1 outputs into a single markdown document.
 
     This document is PREPENDED to every Morpheus swarm agent's system prompt
-    as a shared cacheable prefix.  The Anthropic API caches matching system
-    prompt prefixes — Agent 1 pays full cost, Agents 2-5 get ~90% input
-    discount on the shared prefix (within 5-min TTL).
+    as a shared cacheable prefix so repeated xAI requests can reuse the same
+    stable prompt prefix across swarm workers.
 
     Returns a markdown string (~15-50KB depending on project size).
     """
@@ -647,33 +707,36 @@ def build_context_seed(project_dir: Path) -> str:
         sections.append(config_text)
         sections.append("```\n")
 
-        # 2a. Extract stickiness level explicitly so all agents see it
+        # 2a. Extract creative freedom and dialogue workflow explicitly so all agents see it
         try:
             import json as _json
             config_data = _json.loads(config_text)
-            stickiness_level = config_data.get("stickinessLevel", "unknown")
-            stickiness_perm = config_data.get("stickinessPermission", "unknown")
-            tier_labels = {1: "Reformat", 2: "Remaster", 3: "Expand", 4: "Reimagine", 5: "Create"}
-            label = tier_labels.get(stickiness_level, "unknown")
-            sections.append("## Stickiness Tier (Extracted)\n")
-            sections.append(f"- **Level**: {stickiness_level} ({label})")
-            sections.append(f"- **Permission**: {stickiness_perm}")
-            if stickiness_level in (1, 2):
-                sections.append(
-                    "- **Enforcement**: STRICT — No new characters, locations, or props "
-                    "beyond what exists in source material. Skip any skeleton entity not "
-                    "found in source files."
-                )
-            elif stickiness_level in (4, 5):
-                sections.append(
-                    "- **Enforcement**: New entities allowed ONLY with "
-                    "`///ADDITION_JUSTIFICATION` in the outline skeleton. "
-                    "Skip unjustified additions."
-                )
-            else:
-                sections.append(
-                    "- **Enforcement**: Standard — all skeleton entities authorized."
-                )
+            creative_freedom = config_data.get("creativeFreedom", "balanced")
+            freedom = creative_freedom_contract(creative_freedom)
+            sections.append("## Creative Freedom (Extracted)\n")
+            sections.append(f"- **Tier**: {creative_freedom}")
+            sections.append(f"- **Philosophy**: {freedom['philosophy']}")
+            sections.append(
+                f"- **Permission**: {config_data.get('creativeFreedomPermission', freedom['permission'])}"
+            )
+            sections.append(
+                f"- **Failure Modes**: {config_data.get('creativeFreedomFailureModes', freedom['failure_modes'])}"
+            )
+            sections.append(
+                f"- **Dialogue Policy**: {config_data.get('dialoguePolicy', freedom['dialogue_policy'])}"
+            )
+            workflow = config_data.get("dialogueWorkflow", default_dialogue_workflow())
+            if isinstance(workflow, dict):
+                sections.append("## Dialogue Workflow (Extracted)\n")
+                sections.append(f"- **Enabled**: {workflow.get('enabled', True)}")
+                sections.append(f"- **Version**: {workflow.get('version', 'unknown')}")
+                agents = workflow.get("agents") or []
+                for agent in agents:
+                    if not isinstance(agent, dict):
+                        continue
+                    sections.append(
+                        f"- **Agent** `{agent.get('name', 'unknown')}` on `{agent.get('runsOn', 'unknown')}`"
+                    )
             sections.append("\n")
         except Exception:
             pass  # Config is already embedded as raw JSON above
@@ -763,6 +826,30 @@ def _run_phase_2_postprocessing(project_dir: Path) -> None:
     if assemble_result.returncode != 0:
         raise RuntimeError("Phase 2 prompt assembly failed. Fix graph shot-packet data before proceeding.")
 
+    _run_project_report(project_dir)
+
+    dialogue_result = _stream_subprocess(
+        [sys.executable, str(SKILLS_DIR / "graph_validate_dialogue"),
+         "--project-dir", str(project_dir)],
+        cwd=project_dir, label="graph_validate_dialogue")
+    if dialogue_result.returncode != 0:
+        raise RuntimeError(
+            "Phase 2 dialogue validation failed. Fix dialogue recovery, frame assignment, "
+            "or creative-freedom tier compliance before proceeding."
+        )
+
+    prompt_pair_result = _stream_subprocess(
+        [sys.executable, str(Path(__file__).resolve().parent / "graph" / "prompt_pair_validator.py"),
+         "--project-dir", str(project_dir)],
+        cwd=project_dir, label="prompt_pair_validator")
+    if prompt_pair_result.returncode != 0:
+        raise RuntimeError(
+            "Phase 2 prompt consistency validation failed. Fix contradictory subject counts, "
+            "dialogue metadata, or prompt continuity before proceeding."
+        )
+
+    _reconcile_scene_cast_presence(project_dir)
+
     materialize_result = _stream_subprocess(
         [sys.executable, str(SKILLS_DIR / "graph_materialize"),
          "--project-dir", str(project_dir)],
@@ -783,6 +870,50 @@ def _run_phase_2_postprocessing(project_dir: Path) -> None:
     log_ok("Deterministic post-processing complete")
 
 
+def _reconcile_scene_cast_presence(project_dir: Path) -> None:
+    """Fold actual visible-cast usage back into scene.cast_present after enrichment.
+
+    Stage 1 scene cast rosters can be sparse or omit late-discovered visible participants
+    (phone voices, collective beats, etc.). After prompt assembly we have the deterministic
+    shot packet view of who is visibly active per frame, so use that to reconcile the scene-
+    level cast roster before materialization and quality gating.
+    """
+    from graph.api import build_shot_packet
+    from graph.store import GraphStore
+
+    store = GraphStore(str(project_dir))
+    graph = store.load()
+
+    scene_cast_usage: dict[str, set[str]] = {
+        scene_id: set(scene.cast_present or [])
+        for scene_id, scene in graph.scenes.items()
+    }
+    for frame_id in graph.frame_order:
+        frame = graph.frames.get(frame_id)
+        if frame is None or frame.scene_id not in graph.scenes:
+            continue
+        try:
+            visible_cast_ids = build_shot_packet(graph, frame_id).visible_cast_ids or []
+        except Exception:
+            visible_cast_ids = []
+        scene_cast_usage.setdefault(frame.scene_id, set()).update(
+            cast_id for cast_id in visible_cast_ids if cast_id in graph.cast
+        )
+
+    changed = False
+    for scene_id, cast_ids in scene_cast_usage.items():
+        scene = graph.scenes.get(scene_id)
+        if scene is None:
+            continue
+        resolved = sorted(cast_ids)
+        if resolved != list(scene.cast_present or []):
+            scene.cast_present = resolved
+            changed = True
+
+    if changed:
+        store.save(graph)
+
+
 # ---------------------------------------------------------------------------
 # Agent spawning
 # ---------------------------------------------------------------------------
@@ -798,7 +929,7 @@ def run_agent(
     timeout: int | None = None,
     stream_output: bool = True,
 ) -> subprocess.CompletedProcess:
-    """Spawn a Claude CLI agent and wait for it to finish.
+    """Spawn a local Grok-backed agent runner and wait for it to finish.
 
     Args:
         prompt_prefix: Optional text APPENDED to the system prompt (after the
@@ -807,7 +938,7 @@ def run_agent(
         context_seed:  Optional text PREPENDED to the system prompt (before the
                        agent's own prompt) as a shared cacheable prefix.  All
                        swarm agents sharing the same seed benefit from API-level
-                       prompt caching (~90% input discount on Agents 2-5).
+                       prompt caching on the shared base prompt.
     """
     if project_dir is None:
         project_dir = PROJECT_DIR
@@ -821,24 +952,25 @@ def run_agent(
     # Expand {{include:path}} markers — reference files resolved relative to prompt dir
     system_prompt = _expand_includes(system_prompt, prompt_path.parent)
 
-    # context_seed is PREPENDED to the system prompt.  This is the shared
-    # cacheable prefix for the Morpheus swarm — the Anthropic API caches
-    # matching system prompt prefixes, so Agent 1 pays full cost and Agents
-    # 2-5 get ~90% input discount on the shared prefix (within 5-min TTL).
+    # context_seed is PREPENDED to the system prompt. This is the shared
+    # cacheable prefix for the Morpheus swarm so repeated xAI requests can
+    # reuse the same stable prompt prefix.
     if context_seed:
         system_prompt = context_seed + "\n\n---\n\n" + system_prompt
 
+    cacheable_system_prompt = system_prompt
+
     # prompt_prefix is APPENDED to the system prompt (not prepended).
-    # This keeps the large shared base prompt as the cacheable prefix — the
-    # Anthropic API caches matching prefixes (~1024+ token threshold), so all
-    # parallel workers sharing the same base prompt pay full input cost only once.
+    # This keeps the large shared base prompt as the cacheable prefix so
+    # parallel workers sharing the same base prompt can reuse it efficiently.
     # The short per-worker override at the end doesn't break prefix caching and
     # retains system-prompt authority (stronger than user message overrides).
     if prompt_prefix:
         system_prompt = system_prompt + "\n\n---\n\n" + prompt_prefix
 
-    env = {**os.environ, "PROJECT_DIR": str(project_dir), "SKILLS_DIR": str(SKILLS_DIR)}
-    # Remove CLAUDECODE env var to prevent nested-session detection
+    env = _with_repo_pythonpath(
+        {**os.environ, "PROJECT_DIR": str(project_dir), "SKILLS_DIR": str(SKILLS_DIR)}
+    )
     env.pop("CLAUDECODE", None)
 
     # Build the user message (trigger prompt).
@@ -855,6 +987,14 @@ def run_agent(
             "in your system prompt. Do not stop or wait for input."
         )
 
+    env["XAI_PROMPT_CACHE_KEY"] = _agent_prompt_cache_key(
+        agent_id=agent_id,
+        project_dir=project_dir,
+        model=model,
+        cacheable_system_prompt=cacheable_system_prompt,
+        trigger_msg=trigger_msg,
+    )
+
     # Write full system prompt to a temp file (Windows cmd line limit is ~32K chars)
     import tempfile as _tempfile
     prompt_tmpfile = _tempfile.NamedTemporaryFile(
@@ -866,13 +1006,14 @@ def run_agent(
     prompt_tmp_path = prompt_tmpfile.name
 
     cmd = [
-        CLAUDE_CLI,
+        *AGENT_RUNNER_CMD,
         "--print",
         "-p", trigger_msg,
         "--system-prompt-file", prompt_tmp_path,
         "--dangerously-skip-permissions",
         "--output-format", "text",
         "--model", model,
+        "--task-hint", agent_id,
     ]
 
     if dry_run:
@@ -902,6 +1043,35 @@ def run_agent(
         except OSError:
             pass
     return result
+
+
+def _agent_cache_family(agent_id: str) -> str:
+    lowered = (agent_id or "").lower()
+    if lowered.startswith("prose_worker_scene_"):
+        return "phase1-creative"
+    if lowered in {"creative_coordinator", "director"}:
+        return "phase1-creative"
+    if lowered.startswith("frame_enricher_worker_"):
+        return "phase2-frame-enricher"
+    return lowered or "agent"
+
+
+def _agent_prompt_cache_key(
+    *,
+    agent_id: str,
+    project_dir: Path,
+    model: str,
+    cacheable_system_prompt: str,
+    trigger_msg: str,
+) -> str:
+    return build_prompt_cache_key(
+        "agent-runner",
+        project_dir.resolve().name,
+        _agent_cache_family(agent_id),
+        model,
+        cacheable_system_prompt,
+        trigger_msg,
+    )
 
 
 def check_agent_result(agent_id: str, result: subprocess.CompletedProcess,
@@ -1033,8 +1203,8 @@ def _read_onboarding_config(base: Path) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def _frame_needs_haiku_enrichment(frame) -> bool:
-    """Return True when a frame is missing core Haiku-authored fields."""
+def _frame_needs_frame_enrichment(frame) -> bool:
+    """Return True when a frame is missing core frame-enricher-authored fields."""
     if not getattr(frame, "action_summary", ""):
         return True
     if not getattr(frame, "video_optimized_prompt_block", ""):
@@ -1058,21 +1228,259 @@ def _frame_needs_haiku_enrichment(frame) -> bool:
     return False
 
 
-def _pending_haiku_inputs(graph, inputs: list[dict]) -> list[dict]:
-    """Filter Haiku inputs down to frames that still need enrichment."""
+def _pending_frame_enricher_inputs(graph, inputs: list[dict]) -> list[dict]:
+    """Filter frame-enricher inputs down to frames that still need enrichment."""
     pending: list[dict] = []
     for input_dict in inputs:
         frame_id = str(input_dict.get("frame_id", "")).strip()
         frame = graph.frames.get(frame_id)
         if frame is None:
             continue
-        if _frame_needs_haiku_enrichment(frame):
+        if _frame_needs_frame_enrichment(frame):
             pending.append(input_dict)
     return pending
 
 
-def _parse_haiku_worker_output(raw_text: str, frame_id: str) -> dict:
-    """Parse a CLI Haiku worker response into the enrichment contract."""
+def _compact_identifier_token(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", (value or "").lower())
+
+
+def _posture_from_pose_name(pose_name: str):
+    if not pose_name:
+        return None
+    prefix = pose_name.split("_", 1)[0].lower()
+    mapping = {
+        "standing": "standing",
+        "sitting": "sitting",
+        "crouching": "crouching",
+        "kneeling": "kneeling",
+        "lying": "lying",
+        "walking": "walking",
+        "running": "running",
+        "leaning": "leaning",
+        "hunched": "hunched",
+    }
+    return mapping.get(prefix)
+
+
+def _rehydrate_phase_2_from_manifest(project_dir: Path, graph) -> int:
+    """Backfill parser-only graphs from the last successful manifest/materialization pass."""
+    manifest_path = project_dir / "project_manifest.json"
+    if not manifest_path.exists():
+        return 0
+
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception:
+        return 0
+
+    manifest_frames = {
+        str(frame.get("frameId", "")).strip(): frame
+        for frame in manifest.get("frames", [])
+        if str(frame.get("frameId", "")).strip()
+    }
+    if not manifest_frames:
+        return 0
+
+    from graph.api import get_frame_cast_state_models
+    from graph.schema import CastFrameState, CastFrameRole, CinematicTag, EmotionalArc, LightingDirection, LightingQuality, Posture
+
+    restored = 0
+
+    for frame_id, frame in graph.frames.items():
+        manifest_frame = manifest_frames.get(frame_id)
+        if not manifest_frame:
+            continue
+
+        restored_frame = False
+
+        action_summary = manifest_frame.get("actionSummary")
+        if action_summary:
+            frame.action_summary = action_summary
+            restored_frame = True
+
+        prompt_block = manifest_frame.get("videoOptimizedPromptBlock")
+        if prompt_block:
+            frame.video_optimized_prompt_block = prompt_block
+            restored_frame = True
+
+        emotional_arc = manifest_frame.get("emotionalArc")
+        if emotional_arc:
+            try:
+                frame.emotional_arc = EmotionalArc(emotional_arc)
+            except ValueError:
+                frame.emotional_arc = emotional_arc
+            restored_frame = True
+
+        visual_flow_element = manifest_frame.get("visualFlowElement")
+        if visual_flow_element:
+            frame.visual_flow_element = visual_flow_element
+            restored_frame = True
+
+        cinematic_tag = manifest_frame.get("cinematicTag")
+        if cinematic_tag:
+            if isinstance(cinematic_tag, dict):
+                tag = str(cinematic_tag.get("tag") or "").strip()
+                modifier = str(cinematic_tag.get("modifier") or "").strip()
+                full_tag = str(cinematic_tag.get("full_tag") or cinematic_tag.get("fullTag") or "").strip()
+                if not full_tag:
+                    full_tag = " ".join(part for part in (tag, modifier) if part).strip()
+                family = str(cinematic_tag.get("family") or "").strip()
+                if not family and tag:
+                    family = tag.split(".", 1)[0][:1]
+                frame.cinematic_tag = CinematicTag(
+                    tag=tag,
+                    modifier=modifier,
+                    full_tag=full_tag or tag,
+                    definition=str(cinematic_tag.get("definition") or "").strip(),
+                    family=family,
+                    editorial_function=str(cinematic_tag.get("editorial_function") or cinematic_tag.get("editorialFunction") or "").strip(),
+                    ai_prompt_language=str(cinematic_tag.get("ai_prompt_language") or cinematic_tag.get("aiPromptLanguage") or "").strip(),
+                    lens_guidance=str(cinematic_tag.get("lens_guidance") or cinematic_tag.get("lensGuidance") or "").strip(),
+                    dof_guidance=str(cinematic_tag.get("dof_guidance") or cinematic_tag.get("dofGuidance") or "").strip(),
+                )
+            else:
+                tag = str(cinematic_tag).strip()
+                frame.cinematic_tag = CinematicTag(
+                    tag=tag,
+                    full_tag=tag,
+                    family=tag.split(".", 1)[0][:1],
+                )
+            restored_frame = True
+
+        composition = manifest_frame.get("composition") or {}
+        for field in ("shot", "angle", "placement", "grouping", "blocking", "movement", "focus", "transition", "rule"):
+            value = composition.get(field)
+            if value:
+                setattr(frame.composition, field, value)
+                restored_frame = True
+
+        background = manifest_frame.get("background") or {}
+        for field in ("visible_description", "camera_facing", "background_action", "background_sound", "background_music"):
+            value = background.get(field)
+            if value:
+                setattr(frame.background, field, value)
+                restored_frame = True
+        depth_layers = background.get("depth_layers")
+        if isinstance(depth_layers, list) and depth_layers:
+            frame.background.depth_layers = depth_layers
+            restored_frame = True
+
+        directing = manifest_frame.get("directing") or {}
+        for field in (
+            "dramatic_purpose", "beat_turn", "pov_owner", "viewer_knowledge_delta",
+            "power_dynamic", "tension_source", "camera_motivation",
+            "movement_motivation", "movement_path", "reaction_target", "background_life",
+        ):
+            value = directing.get(field)
+            if value:
+                setattr(frame.directing, field, value)
+                restored_frame = True
+
+        # Manifest does not currently persist environment. Restore minimal lighting so
+        # parser-only reruns can safely skip fresh frame-enricher calls when prompt artifacts exist.
+        if restored_frame:
+            if frame.environment.lighting.direction is None:
+                frame.environment.lighting.direction = LightingDirection.AMBIENT
+            if frame.environment.lighting.quality is None:
+                frame.environment.lighting.quality = LightingQuality.SOFT
+
+        visible_cast_ids = list(manifest_frame.get("castIds") or [])
+        frame_states = {
+            state.cast_id: state
+            for state in get_frame_cast_state_models(graph, frame_id)
+        }
+        visible_state_ids = [
+            state.cast_id
+            for state in frame_states.values()
+            if getattr(getattr(state, "frame_role", None), "value", getattr(state, "frame_role", None)) != "referenced"
+        ]
+
+        snapshot = manifest_frame.get("castBibleSnapshot") or {}
+        for character in snapshot.get("characters") or []:
+            raw_cast_id = str(character.get("character_id", "")).strip()
+            if not raw_cast_id:
+                continue
+
+            resolved_cast_id = raw_cast_id
+            if resolved_cast_id not in frame_states:
+                target_token = _compact_identifier_token(resolved_cast_id.removeprefix("cast_"))
+                for candidate in frame_states:
+                    if _compact_identifier_token(candidate.removeprefix("cast_")) == target_token:
+                        resolved_cast_id = candidate
+                        break
+                else:
+                    if len(visible_state_ids) == 1:
+                        resolved_cast_id = visible_state_ids[0]
+
+            state = frame_states.get(resolved_cast_id)
+            if state is None:
+                default_role = CastFrameRole.SUBJECT if len(visible_cast_ids) <= 1 else CastFrameRole.BACKGROUND
+                if resolved_cast_id not in graph.cast:
+                    continue
+                state = CastFrameState(
+                    cast_id=resolved_cast_id,
+                    frame_id=frame_id,
+                    frame_role=default_role,
+                )
+                graph.cast_frame_states[f"{resolved_cast_id}@{frame_id}"] = state
+                frame_states[resolved_cast_id] = state
+
+            if getattr(getattr(state, "frame_role", None), "value", getattr(state, "frame_role", None)) == "referenced":
+                continue
+
+            if visible_cast_ids:
+                state.frame_role = (
+                    CastFrameRole.SUBJECT
+                    if len(visible_cast_ids) == 1 and resolved_cast_id in visible_cast_ids
+                    else CastFrameRole.BACKGROUND
+                )
+
+            pose = (character.get("pose") or {})
+            pose_name = str(pose.get("pose", "")).strip()
+            posture_name = _posture_from_pose_name(pose_name)
+            if posture_name:
+                try:
+                    state.posture = Posture(posture_name)
+                except ValueError:
+                    pass
+
+            modifiers = pose.get("modifiers") or []
+            for modifier in modifiers:
+                if ":" not in modifier:
+                    continue
+                key, value = modifier.split(":", 1)
+                key = key.strip()
+                value = value.strip()
+                if not value:
+                    continue
+                if key == "action":
+                    state.action = value
+                elif key == "screen_position":
+                    state.screen_position = value
+                elif key == "facing_direction":
+                    state.facing_direction = value
+                elif key == "looking_at":
+                    state.looking_at = value
+                elif key == "emotion":
+                    state.emotion = value
+                elif key == "state_tag":
+                    state.active_state_tag = value
+                elif key == "clothing_state":
+                    state.clothing_state = value
+                elif key == "eye_direction":
+                    state.eye_direction = value
+
+            restored_frame = True
+
+        if restored_frame:
+            restored += 1
+
+    return restored
+
+
+def _parse_frame_enricher_worker_output(raw_text: str, frame_id: str) -> dict:
+    """Parse a CLI frame-enricher worker response into the enrichment contract."""
     text = (raw_text or "").strip()
     if not text:
         return {"frame_id": frame_id, "error": "empty_output"}
@@ -1095,14 +1503,14 @@ def _parse_haiku_worker_output(raw_text: str, frame_id: str) -> dict:
     return result
 
 
-def _run_haiku_cli_worker(input_dict: dict, *, dry_run: bool = False) -> dict:
-    """Run one Haiku enrichment worker through the same Claude CLI path as other agents."""
-    from graph.haiku_enricher import HAIKU_MODEL, HAIKU_SYSTEM_PROMPT
+def _run_frame_enricher_cli_worker(input_dict: dict, *, dry_run: bool = False) -> dict:
+    """Run one frame enrichment worker through the shared local agent runner."""
+    from graph.frame_enricher import FRAME_ENRICHER_MODEL, FRAME_ENRICHER_SYSTEM_PROMPT
 
     frame_id = str(input_dict.get("frame_id", "unknown"))
-    worker_id = f"haiku_worker_{frame_id}"
+    worker_id = f"frame_enricher_worker_{frame_id}"
     worker_timer = Timer()
-    live_log(f"  [Haiku] starting {frame_id}")
+    live_log(f"  [FrameEnricher] starting {frame_id}")
 
     prompt_file = tempfile.NamedTemporaryFile(
         mode="w",
@@ -1113,7 +1521,7 @@ def _run_haiku_cli_worker(input_dict: dict, *, dry_run: bool = False) -> dict:
         encoding="utf-8",
     )
     try:
-        prompt_file.write(HAIKU_SYSTEM_PROMPT)
+        prompt_file.write(FRAME_ENRICHER_SYSTEM_PROMPT)
         prompt_file.close()
 
         prompt_prefix = (
@@ -1127,7 +1535,7 @@ def _run_haiku_cli_worker(input_dict: dict, *, dry_run: bool = False) -> dict:
             worker_id,
             prompt_file.name,
             project_dir=PROJECT_DIR,
-            model=HAIKU_MODEL,
+            model=FRAME_ENRICHER_MODEL,
             dry_run=dry_run,
             prompt_prefix=prompt_prefix,
             timeout=None,
@@ -1136,7 +1544,7 @@ def _run_haiku_cli_worker(input_dict: dict, *, dry_run: bool = False) -> dict:
         check_agent_result(worker_id, result, worker_timer)
         if result.returncode != 0:
             return {"frame_id": frame_id, "error": f"agent_exit_{result.returncode}"}
-        return _parse_haiku_worker_output(result.stdout or "", frame_id)
+        return _parse_frame_enricher_worker_output(result.stdout or "", frame_id)
     finally:
         try:
             os.unlink(prompt_file.name)
@@ -1144,8 +1552,8 @@ def _run_haiku_cli_worker(input_dict: dict, *, dry_run: bool = False) -> dict:
             pass
 
 
-def _run_haiku_cli_batch(inputs: list[dict], *, dry_run: bool = False, max_concurrent: int = 20) -> list[dict]:
-    """Run Haiku frame workers through Claude CLI, preserving input order."""
+def _run_frame_enricher_cli_batch(inputs: list[dict], *, dry_run: bool = False, max_concurrent: int = 20) -> list[dict]:
+    """Run frame-enricher workers through the local agent runner, preserving input order."""
     if not inputs:
         return []
 
@@ -1156,7 +1564,7 @@ def _run_haiku_cli_batch(inputs: list[dict], *, dry_run: bool = False, max_concu
     total = len(inputs)
     with ThreadPoolExecutor(max_workers=min(max_concurrent, len(inputs))) as executor:
         futures = {
-            executor.submit(_run_haiku_cli_worker, input_dict, dry_run=dry_run): idx
+            executor.submit(_run_frame_enricher_cli_worker, input_dict, dry_run=dry_run): idx
             for idx, input_dict in enumerate(inputs)
         }
         for future in as_completed(futures):
@@ -1183,17 +1591,24 @@ def _run_haiku_cli_batch(inputs: list[dict], *, dry_run: bool = False, max_concu
                 total=total,
             )
             live_log(
-                f"  [Haiku {completed}/{total}] {frame_id} {status} "
+                f"  [FrameEnricher {completed}/{total}] {frame_id} {status} "
                 f"({success_count} ok, {failure_count} failed{eta_suffix})",
                 color=color,
             )
 
     return [result if result is not None else {"frame_id": str(inputs[idx].get("frame_id", "unknown")), "error": "missing_result"} for idx, result in enumerate(results)]
 
-
 def _project_output_size(base: Path, manifest: dict | None = None) -> str:
     """Resolve the project's declared output size from onboarding/manifest."""
     config = _read_onboarding_config(base)
+    frame_budget = (
+        config.get("frameBudget")
+        or config.get("frame_budget")
+        or (manifest or {}).get("frameBudget")
+        or (manifest or {}).get("frame_budget")
+    )
+    if frame_budget not in (None, "", []):
+        return derive_output_size_from_frame_budget(frame_budget)
     raw = (
         config.get("outputSize")
         or config.get("output_size")
@@ -1202,6 +1617,22 @@ def _project_output_size(base: Path, manifest: dict | None = None) -> str:
         or "short"
     )
     return str(raw).strip().lower()
+
+
+def _project_frame_budget(base: Path, manifest: dict | None = None) -> int | None:
+    config = _read_onboarding_config(base)
+    raw = (
+        config.get("frameBudget")
+        or config.get("frame_budget")
+        or (manifest or {}).get("frameBudget")
+        or (manifest or {}).get("frame_budget")
+    )
+    if raw in (None, "", []):
+        return None
+    try:
+        return normalize_frame_budget(raw)
+    except ValueError:
+        return None
 
 
 def _count_protagonists(manifest: dict, base: Path) -> int:
@@ -1254,6 +1685,50 @@ def _refine_status_kind(refined_by: str) -> str:
     if value.startswith("failed:"):
         return "failed"
     return "unknown"
+
+
+_CAST_LOCATION_SUFFIXES = {
+    "arizona", "california", "topanga", "sedona", "canyon", "ranch", "room", "hall",
+}
+
+
+def _edit_distance_le_one(a: str, b: str) -> bool:
+    if a == b:
+        return True
+    if abs(len(a) - len(b)) > 1:
+        return False
+    if len(a) > len(b):
+        a, b = b, a
+    i = j = edits = 0
+    while i < len(a) and j < len(b):
+        if a[i] == b[j]:
+            i += 1
+            j += 1
+            continue
+        edits += 1
+        if edits > 1:
+            return False
+        if len(a) == len(b):
+            i += 1
+            j += 1
+        else:
+            j += 1
+    if i < len(a) or j < len(b):
+        edits += 1
+    return edits <= 1
+
+
+def _suspicious_cast_name_reasons(name: str) -> list[str]:
+    lowered = (name or "").strip().lower()
+    if not lowered:
+        return ["empty"]
+    reasons: list[str] = []
+    tokens = [token for token in re.split(r"\s+", lowered) if token]
+    if any(char.isdigit() for char in lowered):
+        reasons.append("contains digits")
+    if len(tokens) >= 2 and tokens[-1] in _CAST_LOCATION_SUFFIXES:
+        reasons.append("ends with location-like token")
+    return reasons
 
 
 def quality_gate_phase_1(base: Path) -> list[str]:
@@ -1350,7 +1825,34 @@ def quality_gate_phase_2(base: Path) -> list[str]:
 
     try:
         from graph.store import GraphStore
-        from graph.api import get_frame_cast_state_models
+        from graph.api import build_shot_packet, get_frame_cast_state_models
+
+        def _dialogue_requires_visible_primary_speaker(frame, dialogue_node, visible_cast_ids) -> bool:
+            cast_id = (getattr(dialogue_node, "cast_id", "") or "").lower()
+            speaker = (getattr(dialogue_node, "speaker", "") or "").lower()
+            source_text = (getattr(frame, "source_text", "") or "").lower()
+            if any(
+                token in f"{cast_id} {speaker} {source_text}"
+                for token in ("voice over", "voiceover", "voice_over", "on phone", "phone")
+            ):
+                return False
+
+            first_line = source_text.splitlines()[0].strip() if source_text else ""
+            if "(" in first_line and ")" in first_line and visible_cast_ids:
+                alias = first_line.split("(", 1)[1].split(")", 1)[0].strip().lower()
+                for visible_cast_id in visible_cast_ids:
+                    cast_node = graph.cast.get(visible_cast_id)
+                    if cast_node is None:
+                        continue
+                    for raw in (
+                        getattr(cast_node, "display_name", None),
+                        getattr(cast_node, "name", None),
+                        getattr(cast_node, "source_name", None),
+                    ):
+                        normalized = re.sub(r"\s+", " ", (raw or "").strip()).lower()
+                        if normalized and alias == normalized:
+                            return False
+            return True
 
         store = GraphStore(str(base))
         graph = store.load()
@@ -1365,11 +1867,15 @@ def quality_gate_phase_2(base: Path) -> list[str]:
             if not frame:
                 continue
 
-            visible_cast_ids = sorted({
+            raw_visible_cast_ids = sorted({
                 cs.cast_id
                 for cs in get_frame_cast_state_models(graph, frame_id)
                 if getattr(getattr(cs, "frame_role", None), "value", getattr(cs, "frame_role", None)) != "referenced"
             })
+            try:
+                visible_cast_ids = sorted(set(build_shot_packet(graph, frame_id).visible_cast_ids or raw_visible_cast_ids))
+            except Exception:
+                visible_cast_ids = raw_visible_cast_ids
 
             scene = graph.scenes.get(frame.scene_id)
             scene_cast_ids = set(getattr(scene, "cast_present", []) or [])
@@ -1394,7 +1900,11 @@ def quality_gate_phase_2(base: Path) -> list[str]:
                     dialogue_node = graph.dialogue.get(dialogue_id)
                     if not dialogue_node:
                         continue
-                    if dialogue_node.primary_visual_frame == frame_id and dialogue_node.cast_id not in visible_cast_ids:
+                    if (
+                        dialogue_node.primary_visual_frame == frame_id
+                        and _dialogue_requires_visible_primary_speaker(frame, dialogue_node, visible_cast_ids)
+                        and dialogue_node.cast_id not in visible_cast_ids
+                    ):
                         dialogue_presence_conflicts.append(
                             f"{frame_id}: primary dialogue speaker {dialogue_node.cast_id} missing from visible cast"
                         )
@@ -1418,6 +1928,52 @@ def quality_gate_phase_2(base: Path) -> list[str]:
             issues.append(
                 f"{len(dialogue_presence_conflicts)} primary dialogue frame(s) omit the speaker from visible cast "
                 f"(sample: {'; '.join(dialogue_presence_conflicts[:3])})"
+            )
+
+        total_graph_frames = max(len(graph.frame_order), 1)
+        dialogue_frames = sum(
+            1
+            for frame_id in graph.frame_order
+            if (
+                (frame := graph.frames.get(frame_id)) is not None
+                and (frame.is_dialogue or bool(frame.dialogue_ids))
+            )
+        )
+        dialogue_ratio = dialogue_frames / total_graph_frames
+        if total_graph_frames >= 2 and dialogue_ratio < 0.45:
+            issues.append(
+                f"Dialogue density too low: {dialogue_frames}/{total_graph_frames} frame(s) "
+                f"({dialogue_ratio:.0%}) carry dialogue or dialogue reaction coverage — target is at least 45%"
+            )
+
+        suspicious_cast_names: list[str] = []
+        seen_cast_tokens: dict[str, str] = {}
+        near_duplicate_cast_names: list[str] = []
+        for cast_id, cast_node in sorted(graph.cast.items()):
+            display_name = getattr(cast_node, "display_name", None) or cast_node.name
+            reasons = _suspicious_cast_name_reasons(display_name)
+            if reasons:
+                suspicious_cast_names.append(f"{cast_id} ({display_name}): {', '.join(reasons)}")
+            compact = re.sub(r"[^a-z0-9]+", "", display_name.lower())
+            if not compact:
+                continue
+            for seen_compact, seen_cast_id in seen_cast_tokens.items():
+                if compact == seen_compact or _edit_distance_le_one(compact, seen_compact):
+                    near_duplicate_cast_names.append(
+                        f"{seen_cast_id} and {cast_id} have near-duplicate display names"
+                    )
+                    break
+            seen_cast_tokens.setdefault(compact, cast_id)
+
+        if suspicious_cast_names:
+            issues.append(
+                f"{len(suspicious_cast_names)} cast name(s) look unnormalized "
+                f"(sample: {'; '.join(suspicious_cast_names[:3])})"
+            )
+        if near_duplicate_cast_names:
+            issues.append(
+                f"{len(near_duplicate_cast_names)} near-duplicate cast name pair(s) detected "
+                f"(sample: {'; '.join(near_duplicate_cast_names[:3])})"
             )
 
     except Exception as e:
@@ -1475,6 +2031,40 @@ def quality_gate_phase_4(base: Path) -> list[str]:
     for img in composed:
         if img.stat().st_size < 10240:
             issues.append(f"Composed frame {img.name} is only {img.stat().st_size} bytes — may be corrupt")
+
+    try:
+        from graph.prompt_pair_validator import (
+            IssueSeverity,
+            PromptPairCategory,
+            validate_all_prompt_pairs,
+        )
+        from graph.store import GraphStore
+
+        store = GraphStore(str(base))
+        graph = store.load()
+        image_prompts: dict[str, dict] = {}
+        video_prompts: dict[str, dict] = {}
+        for frame_id in graph.frame_order:
+            image_path = base / "frames" / "prompts" / f"{frame_id}_image.json"
+            video_path = base / "video" / "prompts" / f"{frame_id}_video.json"
+            if image_path.exists():
+                image_prompts[frame_id] = json.loads(image_path.read_text())
+            if video_path.exists():
+                video_prompts[frame_id] = json.loads(video_path.read_text())
+
+        prompt_issues = [
+            issue
+            for issue in validate_all_prompt_pairs(graph, image_prompts, video_prompts)
+            if issue.severity == IssueSeverity.ERROR
+            and issue.category == PromptPairCategory.SUBJECT_COUNT_CONSISTENCY
+        ]
+        if prompt_issues:
+            issues.append(
+                f"{len(prompt_issues)} prompt subject-count contradiction(s) remain "
+                f"(sample: {'; '.join(issue.description for issue in prompt_issues[:3])})"
+            )
+    except Exception as e:
+        issues.append(f"phase 4 prompt consistency check failed: {e}")
 
     return issues
 
@@ -1590,6 +2180,13 @@ def detect_resume_phase() -> int:
         phase_data = phases.get(f"phase_{i}", {})
         if phase_data.get("status") != "complete":
             return i
+        reusable, issues = _phase_reuse_status(i, PROJECT_DIR)
+        if not reusable:
+            log_warn(
+                f"Resume will rerun phase {i} — existing artifacts are incomplete: "
+                + "; ".join(issues[:3])
+            )
+            return i
     return 7  # all done
 
 
@@ -1609,8 +2206,75 @@ def verify_prerequisites(target_phase: int) -> None:
             fail(f"Prerequisite not met: phase_{i} status is '{status}' "
                  f"(expected 'complete'). Run earlier phases first or use "
                  f"full pipeline mode.")
+        reusable, issues = _phase_reuse_status(i, PROJECT_DIR)
+        if not reusable:
+            fail(
+                f"Prerequisite artifacts for phase_{i} are incomplete: "
+                + "; ".join(issues[:5])
+                + ". Rerun that phase or use --resume."
+            )
 
     log_ok(f"All prerequisites for phase {target_phase} verified (phases 0-{target_phase - 1} complete)")
+
+
+def _dedupe_issues(items: list[str]) -> list[str]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for item in items:
+        normalized = str(item).strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        ordered.append(normalized)
+    return ordered
+
+
+def _phase_1_reuse_issues(project_dir: Path) -> list[str]:
+    state = _scan_phase_1_state(project_dir)
+    issues: list[str] = []
+    if not state["skeleton_exists"]:
+        issues.append("outline_skeleton.md missing")
+    if not state["expected_scene_numbers"]:
+        issues.append("no scene numbers detected from outline_skeleton.md")
+    if state["missing_scene_numbers"]:
+        issues.append(
+            "missing scene drafts: "
+            + ", ".join(f"{scene_num:02d}" for scene_num in state["missing_scene_numbers"][:8])
+        )
+    if not state["creative_output_exists"]:
+        issues.append("creative_output.md missing")
+    if state["creative_output_stale"]:
+        issues.append("creative_output.md is stale relative to scene drafts")
+    issues.extend(_phase_1_skeleton_issues(project_dir))
+    issues.extend(quality_gate_phase_1(project_dir))
+    return _dedupe_issues(issues)
+
+
+def _phase_2_reuse_issues(project_dir: Path) -> list[str]:
+    issues = list(quality_gate_phase_2(project_dir))
+    graph_path = project_dir / "graph" / "narrative_graph.json"
+    image_prompts = list((project_dir / "frames" / "prompts").glob("*_image.json"))
+    video_prompts = list((project_dir / "video" / "prompts").glob("*_video.json"))
+    if not graph_path.exists():
+        issues.append("graph/narrative_graph.json missing")
+    if not image_prompts:
+        issues.append("frames/prompts missing assembled image prompts")
+    if not video_prompts:
+        issues.append("video/prompts missing assembled video prompts")
+    dialogue_report = project_dir / "logs" / "pipeline" / "dialogue_confirmation_report.json"
+    if not dialogue_report.exists():
+        issues.append("logs/pipeline/dialogue_confirmation_report.json missing")
+    return _dedupe_issues(issues)
+
+
+def _phase_reuse_status(phase_num: int, project_dir: Path) -> tuple[bool, list[str]]:
+    if phase_num == 1:
+        issues = _phase_1_reuse_issues(project_dir)
+        return (not issues, issues)
+    if phase_num == 2:
+        issues = _phase_2_reuse_issues(project_dir)
+        return (not issues, issues)
+    return (True, [])
 
 
 # ---------------------------------------------------------------------------
@@ -1709,6 +2373,66 @@ def _scan_phase_1_state(project_dir: Path) -> dict:
     }
 
 
+def _phase_1_min_scene_count(project_dir: Path) -> int:
+    config = _read_onboarding_config(project_dir)
+    return minimum_scene_count_for_frame_budget(
+        config.get("frameBudget", config.get("outputSize"))
+    )
+
+
+def _phase_1_skeleton_issues(project_dir: Path) -> list[str]:
+    skeleton_path = project_dir / "creative_output" / "outline_skeleton.md"
+    if not skeleton_path.exists() or skeleton_path.stat().st_size == 0:
+        return ["outline_skeleton.md missing"]
+
+    text = skeleton_path.read_text(encoding="utf-8", errors="replace")
+    issues: list[str] = []
+
+    scene_count = len(re.findall(r"^///SCENE:\s*", text, re.MULTILINE))
+    min_scene_count = _phase_1_min_scene_count(project_dir)
+    if scene_count < min_scene_count:
+        issues.append(
+            f"only {scene_count} explicit ///SCENE tags found; expected at least {min_scene_count}"
+        )
+
+    placeholder_patterns = (
+        r"\(Additional [^)]+ would follow",
+        r"remaining \d+ scenes? follow",
+        r"follow similar detailed format",
+        r"due to length",
+        r"scenes? \d+(?:-\d+)? .* cover",
+        r"continuing with full scenes",
+        r"remaining chronology",
+        r"actual file",
+        r"note on remaining scenes",
+        r"removed per override",
+    )
+    for pattern in placeholder_patterns:
+        if re.search(pattern, text, re.IGNORECASE):
+            issues.append(f"skeleton contains placeholder/summary text matching: {pattern}")
+
+    referenced_scene_numbers = [
+        int(match)
+        for match in re.findall(r"\bscene[_ ]0*(\d+)\b", text, re.IGNORECASE)
+    ]
+    if scene_count and referenced_scene_numbers:
+        max_referenced_scene = max(referenced_scene_numbers)
+        if max_referenced_scene > scene_count:
+            issues.append(
+                f"skeleton references scene_{max_referenced_scene:02d} but only defines "
+                f"{scene_count} explicit ///SCENE blocks"
+            )
+
+    if "## B. Character Roster" not in text:
+        issues.append("missing character roster section")
+    if "## C. Location Roster" not in text:
+        issues.append("missing location roster section")
+    if "## D. Prop Roster" not in text:
+        issues.append("missing prop roster section")
+
+    return issues
+
+
 def _assemble_creative_output_from_drafts(project_dir: Path, scene_numbers: list[int]) -> Path:
     creative_dir = project_dir / "creative_output"
     scenes_dir = creative_dir / "scenes"
@@ -1740,6 +2464,66 @@ def _assemble_creative_output_from_drafts(project_dir: Path, scene_numbers: list
     tmp_path.write_text(assembled_text, encoding="utf-8")
     os.replace(tmp_path, output_path)
     return output_path
+
+
+def _normalized_onboarding_signature(project_dir: Path) -> dict:
+    config = _read_onboarding_config(project_dir)
+    normalized = {
+        key: value
+        for key, value in config.items()
+        if key not in {"projectName", "projectId", "sourceFiles"}
+    }
+
+    source_digests: list[dict[str, str]] = []
+    for rel_path in config.get("sourceFiles", []):
+        abs_path = project_dir / rel_path
+        if not abs_path.exists() or not abs_path.is_file():
+            continue
+        digest = hashlib.sha256(abs_path.read_bytes()).hexdigest()
+        source_digests.append(
+            {
+                "name": abs_path.name,
+                "sha256": digest,
+                "size": str(abs_path.stat().st_size),
+            }
+        )
+
+    normalized["sourceDigests"] = source_digests
+    return normalized
+
+
+def _find_phase_1_reuse_candidate(project_dir: Path) -> Path | None:
+    target_sig = _normalized_onboarding_signature(project_dir)
+    creative_dir = project_dir / "creative_output"
+
+    for candidate in sorted(PROJECTS_DIR.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
+        if candidate == project_dir or not candidate.is_dir():
+            continue
+        candidate_creative = candidate / "creative_output"
+        candidate_state = _scan_phase_1_state(candidate)
+        if not candidate_state["skeleton_exists"] or not candidate_state["creative_output_exists"]:
+            continue
+        if candidate_creative == creative_dir:
+            continue
+        try:
+            candidate_sig = _normalized_onboarding_signature(candidate)
+        except Exception:
+            continue
+        if candidate_sig == target_sig:
+            return candidate
+    return None
+
+
+def _restore_phase_1_from_matching_project(project_dir: Path) -> Path | None:
+    candidate = _find_phase_1_reuse_candidate(project_dir)
+    if candidate is None:
+        return None
+
+    source_dir = candidate / "creative_output"
+    target_dir = project_dir / "creative_output"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(source_dir, target_dir, dirs_exist_ok=True)
+    return candidate
 
 
 # ---------------------------------------------------------------------------
@@ -1796,7 +2580,8 @@ def phase_0_verify(dry_run: bool) -> dict:
 
     # Check key subdirectories exist
     required_dirs = ["cast", "locations", "props", "creative_output",
-                     "source_files", "assets", "frames", "audio", "video", "logs"]
+                     "source_files", "assets", "frames", "audio", "video", "logs",
+                     "scripts", "reports"]
     for d in required_dirs:
         dp = PROJECT_DIR / d
         if not dp.exists():
@@ -1809,7 +2594,7 @@ def phase_0_verify(dry_run: bool) -> dict:
 
 def phase_1_narrative(dry_run: bool, phase_timers: dict) -> None:
     """Phase 1 -- Creative Coordinator writes skeleton (contracts), then
-    parallel Haiku workers write prose per scene, then CC assembles."""
+    parallel Grok prose workers write prose per scene, then CC assembles."""
     log_header("PHASE 1 -- Narrative (Contracts + Parallel Prose)")
     timer = Timer()
     phase_timers["phase_1"] = timer
@@ -1821,6 +2606,24 @@ def phase_1_narrative(dry_run: bool, phase_timers: dict) -> None:
     creative_output_path = creative_dir / "creative_output.md"
     prompt_file = str(PROMPTS_DIR / "creative_coordinator.md")
     result_skeleton = None
+    cc_skeleton_prefix = (
+        "CRITICAL OVERRIDE — THIS SUPERSEDES ALL INSTRUCTIONS ABOVE.\n"
+        "Complete ONLY the skeleton phase (Phase 1: ARCHITECT). "
+        "Write creative_output/outline_skeleton.md with the full story foundation, "
+        "character roster, location roster, per-scene construction specs, and "
+        "continuity chain. Do NOT write scene prose. Do NOT write creative_output.md. "
+        "Do NOT proceed to Phase 2 or Phase 3. Skeleton ONLY. "
+        "Stop after the skeleton is complete and update your state.\n\n"
+        "NON-NEGOTIABLE OUTPUT CONTRACT:\n"
+        "- Write every required ///CAST, ///LOCATION, ///LOCATION_DIR, ///PROP, and ///SCENE tag explicitly.\n"
+        "- If you claim N scenes, you must emit N distinct explicit ///SCENE blocks and N distinct scene sections.\n"
+        "- Do NOT summarize omitted sections.\n"
+        "- Do NOT write placeholder notes like 'additional scenes follow', 'remaining scenes cover', "
+        "'continuing with full scenes', 'actual file', or 'note on remaining scenes'.\n"
+        "- Cover the full source chronology from beginning through ending. Never stop early because a budget fills.\n"
+        "- If frameBudget is numeric, compress density to fit it. If frameBudget is auto, use as many scenes as needed.\n"
+        "- Overwrite creative_output/outline_skeleton.md completely with the final full skeleton.\n"
+    )
 
     def _checkpoint(stage: str) -> dict:
         state = _scan_phase_1_state(base)
@@ -1852,7 +2655,7 @@ def phase_1_narrative(dry_run: bool, phase_timers: dict) -> None:
         result = run_agent(
             f"prose_worker_scene_{scene_num:02d}", prompt_file,
             dry_run=dry_run, prompt_prefix=prose_prefix,
-            model="claude-haiku-4-5-20251001",
+            model=DEFAULT_STAGE1_REASONING_MODEL,
             timeout=300,
         )
         return scene_num, result, worker_timer
@@ -1894,23 +2697,44 @@ def phase_1_narrative(dry_run: bool, phase_timers: dict) -> None:
         )
     else:
         log("--- Phase 1a: Skeleton (contracts) ---")
-        cc_skeleton_prefix = (
-            "CRITICAL OVERRIDE — THIS SUPERSEDES ALL INSTRUCTIONS ABOVE.\n"
-            "Complete ONLY the skeleton phase (Phase 1: ARCHITECT). "
-            "Write creative_output/outline_skeleton.md with the full story foundation, "
-            "character roster, location roster, per-scene construction specs, and "
-            "continuity chain. Do NOT write scene prose. Do NOT write creative_output.md. "
-            "Do NOT proceed to Phase 2 or Phase 3. Skeleton ONLY. "
-            "Stop after the skeleton is complete and update your state."
-        )
         result_skeleton = run_agent("creative_coordinator", prompt_file,
-                                    dry_run=dry_run, prompt_prefix=cc_skeleton_prefix)
+                                    dry_run=dry_run, prompt_prefix=cc_skeleton_prefix,
+                                    model=DEFAULT_STAGE1_REASONING_MODEL)
         check_agent_result("creative_coordinator_skeleton", result_skeleton, timer)
+        if not dry_run and skeleton_path.exists():
+            skeleton_issues = _phase_1_skeleton_issues(base)
+            if skeleton_issues:
+                log_warn("Skeleton quality issues detected after first pass:")
+                for issue in skeleton_issues:
+                    print(f"  - {issue}", flush=True)
+                correction_prefix = (
+                    cc_skeleton_prefix
+                    + "\nCORRECTION PASS:\n"
+                    + "\n".join(f"- Fix this: {issue}" for issue in skeleton_issues)
+                    + "\nReturn only after the rewritten outline_skeleton.md satisfies all of these constraints."
+                )
+                retry_timer = Timer()
+                retry_result = run_agent(
+                    "creative_coordinator",
+                    prompt_file,
+                    dry_run=dry_run,
+                    prompt_prefix=correction_prefix,
+                    model=DEFAULT_STAGE1_REASONING_MODEL,
+                )
+                check_agent_result("creative_coordinator_skeleton_retry", retry_result, retry_timer)
+                result_skeleton = retry_result
+        if not dry_run and not skeleton_path.exists():
+            reused_from = _restore_phase_1_from_matching_project(base)
+            if reused_from is not None:
+                log_ok(
+                    "Restored Phase 1 narrative outputs from matching project "
+                    f"{reused_from.name}"
+                )
 
     state = _checkpoint("skeleton_complete")
 
-    # Step 2: Parallel Haiku workers write prose per scene
-    log("--- Phase 1b: Parallel prose writing (Haiku per scene) ---")
+    # Step 2: Parallel prose workers write prose per scene
+    log("--- Phase 1b: Parallel prose writing (Grok per scene) ---")
     if not dry_run:
         if not skeleton_path.exists():
             log_err("Skeleton not found — cannot dispatch parallel prose workers")
@@ -1937,7 +2761,7 @@ def phase_1_narrative(dry_run: bool, phase_timers: dict) -> None:
                 else:
                     log_ok("All expected scene drafts already exist — skipping prose workers")
     else:
-        log("[DRY-RUN] Would spawn parallel Haiku prose workers per scene", YELLOW)
+        log("[DRY-RUN] Would spawn parallel Grok prose workers per scene", YELLOW)
 
     state = _checkpoint("prose_complete")
 
@@ -1998,13 +2822,13 @@ def phase_2_morpheus(dry_run: bool, phase_timers: dict) -> None:
 
     Step 2a:   Python parser (deterministic, <5 seconds)
                Reads CC output files → NarrativeGraph with all entities, frames, dialogue, edges.
-    Step 2b:   Parallel Haiku workers for per-frame enrichment (composition, environment, directing).
+    Step 2b:   Parallel frame enricher workers for per-frame enrichment (composition, environment, directing).
     Step 2b.5: Grok cinematic tagging — assigns CinematicTag to every FrameNode.
     Step 2c:   Continuity validator — deterministic graph integrity checks (no LLM).
     Step 2d:   Prompt assembly + materialization (existing deterministic post-processing).
     Optional:  Graph auditor agent spawned after Step 2c if --audit flag is set.
     """
-    log_header("PHASE 2 -- CC-First Graph Build (Parser → Haiku → Grok → Validator)")
+    log_header("PHASE 2 -- CC-First Graph Build (Parser → Frame Enricher → Grok → Validator)")
     timer = Timer()
     phase_timers["phase_2"] = timer
 
@@ -2039,16 +2863,25 @@ def phase_2_morpheus(dry_run: bool, phase_timers: dict) -> None:
         from graph.store import GraphStore
 
         config = _read_onboarding_config(PROJECT_DIR)
+        frame_budget = _project_frame_budget(PROJECT_DIR)
         project_node = ProjectNode(
             project_id=config.get("projectId", ""),
             title=config.get("projectName", ""),
             pipeline=config.get("pipeline", "story_upload"),
-            stickiness_level=config.get("stickinessLevel", 3),
-            stickiness_permission=config.get("stickinessPermission", ""),
-            output_size=config.get("outputSize", "short"),
-            output_size_label=config.get("outputSizeLabel", ""),
-            frame_range=config.get("frameRange", [10, 20]),
-            scene_range=config.get("sceneRange", [1, 3]),
+            creative_freedom=config.get("creativeFreedom", "balanced"),
+            creative_freedom_permission=config.get("creativeFreedomPermission", ""),
+            creative_freedom_failure_modes=config.get("creativeFreedomFailureModes", ""),
+            dialogue_policy=config.get("dialoguePolicy", ""),
+            frame_budget=frame_budget,
+            output_size=derive_output_size_from_frame_budget(
+                config.get("frameBudget", config.get("outputSize", "auto"))
+            ),
+            output_size_label=derive_output_size_label_from_frame_budget(
+                config.get("frameBudget", config.get("outputSizeLabel", "auto"))
+            ),
+            frame_range=derive_frame_range_from_budget(
+                config.get("frameBudget", config.get("frameRange"))
+            ),
             media_style=config.get("mediaStyle", "live_clear"),
             media_style_prefix=config.get("mediaStylePrefix", ""),
             aspect_ratio=config.get("aspectRatio", "16:9"),
@@ -2078,25 +2911,32 @@ def phase_2_morpheus(dry_run: bool, phase_timers: dict) -> None:
     else:
         log("[DRY-RUN] Would run cc_parser.parse_cc_output() → NarrativeGraph", YELLOW)
 
-    # ── Step 2b: Parallel Haiku enrichment ────────────────────────────────
-    log_header("  STEP 2b — Haiku Enrichment (parallel per-frame)")
+    # ── Step 2b: Parallel frame enrichment ────────────────────────────────
+    log_header("  STEP 2b — Frame Enrichment (parallel per-frame)")
     t2b = Timer()
     if not dry_run:
-        from graph.haiku_enricher import (
-            build_haiku_inputs, apply_haiku_enrichment,
+        from graph.frame_enricher import (
+            build_frame_enricher_inputs, apply_frame_enrichment,
         )
 
-        inputs = build_haiku_inputs(graph)
-        pending_inputs = _pending_haiku_inputs(graph, inputs)
+        restored_from_manifest = _rehydrate_phase_2_from_manifest(PROJECT_DIR, graph)
+        if restored_from_manifest:
+            log_ok(
+                "Rehydrated existing Phase 2 enrichment from project_manifest.json for "
+                f"{restored_from_manifest} frame(s)"
+            )
+
+        inputs = build_frame_enricher_inputs(graph)
+        pending_inputs = _pending_frame_enricher_inputs(graph, inputs)
         if not pending_inputs:
-            log_ok("All frames already contain core Haiku enrichment — skipping Step 2b")
+            log_ok("All frames already contain core frame enrichment — skipping Step 2b")
             results = []
         else:
             log(
-                f"Dispatching {len(pending_inputs)} Haiku workers via Claude CLI "
+                f"Dispatching {len(pending_inputs)} frame enricher workers via local Grok runner "
                 f"(max_concurrent=20, skipped={len(inputs) - len(pending_inputs)} already enriched)..."
             )
-            results = _run_haiku_cli_batch(
+            results = _run_frame_enricher_cli_batch(
                 pending_inputs,
                 dry_run=dry_run,
                 max_concurrent=20,
@@ -2109,15 +2949,15 @@ def phase_2_morpheus(dry_run: bool, phase_timers: dict) -> None:
                 h_failures += 1
                 log_warn(f"Frame {result.get('frame_id')} enrichment failed: {result['error']}")
             else:
-                apply_haiku_enrichment(graph, result)
+                apply_frame_enrichment(graph, result)
                 h_successes += 1
         store.save(graph)
         log_ok(
-            f"Haiku enrichment complete in {t2b.elapsed_str()}: "
+            f"Frame enrichment complete in {t2b.elapsed_str()}: "
             f"{h_successes} succeeded, {h_failures} failed"
         )
     else:
-        log("[DRY-RUN] Would dispatch parallel Haiku per-frame enrichment (max_concurrent=20)", YELLOW)
+        log("[DRY-RUN] Would dispatch parallel frame-enricher per-frame enrichment (max_concurrent=20)", YELLOW)
 
     # ── Step 2b.5: Grok cinematic tagging ─────────────────────────────────
     log_header("  STEP 2b.5 — Grok Cinematic Tagging")
@@ -2146,7 +2986,7 @@ def phase_2_morpheus(dry_run: bool, phase_timers: dict) -> None:
     MAX_FIX_PASSES = 2
     if not dry_run:
         from graph.continuity_validator import validate_continuity
-        from graph.haiku_enricher import build_haiku_inputs, apply_haiku_enrichment
+        from graph.frame_enricher import build_frame_enricher_inputs, apply_frame_enrichment
         from graph.store import GraphStore as _GraphStore
 
         _store_cv = _GraphStore(PROJECT_DIR)
@@ -2172,7 +3012,7 @@ def phase_2_morpheus(dry_run: bool, phase_timers: dict) -> None:
                 log(f"    [FIXED] {i['check_name']}: {i['message']}")
 
             if needs_re_enrich and pass_num < MAX_FIX_PASSES:
-                log(f"  Dispatching Haiku re-enrichment for {len(needs_re_enrich)} frame issue(s)...")
+                log(f"  Dispatching frame re-enrichment for {len(needs_re_enrich)} frame issue(s)...")
                 issue_frame_ids = {
                     str(issue.get("frame_id", "")).strip()
                     for issue in needs_re_enrich
@@ -2180,10 +3020,10 @@ def phase_2_morpheus(dry_run: bool, phase_timers: dict) -> None:
                 }
                 re_inputs = [
                     input_dict
-                    for input_dict in build_haiku_inputs(graph_cv)
+                    for input_dict in build_frame_enricher_inputs(graph_cv)
                     if str(input_dict.get("frame_id", "")).strip() in issue_frame_ids
                 ]
-                re_results = _run_haiku_cli_batch(
+                re_results = _run_frame_enricher_cli_batch(
                     re_inputs,
                     dry_run=dry_run,
                     max_concurrent=10,
@@ -2191,7 +3031,7 @@ def phase_2_morpheus(dry_run: bool, phase_timers: dict) -> None:
                 re_ok = 0
                 for r in re_results:
                     if "error" not in r:
-                        apply_haiku_enrichment(graph_cv, r)
+                        apply_frame_enrichment(graph_cv, r)
                         re_ok += 1
                 log(f"  Re-enrichment complete: {re_ok}/{len(re_results)} succeeded")
                 _store_cv.save(graph_cv)
@@ -2575,6 +3415,7 @@ def _generate_single_grid_storyboard(prompt_data: dict) -> dict | None:
             scene=scene,
             frame_ids=frame_ids,
             style_prefix=style_prefix,
+            grid_id=grid_id,
             run_id=PIPELINE_RUN_ID,
             phase=os.environ.get(PHASE_ENV, ""),
         ))
@@ -2638,6 +3479,7 @@ async def _generate_single_grid_storyboard_async(prompt_data: dict) -> dict | No
             scene=scene,
             frame_ids=frame_ids,
             style_prefix=style_prefix,
+            grid_id=grid_id,
             run_id=PIPELINE_RUN_ID,
             phase=os.environ.get(PHASE_ENV, ""),
         )
@@ -2695,6 +3537,7 @@ def _generate_storyboard_grids_phase3(dry_run: bool) -> None:
     if assemble_result.returncode != 0:
         log_warn(f"Prompt re-assembly failed after grid build (exit {assemble_result.returncode})")
         return
+    _run_project_report(PROJECT_DIR)
 
     # Generate storyboards from prompt JSONs in order so each grid can inherit
     # the previous grid's output as continuity guidance.
@@ -2790,10 +3633,12 @@ def _generate_storyboard_grids_phase3(dry_run: bool) -> None:
 
     # Re-assemble prompts so frame ref_images now include grid cell images
     log("Re-assembling prompts with grid storyboard references...")
-    _stream_subprocess(
+    final_assemble = _stream_subprocess(
         [sys.executable, str(SKILLS_DIR / "graph_assemble_prompts"),
          "--project-dir", str(PROJECT_DIR)],
         cwd=PROJECT_DIR, label="graph_assemble_prompts")
+    if final_assemble.returncode == 0:
+        _run_project_report(PROJECT_DIR)
     log_ok("Prompts re-assembled with grid storyboard references")
 
     # Persist storyboard grid metadata to project_manifest.json so downstream
@@ -2864,10 +3709,12 @@ def phase_3_assets(dry_run: bool, phase_timers: dict) -> None:
     # Step 3c: Project prompt audit logs from the canonical graph state.
     log("--- Phase 3c: Project prompt audit logs from graph ---")
     if not dry_run:
-        _stream_subprocess(
+        phase3c_assemble = _stream_subprocess(
             [sys.executable, str(SKILLS_DIR / "graph_assemble_prompts"),
              "--project-dir", str(PROJECT_DIR)],
             cwd=PROJECT_DIR, label="graph_assemble_prompts_post_assets")
+        if phase3c_assemble.returncode == 0:
+            _run_project_report(PROJECT_DIR)
         log_ok("Prompt audit logs refreshed from graph state")
 
     # Step 3d: Validate assets + update manifest so graph has real paths
@@ -2878,15 +3725,20 @@ def phase_3_assets(dry_run: bool, phase_timers: dict) -> None:
     # Step 3e: Re-project prompt audit logs after any validation/regeneration.
     log("--- Phase 3e: Refresh prompt audit logs after validation ---")
     if not dry_run:
-        _stream_subprocess(
+        phase3e_assemble = _stream_subprocess(
             [sys.executable, str(SKILLS_DIR / "graph_assemble_prompts"),
              "--project-dir", str(PROJECT_DIR)],
             cwd=PROJECT_DIR, label="graph_assemble_prompts")
+        if phase3e_assemble.returncode == 0:
+            _run_project_report(PROJECT_DIR)
         log_ok("Prompt audit logs refreshed with validated asset paths")
 
-    # Step 3f: Storyboard generation (includes tag verification gate)
+    # Step 3f: Storyboard generation (optional guidance layer)
     log("--- Phase 3f: Storyboard grid generation ---")
-    _generate_storyboard_grids_phase3(dry_run)
+    if ENABLE_STORYBOARD_GUIDANCE:
+        _generate_storyboard_grids_phase3(dry_run)
+    else:
+        log("Storyboard guidance disabled — bypassing storyboard prompt/composite generation")
 
     created_files = []
     if not dry_run:
@@ -2976,16 +3828,16 @@ def _audit_phase4_assets() -> dict:
             if not expected.exists() or expected.stat().st_size < MIN_VALID_SIZE:
                 missing_props.append(prop_id)
 
-    # Storyboard grids
-    for grid_id, grid in graph.storyboard_grids.items():
-        if grid.composite_image_path:
-            p = Path(grid.composite_image_path) if Path(grid.composite_image_path).is_absolute() else base / grid.composite_image_path
-            if not p.exists() or p.stat().st_size < 1000:
-                missing_storyboards.append(grid_id)
-        else:
-            expected = base / "frames" / "storyboards" / grid_id / "composite.png"
-            if not expected.exists() or expected.stat().st_size < 1000:
-                missing_storyboards.append(grid_id)
+    if ENABLE_STORYBOARD_GUIDANCE:
+        for grid_id, grid in graph.storyboard_grids.items():
+            if grid.composite_image_path:
+                p = Path(grid.composite_image_path) if Path(grid.composite_image_path).is_absolute() else base / grid.composite_image_path
+                if not p.exists() or p.stat().st_size < 1000:
+                    missing_storyboards.append(grid_id)
+            else:
+                expected = base / "frames" / "storyboards" / grid_id / "composite.png"
+                if not expected.exists() or expected.stat().st_size < 1000:
+                    missing_storyboards.append(grid_id)
 
     total = len(missing_cast) + len(missing_locations) + len(missing_props)
 
@@ -2999,8 +3851,88 @@ def _audit_phase4_assets() -> dict:
     }
 
 
+def _run_final_frame_worker(
+    frame_id: str,
+    prompt_data: dict,
+    out_rel: str,
+) -> dict:
+    """Generate one final frame and return structured result data."""
+    out_path = PROJECT_DIR / out_rel
+    storyboard_ref = prompt_data.get("storyboard_image")
+    other_refs = list(prompt_data.get("reference_images") or [])
+    cmd = [
+        sys.executable, str(SKILLS_DIR / "sw_generate_frame"),
+        "--prompt", prompt_data["prompt"],
+        "--out", out_rel,
+        "--size", prompt_data.get("size", "landscape_16_9"),
+        "--frame-id", frame_id,
+    ]
+    if storyboard_ref:
+        cmd.extend(["--storyboard-image", storyboard_ref])
+    if other_refs:
+        cmd.extend(["--ref-images", ",".join(other_refs)])
+    if _frame_prompt_requires_sensitive_context(prompt_data):
+        cmd.append("--sensitive-context")
+
+    result = _stream_subprocess(
+        cmd,
+        cwd=PROJECT_DIR,
+        label=f"frame_{frame_id}",
+        env={**os.environ, "PROJECT_DIR": str(PROJECT_DIR), "SKILLS_DIR": str(SKILLS_DIR)},
+    )
+    stdout_text = result.stdout or ""
+    stderr_text = result.stderr or ""
+
+    if result.returncode != 0 and "failure_type: UPSTREAM_TRANSIENT" in stdout_text:
+        retry_result = _stream_subprocess(
+            cmd,
+            cwd=PROJECT_DIR,
+            label=f"frame_{frame_id}_retry",
+            env={**os.environ, "PROJECT_DIR": str(PROJECT_DIR), "SKILLS_DIR": str(SKILLS_DIR)},
+        )
+        result = retry_result
+        stdout_text = retry_result.stdout or ""
+        stderr_text = retry_result.stderr or ""
+
+    return {
+        "frame_id": frame_id,
+        "out_rel": out_rel,
+        "out_path": out_path,
+        "storyboard_ref": storyboard_ref,
+        "other_refs": other_refs,
+        "returncode": result.returncode,
+        "stdout": stdout_text,
+        "stderr": stderr_text,
+    }
+
+
+_SENSITIVE_FRAME_TOKENS = (
+    "vial",
+    "dropper",
+    "administers",
+    "administering",
+    "drops into",
+    "open wide",
+    "mouth open",
+    "forced to open",
+    "peer pressure",
+    "drugged",
+    "intimate coercion",
+)
+
+
+def _frame_prompt_requires_sensitive_context(prompt_data: dict) -> bool:
+    parts = [
+        str(prompt_data.get("prompt", "")),
+        str(prompt_data.get("negative_prompt", "")),
+        str(prompt_data.get("scene_id", "")),
+    ]
+    haystack = " ".join(parts).lower()
+    return any(token in haystack for token in _SENSITIVE_FRAME_TOKENS)
+
+
 def _generate_final_frames(dry_run: bool) -> tuple[int, int, int]:
-    """Generate final frames sequentially from composed continuity plus available guidance refs."""
+    """Generate final frames with a continuously topped-up worker pool."""
     from graph.prompt_assembler import assemble_image_prompt
     from graph.runtime_state import mark_frame_composed, project_relative_path, save_graph_projection
     from graph.store import GraphStore
@@ -3016,6 +3948,8 @@ def _generate_final_frames(dry_run: bool) -> tuple[int, int, int]:
     failed = 0
     total = len(graph.frame_order)
     graph_dirty = False
+
+    pending_jobs: list[tuple[int, str, str, dict]] = []
 
     for i, frame_id in enumerate(graph.frame_order, 1):
         out_rel = f"frames/composed/{frame_id}_gen.png"
@@ -3036,27 +3970,12 @@ def _generate_final_frames(dry_run: bool) -> tuple[int, int, int]:
             continue
 
         prompt_data = assemble_image_prompt(graph, frame_id, project_dir=PROJECT_DIR)
-        storyboard_ref = prompt_data.get("storyboard_image")
-        other_refs = list(prompt_data.get("reference_images") or [])
-
-        cmd = [
-            sys.executable, str(SKILLS_DIR / "sw_generate_frame"),
-            "--prompt", prompt_data["prompt"],
-            "--out", out_rel,
-            "--size", prompt_data.get("size", "landscape_16_9"),
-            "--frame-id", frame_id,
-        ]
-        if storyboard_ref:
-            cmd.extend(["--storyboard-image", storyboard_ref])
-        if other_refs:
-            cmd.extend(["--ref-images", ",".join(other_refs)])
-
-        refs_used = ([storyboard_ref] if storyboard_ref else []) + other_refs
 
         if dry_run:
             log(
                 f"  [{i}/{total}] [DRY-RUN] Would generate {frame_id} "
-                f"{'with storyboard + ' if storyboard_ref else 'with '}{len(other_refs)} ref(s)",
+                f"{'with storyboard + ' if prompt_data.get('storyboard_image') else 'with '}"
+                f"{len(list(prompt_data.get('reference_images') or []))} ref(s)",
                 YELLOW,
             )
             generated += 1
@@ -3064,38 +3983,83 @@ def _generate_final_frames(dry_run: bool) -> tuple[int, int, int]:
 
         log(
             f"  [{i}/{total}] {frame_id}: generating final frame "
-            f"{'storyboard+' if storyboard_ref else ''}{len(other_refs)} refs"
+            f"{'storyboard+' if prompt_data.get('storyboard_image') else ''}"
+            f"{len(list(prompt_data.get('reference_images') or []))} refs"
         )
-        result = _stream_subprocess(
-            cmd,
-            cwd=PROJECT_DIR,
-            label=f"frame_{frame_id}",
-            env={**os.environ, "PROJECT_DIR": str(PROJECT_DIR), "SKILLS_DIR": str(SKILLS_DIR)},
-        )
-        if result.returncode == 0 and out_path.exists() and out_path.stat().st_size > 1000:
-            normalized_refs = [
-                ref for ref in (
-                    [project_relative_path(PROJECT_DIR, storyboard_ref)] if storyboard_ref else []
-                ) + [
-                    project_relative_path(PROJECT_DIR, ref) for ref in other_refs
-                ]
-                if ref
-            ]
-            mark_frame_composed(
-                graph,
-                frame_id,
-                out_rel,
-                refs_used=normalized_refs,
-                run_id=PIPELINE_RUN_ID,
-                actor="frame_generation",
-                phase=os.environ.get(PHASE_ENV, ""),
-            )
-            generated += 1
-            graph_dirty = True
-            continue
+        pending_jobs.append((i, frame_id, out_rel, prompt_data))
 
-        failed += 1
-        log_err(f"  [{i}/{total}] {frame_id}: final frame generation failed")
+    if not dry_run and pending_jobs:
+        def _handle_worker_completion(job_idx: int, job_frame_id: str, worker_result: dict | None, exc: Exception | None) -> None:
+            nonlocal failed, generated, graph_dirty
+            if exc is not None:
+                failed += 1
+                log_err(f"  [{job_idx}/{total}] {job_frame_id}: final frame generation crashed: {exc}")
+                return
+
+            assert worker_result is not None
+            worker_out_path = worker_result["out_path"]
+            if worker_result["returncode"] == 0 and worker_out_path.exists() and worker_out_path.stat().st_size > 1000:
+                storyboard_ref = worker_result["storyboard_ref"]
+                other_refs = worker_result["other_refs"]
+                normalized_refs = [
+                    ref for ref in (
+                        [project_relative_path(PROJECT_DIR, storyboard_ref)] if storyboard_ref else []
+                    ) + [
+                        project_relative_path(PROJECT_DIR, ref) for ref in other_refs
+                    ]
+                    if ref
+                ]
+                mark_frame_composed(
+                    graph,
+                    job_frame_id,
+                    worker_result["out_rel"],
+                    refs_used=normalized_refs,
+                    run_id=PIPELINE_RUN_ID,
+                    actor="frame_generation",
+                    phase=os.environ.get(PHASE_ENV, ""),
+                )
+                generated += 1
+                graph_dirty = True
+                return
+
+            failed += 1
+            log_err(f"  [{job_idx}/{total}] {job_frame_id}: final frame generation failed")
+
+        with ThreadPoolExecutor(max_workers=min(FRAME_GEN_CONCURRENCY, len(pending_jobs))) as executor:
+            pending_iter = iter(pending_jobs)
+            active_futures: dict = {}
+
+            def _submit_next() -> bool:
+                try:
+                    job_idx, job_frame_id, job_out_rel, job_prompt = next(pending_iter)
+                except StopIteration:
+                    return False
+                future = executor.submit(
+                    _run_final_frame_worker,
+                    job_frame_id,
+                    job_prompt,
+                    job_out_rel,
+                )
+                active_futures[future] = (job_idx, job_frame_id)
+                return True
+
+            for _ in range(min(FRAME_GEN_CONCURRENCY, len(pending_jobs))):
+                _submit_next()
+
+            while active_futures:
+                done, _ = wait(active_futures.keys(), return_when=FIRST_COMPLETED)
+                for future in done:
+                    job_idx, job_frame_id = active_futures.pop(future)
+                    try:
+                        worker_result = future.result()
+                        _handle_worker_completion(job_idx, job_frame_id, worker_result, None)
+                    except Exception as exc:
+                        _handle_worker_completion(job_idx, job_frame_id, None, exc)
+                    _submit_next()
+
+                if graph_dirty:
+                    save_graph_projection(graph, PROJECT_DIR, store=store)
+                    graph_dirty = False
 
     if graph_dirty and not dry_run:
         save_graph_projection(graph, PROJECT_DIR, store=store)
@@ -3104,8 +4068,8 @@ def _generate_final_frames(dry_run: bool) -> tuple[int, int, int]:
 
 
 def phase_4_production(dry_run: bool, phase_timers: dict) -> None:
-    """Phase 4 -- Generate final frames sequentially from structured prompts."""
-    log_header("PHASE 4 -- Sequential Final Frame Generation")
+    """Phase 4 -- Generate final frames with a continuous worker pool."""
+    log_header("PHASE 4 -- Continuous Final Frame Generation")
     timer = Timer()
     phase_timers["phase_4"] = timer
     base = PROJECT_DIR
@@ -3116,12 +4080,13 @@ def phase_4_production(dry_run: bool, phase_timers: dict) -> None:
         _store = GraphStore(str(PROJECT_DIR))
         _graph = _store.load()
 
-        # Storyboard guidance is helpful but not required for final frame generation.
-        # Build it when absent so later prompts can use it, but keep Phase 4 runnable
-        # even when storyboard generation is unavailable or partially missing.
-        if not _graph.storyboard_grids or not _graph.seeded_domains.get("storyboard_grids"):
-            log_warn(f"Phase 4: no storyboard grids in graph — rebuilding")
-            _generate_storyboard_grids_phase3(dry_run=False)
+        if ENABLE_STORYBOARD_GUIDANCE:
+            # Storyboard guidance is helpful but not required for final frame generation.
+            # Build it when absent so later prompts can use it, but keep Phase 4 runnable
+            # even when storyboard generation is unavailable or partially missing.
+            if not _graph.storyboard_grids or not _graph.seeded_domains.get("storyboard_grids"):
+                log_warn(f"Phase 4: no storyboard grids in graph — rebuilding")
+                _generate_storyboard_grids_phase3(dry_run=False)
 
         audit = _audit_phase4_assets()
 
@@ -3142,16 +4107,18 @@ def phase_4_production(dry_run: bool, phase_timers: dict) -> None:
             log_warn(f"  Storyboards: {', '.join(audit['missing_storyboards'])}")
             log("Proceeding without those storyboard guidance refs; prompts will fall back to core refs.")
 
-    log("Generating final frames sequentially from shot-packet prompts...")
+    log(f"Generating final frames with a continuously topped-up pool ({FRAME_GEN_CONCURRENCY} concurrent workers)...")
     generated, skipped, failed = _generate_final_frames(dry_run)
     log_ok(f"Final frame generation done: {generated} generated, {skipped} skipped, {failed} failed")
 
     if not dry_run:
         log("Refreshing prompt audit logs from graph-backed composed frames...")
-        _stream_subprocess(
+        phase4_assemble = _stream_subprocess(
             [sys.executable, str(SKILLS_DIR / "graph_assemble_prompts"),
              "--project-dir", str(PROJECT_DIR)],
             cwd=PROJECT_DIR, label="graph_assemble_prompts_phase4")
+        if phase4_assemble.returncode == 0:
+            _run_project_report(PROJECT_DIR)
         log_ok("Prompt audit logs refreshed with final composed frames")
 
     if not dry_run:
@@ -3169,6 +4136,7 @@ def phase_4_production(dry_run: bool, phase_timers: dict) -> None:
 
 def _generate_video_clip(frame_id: str, image_path: Path, prompt: str,
                          duration: int, out_path: Path,
+                         dialogue_text: str,
                          dry_run: bool) -> subprocess.CompletedProcess | None:
     """Generate a single video clip from a composed frame. No agent needed."""
     if out_path.exists() and out_path.stat().st_size > 5000:
@@ -3183,15 +4151,42 @@ def _generate_video_clip(frame_id: str, image_path: Path, prompt: str,
         "--frame-id", frame_id,
         "--duration", str(duration),
     ]
+    if dialogue_text.strip():
+        cmd.extend(["--dialogue-text", dialogue_text.strip()])
 
     if dry_run:
         log(f"  [DRY-RUN] Would generate clip for {frame_id}", YELLOW)
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
-    return _stream_subprocess(
-        cmd, cwd=PROJECT_DIR, timeout=None, label=f"video_{frame_id}",
-        env={**os.environ, "PROJECT_DIR": str(PROJECT_DIR), "SKILLS_DIR": str(SKILLS_DIR)},
+    retryable_tokens = (
+        "502 bad gateway",
+        "503 service unavailable",
+        "429",
+        "upstream_transient",
+        "temporarily unavailable",
+        "please retry",
+        "timeout",
     )
+    result: subprocess.CompletedProcess | None = None
+    for attempt in range(1, VIDEO_GEN_RETRIES + 1):
+        result = _stream_subprocess(
+            cmd, cwd=PROJECT_DIR, timeout=None, label=f"video_{frame_id}",
+            env={**os.environ, "PROJECT_DIR": str(PROJECT_DIR), "SKILLS_DIR": str(SKILLS_DIR)},
+        )
+        if result.returncode == 0:
+            return result
+        combined = f"{result.stdout}\n{result.stderr}".lower()
+        retryable = any(token in combined for token in retryable_tokens)
+        if attempt >= VIDEO_GEN_RETRIES or not retryable:
+            return result
+        backoff = min(45, 5 * attempt)
+        log_warn(
+            f"  {frame_id}: video generation attempt {attempt}/{VIDEO_GEN_RETRIES} failed "
+            f"with retryable upstream error — retrying in {backoff}s"
+        )
+        time.sleep(backoff)
+
+    return result
 
 
 def phase_5_video(dry_run: bool, phase_timers: dict) -> None:
@@ -3266,7 +4261,6 @@ def phase_5_video(dry_run: bool, phase_timers: dict) -> None:
     import threading
     from queue import Queue
 
-    VIDEO_CONCURRENCY = 10
     gen_queue: Queue = Queue()
     stats = {"refined": 0, "refine_skipped": 0, "refine_failed": 0,
              "generated": 0, "gen_skipped": 0, "gen_failed": 0}
@@ -3320,14 +4314,16 @@ def phase_5_video(dry_run: bool, phase_timers: dict) -> None:
                 encoding="utf-8",
             )
 
-        video_prompt = prompt_state.get("prompt", "")
+        projected_payload = build_video_request_projection(prompt_state)
+        video_prompt = projected_payload.get("motion_prompt", "") or prompt_state.get("prompt", "")
+        dialogue_text = projected_payload.get("dialogue_text", "")
         dur = max(2, min(15, int(prompt_state.get("duration", 5))))
         if prompt_state.get("dialogue_fit_status") == "capped_to_model_max":
             log_warn(f"  [{idx}/{total}] {fid}: dialogue wants "
                      f"{prompt_state.get('recommended_duration', dur)}s, capped to 15s")
 
         out_path = clips_dir / f"{fid}.mp4"
-        gen_queue.put((idx, fid, image_path, video_prompt, dur, out_path))
+        gen_queue.put((idx, fid, image_path, video_prompt, dialogue_text, dur, out_path))
 
     def _gen_from_queue():
         """Pull refined frames from queue and generate clips."""
@@ -3336,9 +4332,9 @@ def phase_5_video(dry_run: bool, phase_timers: dict) -> None:
             if item is None:  # poison pill
                 gen_queue.task_done()
                 break
-            idx, fid, image_path, video_prompt, dur, out_path = item
+            idx, fid, image_path, video_prompt, dialogue_text, dur, out_path = item
             log(f"  [{idx}/{total}] {fid} ({dur}s) → generating clip")
-            result = _generate_video_clip(fid, image_path, video_prompt, dur, out_path, dry_run)
+            result = _generate_video_clip(fid, image_path, video_prompt, dur, out_path, dialogue_text, dry_run)
             done = 0
             generated_ok = 0
             generated_skipped = 0
@@ -3380,14 +4376,13 @@ def phase_5_video(dry_run: bool, phase_timers: dict) -> None:
 
     # Start generator workers — they consume from queue as items arrive
     gen_workers = []
-    for _ in range(VIDEO_CONCURRENCY):
+    for _ in range(VIDEO_GEN_CONCURRENCY):
         t = threading.Thread(target=_gen_from_queue, daemon=True)
         t.start()
         gen_workers.append(t)
 
     # Refine frames with concurrency — each pushes to gen_queue when done
-    REFINE_CONCURRENCY = 5
-    with ThreadPoolExecutor(max_workers=REFINE_CONCURRENCY) as refine_pool:
+    with ThreadPoolExecutor(max_workers=VIDEO_REFINE_CONCURRENCY) as refine_pool:
         refine_futures = [refine_pool.submit(_refine_and_enqueue, item)
                           for item in frame_items]
         for future in as_completed(refine_futures):
@@ -3817,7 +4812,7 @@ def parse_args() -> argparse.Namespace:
         "--model",
         type=str,
         default=None,
-        help="Override default model for all agents (e.g., claude-haiku-4-5-20251001)",
+        help="Override default model for all agents (e.g., grok-4-1-fast-reasoning)",
     )
     parser.add_argument(
         "--parallel-phase4",
@@ -3882,6 +4877,7 @@ def main() -> None:
 
     # Deploy shared conventions as CLAUDE.md into project dir (prompt caching)
     _deploy_shared_conventions(PROJECT_DIR)
+    _deploy_project_reporting_assets(PROJECT_DIR)
 
     # Ensure log directories exist
     PIPELINE_LOGS_DIR.mkdir(parents=True, exist_ok=True)
@@ -3925,6 +4921,26 @@ def main() -> None:
             details={"phase_number": n, "phase_name": PHASE_NAMES.get(n, str(n))},
         )
         try:
+            if only_phase is None and n in (1, 2):
+                reusable, issues = _phase_reuse_status(n, PROJECT_DIR)
+                if reusable:
+                    log_ok(f"Skipping phase {n} — existing outputs are intact and reusable")
+                    emit_event(
+                        PROJECT_DIR,
+                        event="phase_skipped",
+                        run_id=PIPELINE_RUN_ID,
+                        phase=phase_label,
+                        details={
+                            "phase_number": n,
+                            "phase_name": PHASE_NAMES.get(n, str(n)),
+                            "reason": "existing_outputs_reusable",
+                        },
+                    )
+                    return None
+                log_warn(
+                    f"Re-running phase {n} to heal incomplete artifacts: "
+                    + "; ".join(issues[:3])
+                )
             match n:
                 case 0: phase_0_verify(dry_run)
                 case 1: phase_1_narrative(dry_run, phase_timers)

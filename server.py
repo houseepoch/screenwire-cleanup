@@ -35,6 +35,7 @@ from tenacity import (
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
+from llm.xai_client import DEFAULT_REASONING_MODEL
 from telemetry import activate_run_context, current_phase, current_run_id, emit_event
 
 from handlers import (
@@ -66,6 +67,7 @@ if not _project_dir_env:
 PROJECT_DIR = Path(_project_dir_env)
 
 REPLICATE_API_TOKEN = os.getenv("REPLICATE_API_TOKEN", "")
+XAI_API_KEY = os.getenv("XAI_API_KEY", "")
 ENABLE_MANIFEST_QUEUE = os.getenv("SCREENWIRE_ENABLE_MANIFEST_QUEUE", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
@@ -347,7 +349,7 @@ class _ImageTagHandler(FileSystemEventHandler):
 # ---------------------------------------------------------------------------
 
 class AgentProcessManager:
-    """Spawn, message, and kill Claude CLI agent subprocesses."""
+    """Spawn, message, and kill local Grok-backed agent subprocesses."""
 
     def __init__(self) -> None:
         self.registry: dict[str, asyncio.subprocess.Process] = {}
@@ -357,14 +359,20 @@ class AgentProcessManager:
         agent_id: str,
         system_prompt: str,
         cwd: str,
-        model: str = "claude-opus-4-6",
+        model: str = DEFAULT_REASONING_MODEL,
     ) -> asyncio.subprocess.Process:
+        env = dict(os.environ)
+        existing_pythonpath = env.get("PYTHONPATH", "")
+        repo_root = str(APP_DIR)
+        env["PYTHONPATH"] = repo_root if not existing_pythonpath else f"{repo_root}{os.pathsep}{existing_pythonpath}"
         cmd = [
-            "claude",
-            "-p", system_prompt,
+            sys.executable,
+            "-m", "llm.agent_runner",
+            "--system-prompt", system_prompt,
             "--dangerously-skip-permissions",
             "--output-format", "stream-json",
             "--model", model,
+            "--task-hint", agent_id,
         ]
         proc = await asyncio.create_subprocess_exec(
             *cmd,
@@ -372,6 +380,7 @@ class AgentProcessManager:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=cwd,
+            env=env,
         )
         self.registry[agent_id] = proc
         log("AgentProcessManager", f"Spawned agent '{agent_id}' (pid={proc.pid})")
@@ -512,7 +521,7 @@ class SpawnAgentRequest(BaseModel):
     agent_id: str
     system_prompt: str
     cwd: str
-    model: str = "claude-opus-4-6"
+    model: str = DEFAULT_REASONING_MODEL
 
 
 class SendDirectiveRequest(BaseModel):
@@ -672,6 +681,7 @@ async def generate_image(req: GenerateImageRequest):
     handler = get_handler(
         "cast_image",
         replicate_token=REPLICATE_API_TOKEN,
+        xai_key=XAI_API_KEY,
         http_client=http_client,
     )
     try:
@@ -901,6 +911,7 @@ class GenerateFrameRequest(BaseModel):
     frame_id: Optional[str] = ""  # handler: identifies frame for output naming and ledger
     run_id: Optional[str] = None
     phase: str = ""
+    sensitive_context: bool = False
 
 
 @app.post("/internal/generate-frame")
@@ -942,6 +953,7 @@ async def generate_frame(req: GenerateFrameRequest):
     handler = get_handler(
         "frame",
         replicate_token=REPLICATE_API_TOKEN,
+        xai_key=XAI_API_KEY,
         http_client=http_client,
     )
     try:
@@ -956,6 +968,7 @@ async def generate_frame(req: GenerateFrameRequest):
                 output_format=req.output_format if req.output_format in ("jpg", "png") else "png",
                 run_id=req.run_id,
                 phase=req.phase,
+                sensitive_context=req.sensitive_context,
             ))
     finally:
         await handler.close()
@@ -1175,6 +1188,7 @@ async def generate_video(req: GenerateVideoRequest):
     handler = get_handler(
         "video_clip",
         replicate_token=REPLICATE_API_TOKEN,
+        xai_key=XAI_API_KEY,
         http_client=http_client,
     )
     try:
@@ -1204,6 +1218,12 @@ async def generate_video(req: GenerateVideoRequest):
             details={"error": result.error, "model": result.model_used},
         )
         error_detail = result.error_detail or {"error": result.error, "failure_type": "MODEL_ERROR"}
+        if isinstance(error_detail, dict):
+            error_detail = dict(error_detail)
+            if result.error:
+                error_detail.setdefault("error", result.error)
+            if result.model_used:
+                error_detail.setdefault("model", result.model_used)
         raise HTTPException(status_code=502, detail=error_detail)
 
     # Move handler output to the requested location if different
@@ -1243,6 +1263,7 @@ class GenerateLocationGridRequest(BaseModel):
     media_style: str = ""  # Optional style instructions for prompt
     run_id: Optional[str] = None
     phase: str = ""
+    sensitive_context: bool = False
 
 
 @app.post("/internal/generate-location-grid")
@@ -1253,6 +1274,7 @@ async def generate_location_grid(req: GenerateLocationGridRequest):
     handler = get_handler(
         "location_grid",
         replicate_token=REPLICATE_API_TOKEN,
+        xai_key=XAI_API_KEY,
         http_client=http_client,
     )
     try:
@@ -1267,6 +1289,7 @@ async def generate_location_grid(req: GenerateLocationGridRequest):
                 output_format=req.output_format,
                 run_id=req.run_id,
                 phase=req.phase,
+                sensitive_context=req.sensitive_context,
             ))
     finally:
         await handler.close()
@@ -1324,6 +1347,7 @@ class GenerateStoryboardRequest(BaseModel):
     output_format: str = "png"
     run_id: Optional[str] = None
     phase: str = ""
+    sensitive_context: bool = False
 
 
 @app.post("/internal/generate-storyboard")
@@ -1343,6 +1367,7 @@ async def generate_storyboard(req: GenerateStoryboardRequest):
     handler = get_handler(
         "storyboard",
         replicate_token=REPLICATE_API_TOKEN,
+        xai_key=XAI_API_KEY,
         http_client=http_client,
     )
     try:
@@ -1358,6 +1383,7 @@ async def generate_storyboard(req: GenerateStoryboardRequest):
                 output_format=req.output_format,
                 run_id=req.run_id,
                 phase=req.phase,
+                sensitive_context=req.sensitive_context,
             ))
     finally:
         await handler.close()

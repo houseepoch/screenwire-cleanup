@@ -75,6 +75,12 @@ RE_FRAME_MARKER  = re.compile(
 
 RE_KV_PAIR   = re.compile(r'(\w+)=([^|]+)')
 RE_ENV_FIELD = re.compile(r'(\w+)=([^|,]+)')
+RE_DIALOGUE_BLOCK = re.compile(
+    r'^\s*([A-Z][A-Z0-9 .\'&-]{1,}(?:\s+\([A-Z0-9 .\'&-]+\))?)\s*$'
+    r'(?:\n\s*\(([^)]*)\)\s*)?'
+    r'\n((?:\s{4,}.+(?:\n|$))+)',
+    re.MULTILINE,
+)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -97,10 +103,117 @@ def _make_provenance(source_text: str) -> Provenance:
 
 def _slugify(name: str) -> str:
     """Convert a display name to a snake_case slug."""
-    slug = name.lower().strip()
+    slug = re.sub(r'(?<=[a-z0-9])(?=[A-Z])', ' ', name).lower().strip()
     slug = re.sub(r'[^a-z0-9\s_]', '', slug)
     slug = re.sub(r'\s+', '_', slug)
     return slug.strip('_')
+
+
+def _compact_token(name: str) -> str:
+    """Collapse a name to alphanumerics for typo-tolerant matching."""
+    return re.sub(r'[^a-z0-9]+', '', name.lower())
+
+
+_LOCATION_NAME_TOKENS: frozenset[str] = frozenset({
+    "alabama", "alaska", "arizona", "arkansas", "california", "colorado", "connecticut",
+    "delaware", "florida", "georgia", "hawaii", "idaho", "illinois", "indiana", "iowa",
+    "kansas", "kentucky", "louisiana", "maine", "maryland", "massachusetts", "michigan",
+    "minnesota", "mississippi", "missouri", "montana", "nebraska", "nevada", "hampshire",
+    "jersey", "mexico", "new", "york", "carolina", "dakota", "ohio", "oklahoma", "oregon",
+    "pennsylvania", "rhode", "island", "tennessee", "texas", "utah", "vermont", "virginia",
+    "washington", "wisconsin", "wyoming", "sedona", "topanga", "canyon", "los", "angeles",
+})
+
+
+def _edit_distance_le_one(a: str, b: str) -> bool:
+    if a == b:
+        return True
+    if abs(len(a) - len(b)) > 1:
+        return False
+    if len(a) > len(b):
+        a, b = b, a
+    i = j = edits = 0
+    while i < len(a) and j < len(b):
+        if a[i] == b[j]:
+            i += 1
+            j += 1
+            continue
+        edits += 1
+        if edits > 1:
+            return False
+        if len(a) == len(b):
+            i += 1
+            j += 1
+        else:
+            j += 1
+    if j < len(b) or i < len(a):
+        edits += 1
+    return edits <= 1
+
+
+def _title_words(name: str) -> str:
+    cleaned = re.sub(r'[^A-Za-z0-9\s\'-]+', ' ', name).strip()
+    cleaned = re.sub(r'\s+', ' ', cleaned)
+    if not cleaned:
+        return ""
+    return " ".join(part.capitalize() if not part.isupper() else part for part in cleaned.split())
+
+
+def _name_quality_score(name: str) -> int:
+    tokens = [token for token in re.split(r'\s+', name.strip()) if token]
+    if not tokens:
+        return -100
+    score = 0
+    if all(token.isalpha() for token in tokens):
+        score += 4
+    if not any(char.isdigit() for char in name):
+        score += 2
+    if len(tokens) <= 2:
+        score += 2
+    if len(tokens) >= 2 and tokens[-1].lower() in _LOCATION_NAME_TOKENS:
+        score -= 4
+    return score
+
+
+def _clean_cast_display_name(raw_name: str, cast_id: str, warnings: list[str]) -> str:
+    source_name = _title_words(raw_name)
+    fallback_name = _display_name_from_cast_id(cast_id)
+    if not source_name:
+        warnings.append(f"WARN: cast {cast_id} has empty name — using {fallback_name!r}")
+        return fallback_name
+
+    source_compact = _compact_token(source_name)
+    fallback_compact = _compact_token(fallback_name)
+    if (
+        source_compact
+        and fallback_compact
+        and source_compact != fallback_compact
+        and _edit_distance_le_one(source_compact, fallback_compact)
+        and len(fallback_compact) >= len(source_compact)
+    ):
+        warnings.append(
+            f"WARN: cast {cast_id} source name {source_name!r} corrected to {fallback_name!r}"
+        )
+        return fallback_name
+
+    source_tokens = source_name.split()
+    if (
+        len(source_tokens) >= 2
+        and source_tokens[-1].lower() in _LOCATION_NAME_TOKENS
+        and _compact_token(source_tokens[0]) == _compact_token(fallback_name.split()[0])
+    ):
+        warnings.append(
+            f"WARN: cast {cast_id} name {source_name!r} looks location-derived — using {fallback_name!r}"
+        )
+        return fallback_name
+
+    if _name_quality_score(fallback_name) > _name_quality_score(source_name):
+        if _compact_token(fallback_name) != _compact_token(source_name):
+            warnings.append(
+                f"WARN: cast {cast_id} source name {source_name!r} normalized to {fallback_name!r}"
+            )
+        return fallback_name
+    return source_name
 
 
 def _parse_tag_fields(tag_line: str) -> dict[str, str]:
@@ -143,18 +256,184 @@ def _resolve_cast_id(name: str, name_map: dict[str, str], warnings: list[str]) -
     Generates a fallback and warns if unresolvable.
     """
     normalized = name.lower().strip()
-    if normalized in name_map:
-        return name_map[normalized]
     slug = _slugify(name)
-    if slug in name_map:
-        return name_map[slug]
-    # Partial match
-    for key, val in name_map.items():
-        if normalized in key or key in normalized:
+    compact = _compact_token(name)
+    cast_name_map = {
+        key: val
+        for key, val in name_map.items()
+        if isinstance(val, str) and val.startswith("cast_")
+    }
+
+    for token in (normalized, slug, compact):
+        if token and token in cast_name_map:
+            return cast_name_map[token]
+
+    for key, val in cast_name_map.items():
+        if _compact_token(key) == compact:
             return val
-    generated = f"cast_{slug}"
+
+    if compact:
+        for key, val in cast_name_map.items():
+            key_compact = _compact_token(key)
+            if not key_compact:
+                continue
+            if len(compact) >= 3 and (
+                key_compact.startswith(compact) or compact.startswith(key_compact)
+            ):
+                return val
+            if min(len(compact), len(key_compact)) >= 5 and (
+                compact in key_compact or key_compact in compact
+            ):
+                return val
+
+    if normalized in name_map and str(name_map[normalized]).startswith("cast_"):
+        return name_map[normalized]
+
+    generated_slug = slug or compact or "unknown"
+    generated = f"cast_{generated_slug}"
     warnings.append(f"WARN: name '{name}' not in name_map — generated id '{generated}'")
     return generated
+
+
+def _resolve_attention_target(
+    target: str,
+    name_map: dict[str, str],
+    warnings: list[str],
+) -> str:
+    """Resolve a looking_at target to a stable graph token when possible."""
+    normalized = target.strip()
+    if not normalized:
+        return normalized
+    lowered = normalized.lower()
+    if lowered in {"camera", "distance"}:
+        return lowered
+    if normalized.startswith(("cast_", "prop_", "loc_")):
+        return normalized
+    if lowered in name_map and str(name_map[lowered]).startswith(("cast_", "prop_", "loc_")):
+        return str(name_map[lowered])
+
+    slug = _slugify(normalized)
+    if slug in name_map and str(name_map[slug]).startswith(("cast_", "prop_", "loc_")):
+        return str(name_map[slug])
+
+    compact = _compact_token(normalized)
+    if compact in name_map and str(name_map[compact]).startswith(("cast_", "prop_", "loc_")):
+        return str(name_map[compact])
+
+    candidate = _resolve_cast_id(normalized, name_map, [])
+    if candidate.startswith("cast_") and candidate in set(name_map.values()):
+        return candidate
+    return normalized
+
+
+def _parse_named_assignments(
+    raw: str,
+    name_map: dict[str, str],
+    warnings: list[str],
+    *,
+    value_resolver=None,
+) -> dict[str, str]:
+    """Parse `Display Name=value` CSV assignments into cast_id keyed maps."""
+    parsed: dict[str, str] = {}
+    if not raw:
+        return parsed
+    for pair in raw.split(','):
+        pair = pair.strip()
+        if not pair or '=' not in pair:
+            continue
+        raw_name, _, raw_value = pair.partition('=')
+        cast_id = _resolve_cast_id(raw_name.strip(), name_map, warnings)
+        value = raw_value.strip()
+        if value_resolver:
+            value = value_resolver(value, name_map, warnings)
+        parsed[cast_id] = value
+    return parsed
+
+
+def _display_name_from_cast_id(cast_id: str) -> str:
+    raw = cast_id.removeprefix("cast_")
+    if not raw:
+        return cast_id
+    return " ".join(part.capitalize() for part in raw.split("_"))
+
+
+def _normalize_dialogue_speaker(raw_speaker: str) -> str:
+    speaker = re.sub(r'\s*\([^)]*\)\s*$', '', raw_speaker.strip())
+    speaker = re.sub(r'\s+', ' ', speaker)
+    if not speaker:
+        return speaker
+    return " ".join(part.capitalize() for part in speaker.lower().split())
+
+
+def _extract_inline_dialogue_blocks(
+    source_text: str,
+    name_map: dict[str, str],
+    warnings: list[str],
+) -> list[dict[str, str]]:
+    """Extract screenplay-style dialogue blocks embedded inside a frame's prose.
+
+    Expected shape inside a `dlg` frame:
+        ACTION LINE(S)
+                        SPEAKER
+              (optional parenthetical)
+            Spoken line continues here.
+
+    Returns zero or more dicts with speaker/cast_id/raw_line/perf.
+    """
+    blocks: list[dict[str, str]] = []
+    for match in RE_DIALOGUE_BLOCK.finditer(source_text):
+        raw_speaker = match.group(1).strip()
+        perf = (match.group(2) or "").strip()
+        spoken_block = match.group(3)
+        raw_line = " ".join(
+            line.strip()
+            for line in spoken_block.splitlines()
+            if line.strip()
+        ).strip()
+        if not raw_line:
+            continue
+
+        speaker = _normalize_dialogue_speaker(raw_speaker)
+        cast_id = _resolve_cast_id(speaker, name_map, warnings)
+        blocks.append({
+            "speaker": speaker,
+            "cast_id": cast_id,
+            "raw_line": raw_line,
+            "perf": perf,
+        })
+    return blocks
+
+
+def _infer_referenced_cast_ids(
+    source_text: str,
+    cast_name_pairs: list[tuple[str, str]],
+) -> set[str]:
+    """Detect explicitly non-visible cast mentioned in phone/voice contexts."""
+    lower = source_text.lower()
+    remote_audio_tokens = ("phone", "call", "speakerphone", "voicemail", "on speaker")
+    if not lower or not any(token in lower for token in remote_audio_tokens):
+        return set()
+
+    referenced: set[str] = set()
+    for raw_name, cast_id in cast_name_pairs:
+        cleaned = re.sub(r'\s+', ' ', raw_name.strip()).lower()
+        if not cleaned:
+            continue
+        candidates = {cleaned}
+        compact = _compact_token(raw_name)
+        if compact:
+            candidates.add(compact)
+        first = cleaned.split()[0]
+        candidates.add(first)
+        for token in candidates:
+            if (
+                f"call from {token}" in lower
+                or f"from {token}" in lower and "call" in lower
+                or f"{token} on speaker" in lower
+            ):
+                referenced.add(cast_id)
+                break
+    return referenced
 
 
 def _resolve_narrative_role(role_str: str) -> NarrativeRole:
@@ -189,13 +468,15 @@ def _resolve_time_of_day(tod_str: str) -> Optional[TimeOfDay]:
 def extract_cast_tags(skeleton_text: str, warnings: list[str]) -> list[CastNode]:
     """Extract CastNode list from ///CAST tags in the skeleton."""
     nodes: list[CastNode] = []
+    seen_name_tokens: dict[str, str] = {}
 
     for m in RE_CAST_TAG.finditer(skeleton_text):
         raw = m.group(1)
         fields = _parse_tag_fields(raw)
 
         cast_id = fields.get('id', '').strip()
-        name    = fields.get('name', '').strip()
+        source_name = fields.get('name', '').strip()
+        name = _clean_cast_display_name(source_name, cast_id, warnings)
         if not cast_id or not name:
             warnings.append(f"WARN: CAST tag missing id or name: {raw[:100]}")
             continue
@@ -240,6 +521,8 @@ def extract_cast_tags(skeleton_text: str, warnings: list[str]) -> list[CastNode]
         node = CastNode(
             cast_id=cast_id,
             name=name,
+            display_name=name,
+            source_name=source_name or name,
             identity=identity,
             personality=", ".join(_parse_csv(fields.get('personality', ''))),
             role=_resolve_narrative_role(fields.get('role', 'supporting')),
@@ -248,6 +531,16 @@ def extract_cast_tags(skeleton_text: str, warnings: list[str]) -> list[CastNode]
             provenance=_make_provenance(raw),
         )
         nodes.append(node)
+
+        compact_name = _compact_token(name)
+        for seen_compact, seen_cast_id in seen_name_tokens.items():
+            if compact_name == seen_compact or _edit_distance_le_one(compact_name, seen_compact):
+                warnings.append(
+                    f"WARN: cast names for {cast_id} ({name}) and {seen_cast_id} look like near-duplicates"
+                )
+                break
+        if compact_name:
+            seen_name_tokens.setdefault(compact_name, cast_id)
 
     return nodes
 
@@ -347,12 +640,15 @@ def build_name_to_id_map(
     for n in cast_nodes:
         name_map[n.name.lower().strip()] = n.cast_id
         name_map[_slugify(n.name)] = n.cast_id
+        name_map[_compact_token(n.name)] = n.cast_id
     for n in location_nodes:
         name_map[n.name.lower().strip()] = n.location_id
         name_map[_slugify(n.name)] = n.location_id
+        name_map[_compact_token(n.name)] = n.location_id
     for n in prop_nodes:
         name_map[n.name.lower().strip()] = n.prop_id
         name_map[_slugify(n.name)] = n.prop_id
+        name_map[_compact_token(n.name)] = n.prop_id
     return name_map
 
 
@@ -657,19 +953,51 @@ def extract_frame_markers(
 
             # Resolve cast members in this frame
             cast_names_raw = marker_fields.get('cast', '')
-            cast_names     = _parse_csv(cast_names_raw) if cast_names_raw else []
-            cast_ids       = [_resolve_cast_id(n, name_map, warnings) for n in cast_names]
+            cast_names = _parse_csv(cast_names_raw) if cast_names_raw else []
+            cast_name_pairs: list[tuple[str, str]] = []
+            for raw_name in cast_names:
+                compact_name = _compact_token(raw_name)
+                if compact_name in {"all", "everyone", "group"}:
+                    if current_scene_id in scenes:
+                        for scene_cast_id in scenes[current_scene_id].cast_present:
+                            cast_name_pairs.append((_display_name_from_cast_id(scene_cast_id), scene_cast_id))
+                    else:
+                        warnings.append(
+                            f"WARN: frame marker uses cast:{raw_name} outside a known scene context"
+                        )
+                    continue
+                cast_name_pairs.append((raw_name, _resolve_cast_id(raw_name, name_map, warnings)))
+
+            deduped_cast_pairs: list[tuple[str, str]] = []
+            seen_cast_ids: set[str] = set()
+            for raw_name, cast_id in cast_name_pairs:
+                if cast_id in seen_cast_ids:
+                    continue
+                deduped_cast_pairs.append((raw_name, cast_id))
+                seen_cast_ids.add(cast_id)
+            cast_name_pairs = deduped_cast_pairs
+            cast_ids = [cast_id for _, cast_id in cast_name_pairs]
 
             # Per-frame cast_states overrides
-            frame_state_overrides: dict[str, str] = {}
-            cs_raw = marker_fields.get('cast_states', '')
-            if cs_raw:
-                for pair in cs_raw.split(','):
-                    pair = pair.strip()
-                    if '=' in pair:
-                        c_name, _, s_tag = pair.partition('=')
-                        c_id = _resolve_cast_id(c_name.strip(), name_map, warnings)
-                        frame_state_overrides[c_id] = s_tag.strip()
+            frame_state_overrides = _parse_named_assignments(
+                marker_fields.get('cast_states', ''),
+                name_map,
+                warnings,
+            )
+            frame_looking_at = _parse_named_assignments(
+                marker_fields.get('looking_at', ''),
+                name_map,
+                warnings,
+                value_resolver=_resolve_attention_target,
+            )
+            frame_facing = _parse_named_assignments(
+                marker_fields.get('facing_towards', marker_fields.get('facing_direction', '')),
+                name_map,
+                warnings,
+            )
+
+            referenced_cast_ids = _infer_referenced_cast_ids(source_text, cast_name_pairs)
+            visible_cast_ids = [cast_id for cast_id in cast_ids if cast_id not in referenced_cast_ids]
 
             # Build base CastFrameState per cast member
             frame_cast_states: list[CastFrameState] = []
@@ -680,16 +1008,19 @@ def extract_frame_markers(
                     or scene_cast_defaults.get(c_id)
                     or 'base'
                 )
-                # Frame role: SUBJECT when sole cast, BACKGROUND otherwise
-                frame_role = (
-                    CastFrameRole.SUBJECT if len(cast_ids) == 1
-                    else CastFrameRole.BACKGROUND
-                )
+                if c_id in referenced_cast_ids:
+                    frame_role = CastFrameRole.REFERENCED
+                elif len(visible_cast_ids) == 1:
+                    frame_role = CastFrameRole.SUBJECT
+                else:
+                    frame_role = CastFrameRole.BACKGROUND
                 cs = CastFrameState(
                     cast_id=c_id,
                     frame_id=frame_id,
                     frame_role=frame_role,
                     active_state_tag=active_tag,
+                    looking_at=frame_looking_at.get(c_id),
+                    facing_direction=frame_facing.get(c_id),
                     provenance=_make_provenance(prov_text),
                 )
                 frame_cast_states.append(cs)
@@ -784,6 +1115,7 @@ def extract_dialogue(
       5. Parse ENV tag fields.
     """
     creative_lines = creative_text.splitlines()
+    dialogue_tag_matches = list(RE_DIALOGUE_TAG.finditer(skeleton_text))
 
     # Sequential dlg frame iterator — DLG tags map to dlg frames in order
     dlg_frames = [f for f in frames if f.is_dialogue]
@@ -797,113 +1129,207 @@ def extract_dialogue(
     dialogue_nodes: list[DialogueNode] = []
     dlg_counter = 0
 
-    for m in RE_DIALOGUE_TAG.finditer(skeleton_text):
-        raw    = m.group(1)
-        fields = _parse_tag_fields(raw)
-
-        speaker     = fields.get('speaker', '').strip()
-        cast_id_raw = fields.get('cast_id', '').strip()
-        src_lines   = fields.get('src_lines', '').strip()
-        src_start   = fields.get('src_start', '').strip().strip('"').strip("'")
-        src_end     = fields.get('src_end',   '').strip().strip('"').strip("'")
-        perf        = fields.get('perf', '').strip()
-        env_raw     = fields.get('env', '').strip()
-
-        cast_id = cast_id_raw or _resolve_cast_id(speaker, name_map, warnings)
-
-        # ── Extract raw_line from creative_output at src_lines ──────────────
-        raw_line   = ''
-        start_line = 0
-        end_line   = 0
-
-        if src_lines and '-' in src_lines:
-            try:
-                sl_parts   = src_lines.split('-')
-                start_line = int(sl_parts[0].strip())
-                end_line   = int(sl_parts[1].strip())
-                raw_line   = _extract_by_src_lines(creative_lines, start_line, end_line)
-
-                # Fuzzy anchor validation (warn but don't halt)
-                if (src_start or src_end) and not _validate_fuzzy_anchors(
-                    src_start, src_end, start_line, end_line, creative_lines
-                ):
-                    warnings.append(
-                        f"WARN: DLG anchor mismatch for speaker='{speaker}' "
-                        f"src_lines={src_lines} src_start='{src_start[:30]}'"
-                    )
-            except (ValueError, IndexError) as exc:
-                warnings.append(f"WARN: cannot parse src_lines '{src_lines}' for '{speaker}': {exc}")
-
-        if not raw_line.strip():
-            warnings.append(
-                f"WARN: DLG tag for '{speaker}' has no resolved raw_line (src_lines={src_lines})"
+    if not dialogue_tag_matches:
+        for assoc_frame in dlg_frames:
+            inline_blocks = _extract_inline_dialogue_blocks(
+                assoc_frame.source_text or "",
+                name_map,
+                warnings,
             )
-            raw_line = f"[dialogue: {speaker}]"
+            if not inline_blocks:
+                warnings.append(
+                    f"WARN: dlg frame {assoc_frame.frame_id} has no inline screenplay dialogue block; "
+                    "clearing dlg flag"
+                )
+                assoc_frame.is_dialogue = False
+                continue
 
-        # ── ENV parsing ─────────────────────────────────────────────────────
-        env_location: Optional[str] = None
-        env_distance: Optional[str] = None
-        env_intensity: Optional[str] = None
-        env_medium: Optional[str]   = None
-        env_atmosphere: list[str]   = []
+            for block in inline_blocks:
+                dlg_counter += 1
+                dialogue_id = f"dlg_{dlg_counter:03d}"
+                node = DialogueNode(
+                    dialogue_id=dialogue_id,
+                    scene_id=assoc_frame.scene_id,
+                    order=dlg_counter - 1,
+                    speaker=block["speaker"],
+                    cast_id=block["cast_id"],
+                    start_frame=assoc_frame.frame_id,
+                    end_frame=assoc_frame.frame_id,
+                    primary_visual_frame=assoc_frame.frame_id,
+                    raw_line=block["raw_line"],
+                    line=block["raw_line"],
+                    performance_direction=block["perf"],
+                    provenance=_make_provenance(assoc_frame.source_text or "(inline dialogue)"),
+                )
+                dialogue_nodes.append(node)
+                if dialogue_id not in assoc_frame.dialogue_ids:
+                    assoc_frame.dialogue_ids.append(dialogue_id)
+    else:
+        for m in dialogue_tag_matches:
+            raw    = m.group(1)
+            fields = _parse_tag_fields(raw)
 
-        if env_raw:
-            env_parts = _parse_csv(env_raw)
-            if len(env_parts) > 0: env_location  = env_parts[0]
-            if len(env_parts) > 1: env_distance  = env_parts[1]
-            if len(env_parts) > 2: env_intensity  = env_parts[2]
-            if len(env_parts) > 3: env_medium     = env_parts[3]
-            if len(env_parts) > 4: env_atmosphere = env_parts[4:]
+            speaker     = fields.get('speaker', '').strip()
+            cast_id_raw = fields.get('cast_id', '').strip()
+            src_lines   = fields.get('src_lines', '').strip()
+            src_start   = fields.get('src_start', '').strip().strip('"').strip("'")
+            src_end     = fields.get('src_end',   '').strip().strip('"').strip("'")
+            perf        = fields.get('perf', '').strip()
+            env_raw     = fields.get('env', '').strip()
 
-        # ── Temporal span assignment ─────────────────────────────────────────
-        if current_dlg_frame is not None:
-            assoc_frame = current_dlg_frame
-        elif last_used_dlg_frame is not None:
-            assoc_frame = last_used_dlg_frame
-        elif frames:
-            assoc_frame = frames[-1]
-        else:
-            assoc_frame = None
+            cast_id = cast_id_raw or _resolve_cast_id(speaker, name_map, warnings)
 
-        assoc_frame_id = assoc_frame.frame_id if assoc_frame else 'f_001'
-        assoc_scene_id = frame_to_scene.get(assoc_frame_id, '')
+            # ── Extract raw_line from creative_output at src_lines ──────────────
+            raw_line   = ''
+            start_line = 0
+            end_line   = 0
 
-        dlg_counter += 1
-        dialogue_id = f"dlg_{dlg_counter:03d}"
+            if src_lines and '-' in src_lines:
+                try:
+                    sl_parts   = src_lines.split('-')
+                    start_line = int(sl_parts[0].strip())
+                    end_line   = int(sl_parts[1].strip())
+                    raw_line   = _extract_by_src_lines(creative_lines, start_line, end_line)
 
-        node = DialogueNode(
-            dialogue_id=dialogue_id,
-            scene_id=assoc_scene_id,
-            order=dlg_counter - 1,
-            speaker=speaker,
-            cast_id=cast_id,
-            start_frame=assoc_frame_id,
-            end_frame=assoc_frame_id,
-            primary_visual_frame=assoc_frame_id,
-            raw_line=raw_line.strip(),
-            line=raw_line.strip(),
-            performance_direction=perf,
-            env_tags=env_raw,
-            env_location=env_location,
-            env_distance=env_distance,
-            env_intensity=env_intensity,
-            env_medium=env_medium,
-            env_atmosphere=env_atmosphere,
-            provenance=_make_provenance(raw),
+                    # Fuzzy anchor validation (warn but don't halt)
+                    if (src_start or src_end) and not _validate_fuzzy_anchors(
+                        src_start, src_end, start_line, end_line, creative_lines
+                    ):
+                        warnings.append(
+                            f"WARN: DLG anchor mismatch for speaker='{speaker}' "
+                            f"src_lines={src_lines} src_start='{src_start[:30]}'"
+                        )
+                except (ValueError, IndexError) as exc:
+                    warnings.append(f"WARN: cannot parse src_lines '{src_lines}' for '{speaker}': {exc}")
+
+            if not raw_line.strip():
+                warnings.append(
+                    f"WARN: DLG tag for '{speaker}' has no resolved raw_line (src_lines={src_lines})"
+                )
+                raw_line = f"[dialogue: {speaker}]"
+
+            # ── ENV parsing ─────────────────────────────────────────────────────
+            env_location: Optional[str] = None
+            env_distance: Optional[str] = None
+            env_intensity: Optional[str] = None
+            env_medium: Optional[str]   = None
+            env_atmosphere: list[str]   = []
+
+            if env_raw:
+                env_parts = _parse_csv(env_raw)
+                if len(env_parts) > 0: env_location  = env_parts[0]
+                if len(env_parts) > 1: env_distance  = env_parts[1]
+                if len(env_parts) > 2: env_intensity  = env_parts[2]
+                if len(env_parts) > 3: env_medium     = env_parts[3]
+                if len(env_parts) > 4: env_atmosphere = env_parts[4:]
+
+            # ── Temporal span assignment ─────────────────────────────────────────
+            if current_dlg_frame is not None:
+                assoc_frame = current_dlg_frame
+            elif last_used_dlg_frame is not None:
+                assoc_frame = last_used_dlg_frame
+            elif frames:
+                assoc_frame = frames[-1]
+            else:
+                assoc_frame = None
+
+            assoc_frame_id = assoc_frame.frame_id if assoc_frame else 'f_001'
+            assoc_scene_id = frame_to_scene.get(assoc_frame_id, '')
+
+            dlg_counter += 1
+            dialogue_id = f"dlg_{dlg_counter:03d}"
+
+            node = DialogueNode(
+                dialogue_id=dialogue_id,
+                scene_id=assoc_scene_id,
+                order=dlg_counter - 1,
+                speaker=speaker,
+                cast_id=cast_id,
+                start_frame=assoc_frame_id,
+                end_frame=assoc_frame_id,
+                primary_visual_frame=assoc_frame_id,
+                raw_line=raw_line.strip(),
+                line=raw_line.strip(),
+                performance_direction=perf,
+                env_tags=env_raw,
+                env_location=env_location,
+                env_distance=env_distance,
+                env_intensity=env_intensity,
+                env_medium=env_medium,
+                env_atmosphere=env_atmosphere,
+                provenance=_make_provenance(raw),
+            )
+            dialogue_nodes.append(node)
+
+            # Register dialogue_id on the frame and advance to next dlg frame
+            if assoc_frame is not None:
+                if dialogue_id not in assoc_frame.dialogue_ids:
+                    assoc_frame.dialogue_ids.append(dialogue_id)
+                last_used_dlg_frame = assoc_frame
+                # Advance only once per DLG tag so multiple tags can share a frame
+                # if there's only one dlg frame left
+                next_frame = next(dlg_iter, None)
+                if next_frame is not None:
+                    current_dlg_frame = next_frame
+                # else: current_dlg_frame stays as-is (remaining tags pile onto last frame)
+
+    # Recover inline dialogue blocks that were left untagged even when the
+    # creative output contains some ///DLG tags elsewhere. This keeps spoken
+    # lines from disappearing simply because a frame was not marked dlg.
+    for frame in frames:
+        inline_blocks = _extract_inline_dialogue_blocks(
+            frame.source_text or "",
+            name_map,
+            warnings,
         )
-        dialogue_nodes.append(node)
+        if not inline_blocks:
+            continue
 
-        # Register dialogue_id on the frame and advance to next dlg frame
-        if assoc_frame is not None:
-            if dialogue_id not in assoc_frame.dialogue_ids:
-                assoc_frame.dialogue_ids.append(dialogue_id)
-            last_used_dlg_frame = assoc_frame
-            # Advance only once per DLG tag so multiple tags can share a frame
-            # if there's only one dlg frame left
-            next_frame = next(dlg_iter, None)
-            if next_frame is not None:
-                current_dlg_frame = next_frame
-            # else: current_dlg_frame stays as-is (remaining tags pile onto last frame)
+        existing_signatures = {
+            (
+                (node.cast_id or "").strip().lower(),
+                re.sub(r"\s+", " ", (node.raw_line or node.line or "").strip()).lower(),
+            )
+            for node in dialogue_nodes
+            if node.primary_visual_frame == frame.frame_id
+        }
+        recovered = 0
+        for block in inline_blocks:
+            signature = (
+                (block["cast_id"] or "").strip().lower(),
+                re.sub(r"\s+", " ", block["raw_line"].strip()).lower(),
+            )
+            if signature in existing_signatures:
+                continue
+
+            dlg_counter += 1
+            dialogue_id = f"dlg_{dlg_counter:03d}"
+            node = DialogueNode(
+                dialogue_id=dialogue_id,
+                scene_id=frame.scene_id,
+                order=dlg_counter - 1,
+                speaker=block["speaker"],
+                cast_id=block["cast_id"],
+                start_frame=frame.frame_id,
+                end_frame=frame.frame_id,
+                primary_visual_frame=frame.frame_id,
+                raw_line=block["raw_line"],
+                line=block["raw_line"],
+                performance_direction=block["perf"],
+                provenance=_make_provenance(frame.source_text or "(inline dialogue recovery)"),
+            )
+            dialogue_nodes.append(node)
+            if dialogue_id not in frame.dialogue_ids:
+                frame.dialogue_ids.append(dialogue_id)
+            frame.is_dialogue = True
+            existing_signatures.add(signature)
+            recovered += 1
+
+        if recovered:
+            warnings.append(
+                f"WARN: recovered {recovered} inline dialogue block(s) on frame {frame.frame_id} "
+                "that were not linked by ///DLG tags"
+            )
 
     return dialogue_nodes
 
@@ -949,6 +1375,97 @@ def parse_creative_output(
         'cast_states':  cast_states,
         'dialogue':     dialogue_nodes,
     }
+
+
+def _reconcile_cast_entities_and_scene_presence(
+    cast_nodes: list[CastNode],
+    scenes: dict[str, SceneNode],
+    frames: list[FrameNode],
+    cast_states: list[CastFrameState],
+    dialogue_nodes: list[DialogueNode],
+    warnings: list[str],
+) -> None:
+    """Normalize parser output against frame-level evidence from creative prose."""
+    known_cast_ids = {node.cast_id for node in cast_nodes}
+    discovered_cast_ids = {
+        cast_id
+        for cast_id in (
+            [state.cast_id for state in cast_states]
+            + [node.cast_id for node in dialogue_nodes]
+        )
+        if cast_id.startswith("cast_")
+    }
+
+    for cast_id in sorted(discovered_cast_ids - known_cast_ids):
+        display_name = _display_name_from_cast_id(cast_id)
+        cast_nodes.append(
+            CastNode(
+                cast_id=cast_id,
+                name=display_name,
+                display_name=display_name,
+                source_name=display_name,
+                role=NarrativeRole.SUPPORTING,
+                provenance=_make_provenance(
+                    f"Auto-created from creative_output usage for {cast_id}"
+                ),
+            )
+        )
+        known_cast_ids.add(cast_id)
+        warnings.append(f"WARN: auto-created cast node '{cast_id}' from creative output")
+
+    states_by_frame: dict[str, list[CastFrameState]] = {}
+    for state in cast_states:
+        states_by_frame.setdefault(state.frame_id, []).append(state)
+
+    frame_lookup = {frame.frame_id: frame for frame in frames}
+    dialogue_by_id = {node.dialogue_id: node for node in dialogue_nodes}
+    cast_name_by_id = {node.cast_id: node.name for node in cast_nodes}
+
+    for frame in frames:
+        if frame.dialogue_ids:
+            speaker_ids = {
+                dialogue_by_id[did].cast_id
+                for did in frame.dialogue_ids
+                if did in dialogue_by_id and dialogue_by_id[did].primary_visual_frame == frame.frame_id
+            }
+            if speaker_ids:
+                context_parts = [frame.source_text or ""]
+                prev_frame = frame_lookup.get(frame.previous_frame_id or "")
+                if prev_frame and prev_frame.scene_id == frame.scene_id:
+                    context_parts.append(prev_frame.source_text or "")
+                call_context = " ".join(context_parts).lower()
+                if any(token in call_context for token in ("phone", "call", "speakerphone", "voicemail", "on speaker")):
+                    for state in states_by_frame.get(frame.frame_id, []):
+                        if state.cast_id in speaker_ids or state.frame_role == CastFrameRole.REFERENCED:
+                            continue
+                        raw_name = cast_name_by_id.get(state.cast_id, _display_name_from_cast_id(state.cast_id))
+                        candidates = {
+                            raw_name.lower(),
+                            _compact_token(raw_name),
+                            raw_name.lower().split()[0],
+                        }
+                        if any(
+                            f"call from {token}" in call_context
+                            or f"from {token}" in call_context and "call" in call_context
+                            or f"{token} on speaker" in call_context
+                            for token in candidates
+                            if token
+                        ):
+                            state.frame_role = CastFrameRole.REFERENCED
+
+        scene = scenes.get(frame.scene_id)
+        if not scene:
+            continue
+        for state in states_by_frame.get(frame.frame_id, []):
+            if state.frame_role == CastFrameRole.REFERENCED:
+                continue
+            if not state.cast_id.startswith("cast_"):
+                continue
+            if state.cast_id not in scene.cast_present:
+                scene.cast_present.append(state.cast_id)
+
+    for scene in scenes.values():
+        scene.cast_present = list(dict.fromkeys(scene.cast_present))
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1199,6 +1716,43 @@ def parse_cc_output(
     frames:         list[FrameNode]          = co_data['frames']
     cast_states:    list[CastFrameState]     = co_data['cast_states']
     dialogue_nodes: list[DialogueNode]       = co_data['dialogue']
+
+    _reconcile_cast_entities_and_scene_presence(
+        cast_nodes=cast_nodes,
+        scenes=scenes,
+        frames=frames,
+        cast_states=cast_states,
+        dialogue_nodes=dialogue_nodes,
+        warnings=warnings,
+    )
+
+    known_cast_ids = {node.cast_id for node in cast_nodes}
+    cast_states = [state for state in cast_states if state.cast_id in known_cast_ids]
+    scene_cast_usage: dict[str, set[str]] = {
+        scene_id: {cast_id for cast_id in scene.cast_present if cast_id in known_cast_ids}
+        for scene_id, scene in scenes.items()
+    }
+    frame_scene_ids = {frame.frame_id: frame.scene_id for frame in frames}
+    for state in cast_states:
+        scene_id = frame_scene_ids.get(state.frame_id)
+        if not scene_id:
+            continue
+        frame_role = getattr(getattr(state, "frame_role", None), "value", getattr(state, "frame_role", None))
+        if frame_role == CastFrameRole.REFERENCED.value:
+            continue
+        scene_cast_usage.setdefault(scene_id, set()).add(state.cast_id)
+    for dialogue_node in dialogue_nodes:
+        if dialogue_node.cast_id not in known_cast_ids:
+            continue
+        scene_id = frame_scene_ids.get(dialogue_node.primary_visual_frame or dialogue_node.start_frame)
+        if scene_id:
+            scene_cast_usage.setdefault(scene_id, set()).add(dialogue_node.cast_id)
+    for scene_id, scene in scenes.items():
+        scene.cast_present = sorted(scene_cast_usage.get(scene_id, set()))
+    for frame in frames:
+        cast_ids = getattr(frame, "cast_ids", None)
+        if cast_ids:
+            frame.cast_ids = [cast_id for cast_id in cast_ids if cast_id in known_cast_ids]
 
     # ── Refine scene headings now that we have real location names ────────────
     loc_name_map = {n.location_id: n.name for n in location_nodes}

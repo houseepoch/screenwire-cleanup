@@ -46,6 +46,253 @@ DURATION_RANGES_BY_FAMILY = {
 
 REQUIRED_DIRECTING_FIELDS = ("dramatic_purpose", "beat_turn", "camera_motivation")
 REQUIRED_COMPOSITION_FIELDS = ("shot", "angle", "movement")
+HIGH_TENSION_MAX_POSE_RATIO = 0.40
+
+
+def _is_high_tension_scene(scene) -> bool:
+    title = (getattr(scene, "title", None) or "").lower()
+    arc = (getattr(scene, "emotional_arc", None) or "").lower()
+    pacing = (getattr(scene, "pacing", None) or "").lower()
+    mood = " ".join(getattr(scene, "mood_keywords", []) or []).lower()
+    tension_score = getattr(scene, "tension_score", None) or 0.0
+    if tension_score >= 0.65:
+        return True
+    combined = " ".join(part for part in (title, arc, pacing, mood) if part)
+    return any(
+        token in combined
+        for token in ("climax", "reveal", "ritual", "panic", "fight", "confront", "upgrade", "tense")
+    )
+
+
+def _primary_pose_signature(graph, frame) -> str:
+    visible_cast = [
+        cs for cs in get_frame_cast_state_models(graph, frame.frame_id)
+        if getattr(getattr(cs, "frame_role", None), "value", getattr(cs, "frame_role", None)) != "referenced"
+    ]
+    subject_states = [
+        cs for cs in visible_cast
+        if getattr(getattr(cs, "frame_role", None), "value", getattr(cs, "frame_role", None)) == "subject"
+    ]
+    primary = subject_states[0] if subject_states else (visible_cast[0] if visible_cast else None)
+    if primary is None:
+        return "no_subject"
+    posture = getattr(getattr(primary, "posture", None), "value", getattr(primary, "posture", None)) or "unset_posture"
+    facing = getattr(primary, "facing_direction", None) or "unset_facing"
+    return f"{posture}|{facing}"
+
+
+def _display_cast_name(graph, cast_id: str) -> str:
+    node = graph.cast.get(cast_id)
+    if node and getattr(node, "name", None):
+        return str(node.name)
+    return cast_id.replace("cast_", "").replace("_", " ").title()
+
+
+def _frame_role_value(state) -> str:
+    return getattr(getattr(state, "frame_role", None), "value", getattr(state, "frame_role", None)) or ""
+
+
+def _primary_visible_cast_state(graph, frame_id: str):
+    visible_cast = [
+        cs for cs in get_frame_cast_state_models(graph, frame_id)
+        if _frame_role_value(cs) != "referenced"
+    ]
+    subject_states = [cs for cs in visible_cast if _frame_role_value(cs) == "subject"]
+    return subject_states[0] if subject_states else (visible_cast[0] if visible_cast else None)
+
+
+def _infer_power_dynamic(graph, visible_cast: list) -> str:
+    subject_states = []
+    non_subject_states = []
+    for cs in visible_cast:
+        role = getattr(getattr(cs, "frame_role", None), "value", getattr(cs, "frame_role", None))
+        if role == "subject":
+            subject_states.append(cs)
+        else:
+            non_subject_states.append(cs)
+
+    subject_names = [_display_cast_name(graph, cs.cast_id) for cs in subject_states]
+    other_names = [_display_cast_name(graph, cs.cast_id) for cs in non_subject_states]
+
+    if len(subject_names) == 1 and other_names:
+        others = ", ".join(other_names)
+        return f"{subject_names[0]} holds the frame while {others} respond within the exchange."
+
+    if len(subject_names) >= 2:
+        if len(subject_names) == 2:
+            return f"{subject_names[0]} and {subject_names[1]} share a balanced exchange with no clear dominance."
+        leads = ", ".join(subject_names[:3])
+        return f"Power is distributed across the group as attention shifts among {leads}."
+
+    names = [_display_cast_name(graph, cs.cast_id) for cs in visible_cast]
+    if len(names) == 2:
+        return f"{names[0]} and {names[1]} occupy the frame as equals, holding a balanced dynamic."
+    leads = ", ".join(names[:3])
+    return f"The ensemble moment is shared across {leads}, with no single character dominating."
+
+
+def _ordered_unique(values: list[str]) -> list[str]:
+    seen = set()
+    result = []
+    for value in values:
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return result
+
+
+def _facing_alternatives(primary_state, occurrence_index: int) -> list[str]:
+    current = getattr(primary_state, "facing_direction", None) or "toward_camera"
+    screen_position = getattr(primary_state, "screen_position", None) or ""
+    position_hint: list[str]
+    if "left" in screen_position:
+        position_hint = ["profile_right", "three_quarter", "toward_camera", "away"]
+    elif "right" in screen_position:
+        position_hint = ["profile_left", "three_quarter", "toward_camera", "away"]
+    else:
+        position_hint = ["three_quarter", "profile_left", "profile_right", "toward_camera", "away"]
+
+    current_hint = {
+        "toward_camera": ["three_quarter", "profile_left", "profile_right", "away"],
+        "three_quarter": ["profile_left", "profile_right", "toward_camera", "away"],
+        "profile_left": ["three_quarter", "toward_camera", "away"],
+        "profile_right": ["three_quarter", "toward_camera", "away"],
+        "away": ["three_quarter", "profile_left", "profile_right", "toward_camera"],
+    }.get(current, ["three_quarter", "profile_left", "profile_right", "toward_camera", "away"])
+
+    ordered = _ordered_unique(position_hint + current_hint)
+    if not ordered:
+        return ["three_quarter"]
+    rotate = occurrence_index % len(ordered)
+    return ordered[rotate:] + ordered[:rotate]
+
+
+def _angle_alternative(current_angle: str | None, occurrence_index: int) -> str:
+    current = (current_angle or "eye_level").strip()
+    sequence = {
+        "eye_level": ["low", "high"],
+        "low": ["eye_level", "high"],
+        "high": ["eye_level", "low"],
+        "dutch": ["eye_level", "low"],
+    }.get(current, ["low", "high", "eye_level"])
+    return sequence[occurrence_index % len(sequence)]
+
+
+def _movement_alternative(frame, occurrence_index: int) -> str:
+    current = (frame.composition.movement or "static").strip().lower()
+    if current in {"tracking", "lateral_track"}:
+        return "tracking"
+    if current in {"subtle_drift", "slow_push"}:
+        return "slow_push" if current == "subtle_drift" else "subtle_drift"
+    if (frame.composition.shot or "").strip() in {"close_up", "medium_close_up"}:
+        return "slow_push" if occurrence_index % 2 else "subtle_drift"
+    return "subtle_drift"
+
+
+def _infer_reaction_target(graph, frame) -> str | None:
+    prev_id = getattr(frame, "previous_frame_id", None)
+    if not prev_id:
+        return None
+    prev = graph.frames.get(prev_id)
+    if not prev:
+        return None
+    for did in reversed(prev.dialogue_ids or []):
+        dnode = graph.dialogue.get(did)
+        if not dnode:
+            continue
+        line = (getattr(dnode, "raw_line", None) or getattr(dnode, "line", None) or "").strip()
+        if line:
+            speaker = (getattr(dnode, "speaker", None) or "").strip()
+            return f"{speaker}: {line}" if speaker else line
+    if prev.action_summary:
+        return prev.action_summary.strip()
+    return None
+
+
+def _infer_movement_path(graph, frame, primary_state) -> str | None:
+    movement = (frame.composition.movement or "").strip().lower()
+    actor = _display_cast_name(graph, primary_state.cast_id) if primary_state else "subject"
+    screen_position = (getattr(primary_state, "screen_position", None) or "frame_center").replace("_", " ")
+    if movement == "tracking":
+        return f"camera tracks {actor} as they carry momentum through {screen_position}"
+    if movement in {"subtle_drift", "slow_push"}:
+        return f"camera eases toward {actor} from the room into {screen_position}"
+    return None
+
+
+def _auto_diversify_high_tension_scene(graph, scene_id: str, frames: list) -> int:
+    pose_counts: dict[str, int] = {}
+    frame_signatures: list[tuple] = []
+    for frame in frames:
+        primary = _primary_visible_cast_state(graph, frame.frame_id)
+        pose_signature = _primary_pose_signature(graph, frame)
+        pose_counts[pose_signature] = pose_counts.get(pose_signature, 0) + 1
+        frame_signatures.append((frame, primary, pose_signature))
+
+    if not pose_counts:
+        return 0
+
+    dominant_pose, dominant_pose_count = max(pose_counts.items(), key=lambda item: item[1])
+    if dominant_pose in {"no_subject", "unset_posture|unset_facing"}:
+        return 0
+
+    total_frames = len(frames)
+    if total_frames <= 0:
+        return 0
+    if dominant_pose_count / total_frames <= HIGH_TENSION_MAX_POSE_RATIO:
+        return 0
+
+    allowed_occurrences = max(1, int(total_frames * HIGH_TENSION_MAX_POSE_RATIO))
+    dominant_occurrence = 0
+    fixes = 0
+
+    for frame, primary, pose_signature in frame_signatures:
+        if primary is None or pose_signature != dominant_pose:
+            continue
+        dominant_occurrence += 1
+        if dominant_occurrence <= allowed_occurrences:
+            continue
+
+        changed = False
+
+        for candidate in _facing_alternatives(primary, dominant_occurrence - allowed_occurrences - 1):
+            if candidate != getattr(primary, "facing_direction", None):
+                primary.facing_direction = candidate
+                changed = True
+                break
+
+        posture_value = getattr(getattr(primary, "posture", None), "value", getattr(primary, "posture", None))
+        if posture_value == "sitting":
+            if frame.visual_flow_element == "reaction":
+                primary.posture = "hunched" if dominant_occurrence % 2 else "leaning"
+                changed = True
+
+        if (frame.composition.angle or "").strip() == "eye_level":
+            frame.composition.angle = _angle_alternative(frame.composition.angle, dominant_occurrence)
+            changed = True
+
+        if (frame.composition.movement or "").strip().lower() in {"", "static"}:
+            frame.composition.movement = _movement_alternative(frame, dominant_occurrence)
+            changed = True
+
+        if frame.visual_flow_element == "reaction" and not getattr(frame.directing, "reaction_target", None):
+            inferred_target = _infer_reaction_target(graph, frame)
+            if inferred_target:
+                frame.directing.reaction_target = inferred_target
+                changed = True
+
+        if frame.composition.movement and (frame.composition.movement or "").strip().lower() not in {"", "static"}:
+            if not getattr(frame.directing, "movement_path", None):
+                inferred_path = _infer_movement_path(graph, frame, primary)
+                if inferred_path:
+                    frame.directing.movement_path = inferred_path
+                    changed = True
+
+        if changed:
+            fixes += 1
+
+    return fixes
 
 
 def main():
@@ -61,7 +308,10 @@ def main():
     errors = []
     warnings = []
     fixed = 0
+    duration_fixes = 0
+    power_dynamic_fixes = 0
     splits = 0
+    scene_diversity_fixes = 0
     total = len(graph.frame_order)
     scene_sequences = {}
     overlong_dialogue_ids = set()
@@ -96,6 +346,7 @@ def main():
             if args.fix:
                 frame.suggested_duration = minimum_dialogue_duration or DURATION_BY_CINEMATIC_FAMILY.get(family, 5)
                 fixed += 1
+                duration_fixes += 1
             else:
                 errors.append(f"{frame_id}: suggested_duration is missing")
         elif frame.suggested_duration < MIN_VIDEO_DURATION_SECONDS:
@@ -106,6 +357,7 @@ def main():
             if args.fix:
                 frame.suggested_duration = minimum_dialogue_duration
                 fixed += 1
+                duration_fixes += 1
             else:
                 errors.append(
                     f"{frame_id}: suggested_duration={frame.suggested_duration} too short for dialogue "
@@ -236,9 +488,20 @@ def main():
         if visible_cast and not getattr(directing, "pov_owner", None):
             errors.append(f"{frame_id}: directing.pov_owner is missing for character-driven frame")
         if len(visible_cast) >= 2 and not getattr(directing, "power_dynamic", None):
-            errors.append(f"{frame_id}: directing.power_dynamic is missing for multi-character frame")
+            if args.fix:
+                directing.power_dynamic = _infer_power_dynamic(graph, visible_cast)
+                fixed += 1
+                power_dynamic_fixes += 1
+            else:
+                errors.append(f"{frame_id}: directing.power_dynamic is missing for multi-character frame")
         if frame.visual_flow_element == "reaction" and not getattr(directing, "reaction_target", None):
-            warnings.append(f"{frame_id}: reaction frame missing directing.reaction_target")
+            if args.fix:
+                inferred_target = _infer_reaction_target(graph, frame)
+                if inferred_target:
+                    directing.reaction_target = inferred_target
+                    fixed += 1
+            else:
+                warnings.append(f"{frame_id}: reaction frame missing directing.reaction_target")
 
         comp = frame.composition
         for field_name in REQUIRED_COMPOSITION_FIELDS:
@@ -247,7 +510,13 @@ def main():
                 errors.append(f"{frame_id}: composition.{field_name} is missing")
         if comp.movement and comp.movement not in ("static", "Static"):
             if not getattr(directing, "movement_path", None):
-                warnings.append(f"{frame_id}: moving shot missing directing.movement_path")
+                if args.fix:
+                    inferred_path = _infer_movement_path(graph, frame, _primary_visible_cast_state(graph, frame_id))
+                    if inferred_path:
+                        directing.movement_path = inferred_path
+                        fixed += 1
+                else:
+                    warnings.append(f"{frame_id}: moving shot missing directing.movement_path")
 
         if family in ("E", "T"):
             has_bg_life = bool(getattr(directing, "background_life", None))
@@ -258,17 +527,31 @@ def main():
 
     # Scene-level monotony checks
     for scene_id, frames in scene_sequences.items():
+        scene = graph.scenes.get(scene_id)
+        high_tension = _is_high_tension_scene(scene) if scene else False
+        if args.fix and high_tension:
+            scene_diversity_fixes += _auto_diversify_high_tension_scene(graph, scene_id, frames)
         movement_streak = 1
         angle_streak = 1
         facing_streak = 1
         prev_movement = None
         prev_angle = None
         prev_facing = None
+        pose_counts = {}
+        facing_counts = {}
+        angle_counts = {}
+        location_counts = {}
 
         for frame in frames:
             movement = (frame.composition.movement or "unset").strip()
             angle = (frame.composition.angle or "unset").strip()
             facing = (frame.background.camera_facing or "unset").strip()
+            pose_signature = _primary_pose_signature(graph, frame)
+            location_id = (frame.location_id or "unset").strip()
+            pose_counts[pose_signature] = pose_counts.get(pose_signature, 0) + 1
+            facing_counts[facing] = facing_counts.get(facing, 0) + 1
+            angle_counts[angle] = angle_counts.get(angle, 0) + 1
+            location_counts[location_id] = location_counts.get(location_id, 0) + 1
 
             if prev_movement == movement:
                 movement_streak += 1
@@ -301,11 +584,58 @@ def main():
                     f"{scene_id}: {facing_streak} consecutive frames share camera_facing='{facing}' ending at {frame.frame_id}"
                 )
 
+        if frames:
+            total_frames = len(frames)
+            dominant_pose, dominant_pose_count = max(pose_counts.items(), key=lambda item: item[1])
+            dominant_facing, dominant_facing_count = max(facing_counts.items(), key=lambda item: item[1])
+            dominant_angle, dominant_angle_count = max(angle_counts.items(), key=lambda item: item[1])
+            dominant_location, dominant_location_count = max(location_counts.items(), key=lambda item: item[1])
+
+            if high_tension and dominant_pose not in {"no_subject", "unset_posture|unset_facing"}:
+                pose_ratio = dominant_pose_count / total_frames
+                if pose_ratio > HIGH_TENSION_MAX_POSE_RATIO:
+                    errors.append(
+                        f"{scene_id}: primary pose signature '{dominant_pose}' reused in "
+                        f"{dominant_pose_count}/{total_frames} frames ({pose_ratio:.0%})"
+                    )
+
+            if high_tension and total_frames >= 10:
+                location_ratio = dominant_location_count / total_frames
+                if location_ratio > 0.85 and len(location_counts) < 2 and len(facing_counts) < 2:
+                    warnings.append(
+                        f"{scene_id}: {dominant_location_count}/{total_frames} frames stay in location "
+                        f"'{dominant_location}' with no variant location relief"
+                    )
+
+                if len(facing_counts) < 2 or len(angle_counts) < 2:
+                    warnings.append(
+                        f"{scene_id}: visual rhythm is thin across {total_frames} frames "
+                        f"(camera facings={len(facing_counts)}, angles={len(angle_counts)})"
+                    )
+
+                facing_ratio = dominant_facing_count / total_frames
+                angle_ratio = dominant_angle_count / total_frames
+                if facing_ratio > 0.70:
+                    warnings.append(
+                        f"{scene_id}: camera_facing '{dominant_facing}' dominates "
+                        f"{dominant_facing_count}/{total_frames} frames ({facing_ratio:.0%})"
+                    )
+                if angle_ratio > 0.70:
+                    warnings.append(
+                        f"{scene_id}: angle '{dominant_angle}' dominates "
+                        f"{dominant_angle_count}/{total_frames} frames ({angle_ratio:.0%})"
+                    )
+
     # Save fixes if any
-    if args.fix and (fixed > 0 or splits > 0):
+    total_fix_count = fixed + scene_diversity_fixes
+    if args.fix and (total_fix_count > 0 or splits > 0):
         store.save(graph)
-        if fixed > 0:
-            print(f"FIXED: Auto-set suggested_duration on {fixed} frames using formula heuristics")
+        if duration_fixes > 0:
+            print(f"FIXED: Auto-set suggested_duration on {duration_fixes} frames using formula heuristics")
+        if power_dynamic_fixes > 0:
+            print(f"FIXED: Auto-filled directing.power_dynamic on {power_dynamic_fixes} multi-character frames")
+        if scene_diversity_fixes > 0:
+            print(f"FIXED: Auto-diversified {scene_diversity_fixes} high-tension frame(s) to break pose repetition")
         if splits > 0:
             print(f"FIXED: Auto-spanned {splits} overlong dialogue node(s) across multiple frames")
 

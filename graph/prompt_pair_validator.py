@@ -7,7 +7,7 @@ for each frame, produced by prompt_assembler.
 
 Catches drift that can arise from:
   - separate assembly paths (image vs video prompts built independently)
-  - video 4096-char compression dropping entities from the narrative
+  - video prompt assembly omitting entities from the narrative
   - dialogue sync metadata diverging between prompt types
   - missing restaging guards in video direction
 
@@ -21,6 +21,7 @@ Checks:
     c. DIALOGUE_FIT_CONSISTENCY — dialogue span coverage coherent between both
     d. REFERENCE_LIST_PARITY   — ref image list coherent with shot packet data
     e. RESTAGING_GUARD         — "Do not restage" present for guarded dialogue roles
+    f. SUBJECT_COUNT_CONSISTENCY — declared visible-subject count matches described action
 
 CLI:
     python3 graph/prompt_pair_validator.py --project-dir ./projects/test [--json] [--strict]
@@ -60,7 +61,13 @@ _RESTAGING_GUARD_ROLES: frozenset[str] = frozenset({
 _MAX_REF_IMAGES: int = 14
 
 # Known valid values for video prompt's dialogue_fit_status
-_VALID_FIT_STATUSES: frozenset[str] = frozenset({"fits", "overflows", "no_dialogue"})
+_VALID_FIT_STATUSES: frozenset[str] = frozenset({
+    "fits",
+    "overflows",
+    "no_dialogue",
+    "span_allocated",
+    "capped_to_model_max",
+})
 
 # Subtitle/caption markers that must not appear in image prompts
 _SUBTITLE_MARKERS: tuple[str, ...] = (
@@ -68,6 +75,55 @@ _SUBTITLE_MARKERS: tuple[str, ...] = (
     "caption",
     "burned-in text",
     "text overlay",
+)
+_NUMBER_WORDS: dict[str, int] = {
+    "zero": 0,
+    "one": 1,
+    "two": 2,
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+    "seven": 7,
+    "eight": 8,
+    "nine": 9,
+    "ten": 10,
+    "eleven": 11,
+    "twelve": 12,
+}
+_NUMBER_PATTERN = r"(?:\d+|" + "|".join(_NUMBER_WORDS.keys()) + r")"
+_DECLARED_SUBJECT_RE = re.compile(
+    rf"\b(?:exactly|do not exceed)\s+({_NUMBER_PATTERN})\s+visible subject",
+    re.IGNORECASE,
+)
+_GROUP_COUNT_RE = re.compile(
+    rf"\b(?:group|ensemble|cluster|crowd)\s+of\s+({_NUMBER_PATTERN})\b",
+    re.IGNORECASE,
+)
+_PEOPLE_COUNT_RE = re.compile(
+    rf"\b({_NUMBER_PATTERN})[-\s]?(?:person|people|subject|subjects|faces)\b",
+    re.IGNORECASE,
+)
+_COLLECTIVE_VISIBLE_TOKENS: tuple[str, ...] = (
+    "entire group",
+    "gathered group",
+    "surrounding group",
+    "tight gathering",
+    "forms a cluster",
+    "crowds around",
+    "in unison",
+    "all together",
+    "tightens into intimate cluster",
+)
+_EMPTY_TRANSITION_TOKENS: tuple[str, ...] = (
+    "empty room",
+    "empty hallway",
+    "empty frame",
+    "pure transition",
+    "pure black",
+    "loading wheel",
+    "title card",
+    "no one visible",
 )
 
 
@@ -80,6 +136,7 @@ class PromptPairCategory(str, Enum):
     DIALOGUE_FIT_CONSISTENCY = "DIALOGUE_FIT_CONSISTENCY"
     REFERENCE_LIST_PARITY = "REFERENCE_LIST_PARITY"
     RESTAGING_GUARD = "RESTAGING_GUARD"
+    SUBJECT_COUNT_CONSISTENCY = "SUBJECT_COUNT_CONSISTENCY"
 
 
 class IssueSeverity(str, Enum):
@@ -171,6 +228,77 @@ def _frame_id_from_prompts(image_prompt: dict, video_prompt: dict) -> str:
     )
 
 
+def _parse_number_token(token: str) -> Optional[int]:
+    value = (token or "").strip().lower()
+    if not value:
+        return None
+    if value.isdigit():
+        return int(value)
+    return _NUMBER_WORDS.get(value)
+
+
+def _extract_declared_subject_limit(prompt_text: str) -> Optional[int]:
+    limits = [
+        value
+        for match in _DECLARED_SUBJECT_RE.finditer(prompt_text or "")
+        for value in [_parse_number_token(match.group(1))]
+        if value is not None
+    ]
+    return min(limits) if limits else None
+
+
+def _implied_subject_floor_from_text(text: str) -> int:
+    lowered = (text or "").lower()
+    if any(token in lowered for token in _EMPTY_TRANSITION_TOKENS):
+        return 0
+
+    counts: list[int] = []
+    for regex in (_GROUP_COUNT_RE, _PEOPLE_COUNT_RE):
+        for match in regex.finditer(lowered):
+            value = _parse_number_token(match.group(1))
+            if value is not None:
+                counts.append(value)
+
+    if counts:
+        return max(counts)
+    if any(token in lowered for token in _COLLECTIVE_VISIBLE_TOKENS):
+        return 2
+    return 0
+
+
+def _extract_entering_cast_count(continuity_deltas: list[str]) -> int:
+    count = 0
+    for delta in continuity_deltas or []:
+        lower = (delta or "").lower()
+        if not lower.startswith("cast entering frame:"):
+            continue
+        members = [part.strip() for part in delta.split(":", 1)[1].split(",") if part.strip()]
+        count = max(count, len(members))
+    return count
+
+
+def _subject_visibility_evidence(shot_packet: ShotPacket) -> str:
+    """Return only current-frame text that can legitimately imply visible subjects.
+
+    We intentionally exclude previous/next beat prose and generic continuity
+    deltas because they often mention off-screen or adjacent-frame cast, which
+    produces false positives on otherwise-correct single-subject prompts.
+    """
+    parts: list[str] = []
+    for part in (
+        shot_packet.current_beat,
+        shot_packet.video_optimized_prompt_block,
+        shot_packet.shot_intent.beat_turn,
+    ):
+        if part:
+            parts.append(part)
+
+    entering_count = _extract_entering_cast_count(shot_packet.continuity_deltas)
+    if entering_count > 0:
+        parts.append(f"Cast entering frame count: {entering_count}")
+    return "\n".join(parts)
+
+
 # ─── PromptPairValidator ──────────────────────────────────────────────────────
 
 class PromptPairValidator:
@@ -178,7 +306,7 @@ class PromptPairValidator:
 
     Both dicts are produced by prompt_assembler for the same FrameNode and must
     be internally consistent. This validator detects drift introduced by separate
-    assembly paths, 4096-char compression, or assembly order bugs.
+    assembly paths or assembly order bugs.
 
     Usage::
 
@@ -209,6 +337,7 @@ class PromptPairValidator:
         issues.extend(self._check_dialogue_fit_consistency(image_prompt, video_prompt, shot_packet))
         issues.extend(self._check_reference_list_parity(image_prompt, video_prompt, shot_packet))
         issues.extend(self._check_restaging_guard(image_prompt, video_prompt))
+        issues.extend(self._check_subject_count_consistency(image_prompt, video_prompt, shot_packet))
         return issues
 
     # ── a. CINEMATIC_TAG_MATCH ─────────────────────────────────────────────
@@ -368,7 +497,7 @@ class PromptPairValidator:
             ))
 
         # Focal cast (first subject_count entries from cast_invariants) must
-        # survive 4096-char video compression and appear in the video prompt text.
+        # survive final video prompt assembly and appear in the video prompt text.
         vid_text = video_prompt.get("prompt", "")
         cast_labels = _labels_from_invariants(shot_packet.cast_invariants)
         focal_count = min(shot_packet.subject_count, len(cast_labels))
@@ -380,12 +509,11 @@ class PromptPairValidator:
                     severity=IssueSeverity.WARNING,
                     description=(
                         f"Focal cast '{label}' is missing from video prompt text "
-                        "(likely dropped by 4096-char compression)"
+                        "(likely omitted during video prompt assembly)"
                     ),
                     suggested_fix=(
-                        f"Preserve the cast invariant for '{label}' during video "
-                        "prompt compression — focal subjects must survive. "
-                        "Reduce BACKGROUND or LOCATION sections before CAST INVARIANTS."
+                        f"Preserve the cast invariant for '{label}' in the final video "
+                        "prompt. Focal subjects must survive prompt assembly."
                     ),
                 ))
 
@@ -468,7 +596,7 @@ class PromptPairValidator:
                     ),
                 ))
 
-            # fit_status must be "fits" or "overflows"
+            # fit_status must reflect spoken dialogue, not silence
             if fit_status == "no_dialogue":
                 issues.append(PromptPairIssue(
                     category=PromptPairCategory.DIALOGUE_FIT_CONSISTENCY,
@@ -478,7 +606,7 @@ class PromptPairValidator:
                         f"dialogue_present=True but video dialogue_fit_status={fit_status!r}"
                     ),
                     suggested_fix=(
-                        "dialogue_fit_status must be 'fits' or 'overflows' when dialogue "
+                        "dialogue_fit_status must reflect spoken dialogue when dialogue "
                         "is present. 'no_dialogue' is only valid for silent frames."
                     ),
                 ))
@@ -511,26 +639,6 @@ class PromptPairValidator:
                         "shot packet."
                     ),
                 ))
-
-            # Image prompt must not carry subtitle rendering instructions
-            img_text = image_prompt.get("prompt", "")
-            for marker in _SUBTITLE_MARKERS:
-                if img_text and marker.lower() in img_text.lower():
-                    issues.append(PromptPairIssue(
-                        category=PromptPairCategory.DIALOGUE_FIT_CONSISTENCY,
-                        frame_id=frame_id,
-                        severity=IssueSeverity.WARNING,
-                        description=(
-                            f"Image prompt contains subtitle/caption marker {marker!r} "
-                            "— image generation does not render subtitles"
-                        ),
-                        suggested_fix=(
-                            "Remove subtitle/caption language from the image prompt. "
-                            "Image dialogue sections carry only sync cues and mood context, "
-                            "not rendering instructions."
-                        ),
-                    ))
-
         else:
             # Silent frame: fit_status must be "no_dialogue"
             if fit_status and fit_status != "no_dialogue":
@@ -718,6 +826,60 @@ class PromptPairValidator:
                 ),
             ))
 
+        return issues
+
+    def _check_subject_count_consistency(
+        self,
+        image_prompt: dict,
+        video_prompt: dict,
+        shot_packet: ShotPacket,
+    ) -> list[PromptPairIssue]:
+        """f. Visible-subject declarations must agree with described visible activity.
+
+        Catches cases where the prompt text describes a visible group or character
+        action but the shot packet / prompt sections still declare zero subjects.
+        """
+        issues: list[PromptPairIssue] = []
+        frame_id = shot_packet.frame_id
+        image_text = image_prompt.get("prompt", "")
+        video_text = video_prompt.get("prompt", "")
+        joined_prompt_text = _subject_visibility_evidence(shot_packet)
+
+        implied_floor = max(
+            len(shot_packet.visible_cast_ids or []),
+            _implied_subject_floor_from_text(joined_prompt_text),
+            _extract_entering_cast_count(shot_packet.continuity_deltas),
+        )
+        if implied_floor <= 0:
+            return issues
+
+        declared_limits = [
+            limit
+            for limit in (
+                shot_packet.subject_count,
+                _extract_declared_subject_limit(image_text),
+                _extract_declared_subject_limit(video_text),
+            )
+            if limit is not None
+        ]
+        declared_limit = min(declared_limits) if declared_limits else None
+        if declared_limit is None or declared_limit >= implied_floor:
+            return issues
+
+        issues.append(PromptPairIssue(
+            category=PromptPairCategory.SUBJECT_COUNT_CONSISTENCY,
+            frame_id=frame_id,
+            severity=IssueSeverity.ERROR,
+            description=(
+                f"Visible-subject contradiction: prompt text implies at least {implied_floor} visible "
+                f"subject(s) but declared limit is {declared_limit}"
+            ),
+            suggested_fix=(
+                "Rebuild the shot packet / prompt sections so SUBJECT COUNT and NEGATIVE CONSTRAINTS "
+                "match the described visible cast activity. Empty-room and pure-transition beats must "
+                "say so explicitly."
+            ),
+        ))
         return issues
 
 

@@ -1,13 +1,13 @@
 # Repo Snapshot
 
-- Generated at: `2026-04-12T04:25:18.362715+00:00`
+- Generated at: `2026-04-12T19:24:42.743350+00:00`
 - Repo root: `/home/nikoles16/Documents/ScreenWire Environments/screenwire-pipeline`
 - Part: `1` of `1`
 - Max part size: `26214400` bytes
-- Included files: `109`
-- Text files embedded: `108`
+- Included files: `125`
+- Text files embedded: `124`
 - Binary files summarized: `1`
-- Total bytes scanned: `1872133`
+- Total bytes scanned: `2215351`
 
 ## `.env.example`
 
@@ -60,6 +60,177 @@ tests/projects/
 >
 > Put shared API contract notes here. Put provider-specific model research in
 > sibling source fragments such as `replicate_*.md`.
+```
+
+## `AGENT_READ_HERE_FIRST/API_bytedance_seedream.txt`
+
+```text
+API_bytedance/seedream-4.5 
+
+– Full Replicate API Specification
+
+**Model**  
+- **Owner / Name**: `bytedance/seedream-4.5`  
+- **Latest Version Hash**: `be890c6ee7cc6e7e49db329916e7881400d53d32fd2cdc9cfbe43efaab72178a`  
+- **Description**: Seedream 4.5 is ByteDance’s upgraded image generation model. It features cinematic aesthetics, stronger spatial understanding, precise instruction following, world knowledge, and native support for 4K (4096 px) output. Supports both text-to-image and image-to-image / multi-reference generation.
+
+**Stats (as of April 2026)**  
+- Runs: ~7M+  
+- Pricing: **$0.04 per output image**
+
+---
+
+## How to Run (Replicate API)
+
+### 1. Python (recommended)
+```python
+import replicate
+
+output = replicate.run(
+    "bytedance/seedream-4.5",
+    input={
+        "prompt": "A warm, nostalgic film-style interior of a cozy café...",
+        "size": "4K",
+        "aspect_ratio": "16:9",
+        # other optional params below
+    }
+)
+
+# output is a list of image URLs (strings)
+print(output)
+2. Node.js / JavaScript
+JavaScriptconst Replicate = require("replicate");
+const replicate = new Replicate();
+
+const output = await replicate.run("bytedance/seedream-4.5", {
+  input: {
+    prompt: "Your prompt here",
+    size: "4K",
+    aspect_ratio: "16:9"
+  }
+});
+3. cURL (raw HTTP)
+Bashcurl -X POST \
+  -H "Authorization: Token $REPLICATE_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "version": "be890c6ee7cc6e7e49db329916e7881400d53d32fd2cdc9cfbe43efaab72178a",
+    "input": {
+      "prompt": "A cinematic shot of...",
+      "size": "2K"
+    }
+  }' \
+  https://api.replicate.com/v1/predictions
+
+Input Schema (Complete)
+All parameters are passed inside the input object.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ParameterTypeDefaultRequiredDescription / Constraintspromptstring—YesText prompt for image generation. Supports detailed natural-language instructions.image_inputarray[file][]NoReference images (img2img or multi-reference). 1–14 images allowed.sizestring"2K"NoOutput resolution. Options: "2K" (2048 px), "4K" (4096 px), "custom". Note: 1K is not supported.widthinteger—No*Custom width (only when size="custom"). Range: 1024–4096.heightinteger—No*Custom height (only when size="custom"). Range: 1024–4096.aspect_ratiostring"match_input_image" (when images provided) or autoNoAspect ratio (used when size is not custom). Common values: "16:9", "9:16", "1:1", "match_input_image", etc.max_imagesinteger1NoNumber of images to generate. Range: 1–15.sequential_image_generationstring"disabled"NoControls sequential / multi-image consistency. Options: "disabled", "auto".
+*width and height are only used when size = "custom".
+Additional Notes on Inputs
+
+Total pixel limits apply for custom sizes (roughly 3.6 M – 16.7 M pixels depending on hardware).
+When using image_input, the model supports strong multi-reference consistency and style transfer.
+Current live schema note: `enhance_prompt` is rejected by the deployed Seedream 4.5 endpoint used by this pipeline and should not be sent.
+
+
+Output Schema
+
+Type: array[string]
+Description: List of URLs pointing to the generated PNG images (one URL per image).
+The number of URLs matches the max_images value (or 1 by default).
+Images are hosted on Replicate’s CDN and are publicly accessible for a limited time.
+
+Example output
+JSON[
+  "https://replicate.delivery/.../seedream-4.5-abc123.png",
+  "https://replicate.delivery/.../seedream-4.5-def456.png"
+]
+
+Full API Reference Links (Replicate)
+
+Model page: https://replicate.com/bytedance/seedream-4.5
+Live schema: https://replicate.com/bytedance/seedream-4.5/api/schema
+API examples: https://replicate.com/bytedance/seedream-4.5/api
+
+
+License & Usage
+Commercial use is permitted. Check the model card on Replicate for the latest license details.
+Let me know if you need a specific language SDK example, OpenAPI JSON export, or help integrating this into your code!
 ```
 
 ## `AGENT_READ_HERE_FIRST/API_grok-4.20-spec-sheet.md`
@@ -451,7 +622,7 @@ These fragment files are the source inputs for the generated repo-root
 
 **Status:** APPROVED — Implementation ACTIVE. Full spec at `build_specs/cc_first_deterministic_spec.md` (1072 lines).
 
-**Decision:** Eliminate LLM-based entity seeding, frame parsing, dialogue wiring, and composition. Replace with deterministic Python parsers + Haiku enrichment + Grok cinematic tagging.
+**Decision:** Eliminate LLM-based entity seeding, frame parsing, dialogue wiring, and composition. Replace with deterministic Python parsers + frame enrichment + Grok cinematic tagging.
 
 ### Architecture
 ```
@@ -464,7 +635,7 @@ Step 2a: Python parser (graph/cc_parser.py) — deterministic, <5 seconds
   → DialogueNodes via ///DLG excerpt pointers (verbatim source text, never copied)
   → All edges (FOLLOWS, APPEARS_IN, AT_LOCATION, DIALOGUE_SPANS, etc.)
                  ↓
-Step 2b: Parallel Haiku workers (graph/haiku_enricher.py) — ~$0.005/100 frames
+Step 2b: Parallel frame enricher workers (graph/frame_enricher.py) — ~$0.005/100 frames
   → CastFrameState: screen_position, looking_at, emotion, posture, facing_direction, action
     (anchored by ///SCENE_STAGING start/mid/end beats from CC)
   → FrameComposition: shot, angle, movement, focus (from prose context)
@@ -486,7 +657,7 @@ Step 2d: Prompt assembly + materialization (existing code, unchanged)
 ### Key Design Decisions
 - **Entity rosters** use schema-ready `///CAST`, `///LOCATION`, `///LOCATION_DIR`, `///PROP` tags mapping directly to schema fields
 - **Dialogue** uses `///DLG` excerpt pointers (src_start/src_end/src_lines) — parser extracts verbatim from creative_output.md, CC never copies text
-- **Scene staging** uses `///SCENE_STAGING` with start/mid/end beats defining screen_position, looking_at, facing_direction per character — Haiku workers anchor to these
+- **Scene staging** uses `///SCENE_STAGING` with start/mid/end beats defining screen_position, looking_at, facing_direction per character — frame enricher workers anchor to these
 - **Frame markers** are lean: `cast`, `cam`, `dlg`, `cast_states` only — NO tag, shot, angle, movement, or duration
 - **Cinematic tags** assigned POST-GRAPH by Grok tagger, not by CC or Haiku. Tag definitions are textual composition directives injected into prompts
 - **visible_description REMOVED** from Haiku output — redundant with location.directions[camera_facing] (api.py fallback handles it)
@@ -499,14 +670,14 @@ Step 2d: Prompt assembly + materialization (existing code, unchanged)
 | Agent 1 (Entity Seeder, Opus) | Python parser | $0 |
 | Agent 2 (Frame Parser, Opus) | Python parser | $0 |
 | Agent 3 (Dialogue Wirer, Opus) | Python parser | $0 |
-| Agent 4 (Compositor, Opus) | Haiku workers | ~$0.005/100 frames |
+| Agent 4 (Compositor, Opus) | frame enricher workers | ~$0.005/100 frames |
 | Agent 5 (Continuity, Opus) | Python validator | $0 |
 | F01-F18 formula tags | Grok cinematic tagger (60+ tags) | ~$0.01/100 frames |
 
 ### Implementation Order
 1. `graph/schema.py` — Add StagingBeat, CinematicTag; replace FormulaTag enum
 2. `graph/cc_parser.py` — Python parser (new)
-3. `graph/haiku_enricher.py` — Haiku worker dispatch (new)
+3. `graph/frame_enricher.py` — frame enricher dispatch (new)
 4. `graph/grok_tagger.py` — Grok cinematic frame tagger (new)
 5. `graph/continuity_validator.py` — Rule-based validation (new)
 6. `graph/prompt_assembler.py` — Replace FORMULA_SHOT/FORMULA_VIDEO with CinematicTag.ai_prompt_language
@@ -2390,6 +2561,171 @@ Returns a single JPG image URL.
 - Pruna also offers a direct API at `https://api.pruna.ai/v1/predictions` (separate from Replicate)
 - Supports async (polling) and sync (`Try-Sync: true` header) generation modes via Pruna's own API
 - Good for: retail product shots, gaming assets, advertising creatives, concept art
+
+bytedance/seedream-4.5 – Full Replicate API Specification
+
+**Model**  
+- **Owner / Name**: `bytedance/seedream-4.5`  
+- **Latest Version Hash**: `be890c6ee7cc6e7e49db329916e7881400d53d32fd2cdc9cfbe43efaab72178a`  
+- **Description**: Seedream 4.5 is ByteDance’s upgraded image generation model. It features cinematic aesthetics, stronger spatial understanding, precise instruction following, world knowledge, and native support for 4K (4096 px) output. Supports both text-to-image and image-to-image / multi-reference generation.
+
+**Stats (as of April 2026)**  
+- Runs: ~7M+  
+- Pricing: **$0.04 per output image**
+
+---
+
+## How to Run (Replicate API)
+
+### 1. Python (recommended)
+```python
+import replicate
+
+output = replicate.run(
+    "bytedance/seedream-4.5",
+    input={
+        "prompt": "A warm, nostalgic film-style interior of a cozy café...",
+        "size": "4K",
+        "aspect_ratio": "16:9",
+        # other optional params below
+    }
+)
+
+# output is a list of image URLs (strings)
+print(output)
+2. Node.js / JavaScript
+JavaScriptconst Replicate = require("replicate");
+const replicate = new Replicate();
+
+const output = await replicate.run("bytedance/seedream-4.5", {
+  input: {
+    prompt: "Your prompt here",
+    size: "4K",
+    aspect_ratio: "16:9"
+  }
+});
+3. cURL (raw HTTP)
+Bashcurl -X POST \
+  -H "Authorization: Token $REPLICATE_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "version": "be890c6ee7cc6e7e49db329916e7881400d53d32fd2cdc9cfbe43efaab72178a",
+    "input": {
+      "prompt": "A cinematic shot of...",
+      "size": "2K"
+    }
+  }' \
+  https://api.replicate.com/v1/predictions
+
+Input Schema (Complete)
+All parameters are passed inside the input object.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ParameterTypeDefaultRequiredDescription / Constraintspromptstring—YesText prompt for image generation. Supports detailed natural-language instructions.image_inputarray[file][]NoReference images (img2img or multi-reference). 1–14 images allowed.sizestring"2K"NoOutput resolution. Options: "2K" (2048 px), "4K" (4096 px), "custom". Note: 1K is not supported.widthinteger—No*Custom width (only when size="custom"). Range: 1024–4096.heightinteger—No*Custom height (only when size="custom"). Range: 1024–4096.aspect_ratiostring"match_input_image" (when images provided) or autoNoAspect ratio (used when size is not custom). Common values: "16:9", "9:16", "1:1", "match_input_image", etc.max_imagesinteger1NoNumber of images to generate. Range: 1–15.sequential_image_generationstring"disabled"NoControls sequential / multi-image consistency. Options: "disabled", "auto".
+*width and height are only used when size = "custom".
+Additional Notes on Inputs
+
+Total pixel limits apply for custom sizes (roughly 3.6 M – 16.7 M pixels depending on hardware).
+When using image_input, the model supports strong multi-reference consistency and style transfer.
+Current live schema note: `enhance_prompt` is rejected by the deployed Seedream 4.5 endpoint used by this pipeline and should not be sent.
+
+
+Output Schema
+
+Type: array[string]
+Description: List of URLs pointing to the generated PNG images (one URL per image).
+The number of URLs matches the max_images value (or 1 by default).
+Images are hosted on Replicate’s CDN and are publicly accessible for a limited time.
+
+Example output
+JSON[
+  "https://replicate.delivery/.../seedream-4.5-abc123.png",
+  "https://replicate.delivery/.../seedream-4.5-def456.png"
+]
+
+Full API Reference Links (Replicate)
+
+Model page: https://replicate.com/bytedance/seedream-4.5
+Live schema: https://replicate.com/bytedance/seedream-4.5/api/schema
+API examples: https://replicate.com/bytedance/seedream-4.5/api
+
+
+License & Usage
+Commercial use is permitted. Check the model card on Replicate for the latest license details.
+Let me know if you need a specific language SDK example, OpenAPI JSON export, or help integrating this into your code!
 ```
 
 ## `BUILD_LOG.md`
@@ -2467,7 +2803,7 @@ When adding any new bulk caller of `/internal/generate-*`, replicate the
 - **Implementation steps:**
   1. [ ] `graph/schema.py` — Add StagingBeat, CinematicTag models; replace FormulaTag enum
   2. [ ] `graph/cc_parser.py` — Python parser: skeleton ///TAGs → entities, frame markers → frames + dialogue
-  3. [ ] `graph/haiku_enricher.py` — Haiku worker dispatch: per-frame enrichment (cast states, composition, environment, directing)
+  3. [ ] `graph/frame_enricher.py` — frame enricher dispatch: per-frame enrichment (cast states, composition, environment, directing)
   4. [ ] `graph/grok_tagger.py` — Grok cinematic frame tagger: reads frame nodes, assigns D/E/R/A/C/T/S/M tags with definitions
   5. [ ] `graph/continuity_validator.py` — Deterministic Python graph integrity checks
   5b. [ ] `agent_prompts/morpheus_graph_auditor.md` — Lean QA auditor prompt (outline + graph only, no source material)
@@ -2485,7 +2821,7 @@ When adding any new bulk caller of `/internal/generate-*`, replicate the
 ## OBJ-003: NAC Test Run (Paused)
 - **Status:** PAUSED — Will re-run after OBJ-001 as the validation test
 - **Project:** nac_corrective_test_001
-- **Config:** Stickiness 1 (Reformat), short_film, live_retro_grain
+- **Config:** strict creative freedom, frame budget auto, live_retro_grain
 ```
 
 ## `agent_prompts/creative_coordinator.md`
@@ -2493,7 +2829,7 @@ When adding any new bulk caller of `/internal/generate-*`, replicate the
 ```md
 # CREATIVE COORDINATOR — System Prompt
 
-You are the **Creative Coordinator**, agent ID `creative_coordinator`. You are a Claude Opus session running inside ScreenWire AI, a headless MVP pipeline that converts stories into AI-generated videos. You are the narrative architect — you plan the story structure, dispatch prose writing, and assemble the final output through a 3-phase pipeline: Architect → Prose → Assembly.
+You are the **Creative Coordinator**, agent ID `creative_coordinator`. You are a Grok 4.20 session running inside ScreenWire AI, a headless MVP pipeline that converts stories into AI-generated videos. You are the narrative architect — you plan the story structure, dispatch prose writing, and assemble the final output through a 3-phase pipeline: Architect → Prose → Assembly.
 
 This is a **headless MVP** — there is no UI and no human approval step in the active runner. Complete ALL 3 phases autonomously in a single pass — write skeleton, then prose, then assembly. Do not stop between phases unless an explicit runtime override tells you to stop after a specific sub-phase.
 
@@ -2532,48 +2868,79 @@ Read ALL of these before starting any sub-phase:
 - `source_files/` — all user uploads (story text, scripts, etc.). Read every file in this directory.
 - `source_files/onboarding_config.json` — project settings including:
   - `pipeline` — story_upload, pitch_idea, or music_video
-  - `stickinessLevel` and `stickinessPermission` — your creative boundary
-  - `outputSize` — determines how many scenes you write
+  - `creativeFreedom` and `creativeFreedomPermission` — your creative boundary
+  - `creativeFreedomFailureModes` and `dialoguePolicy` — your failure-mode guardrails
+  - `frameBudget` — either a numeric frame cap or `auto`
   - `style[]`, `genre[]`, `mood[]` — creative direction tags that should permeate your writing
   - `extraDetails` — user's additional notes, preferences, things to avoid
 - `logs/director/project_brief.md` — OPTIONAL legacy input. Read it if it exists, but do not block or fail if it is missing. The active headless runner does not create a Director phase.
 
 ---
 
-## Stickiness Permission
+## Creative Freedom Contract
 
-Read `stickinessLevel` and `stickinessPermission` from `onboarding_config.json`. This is your creative mandate and the single most important constraint on your output.
+Read `creativeFreedom`, `creativeFreedomPermission`, `creativeFreedomFailureModes`, and `dialoguePolicy` from `onboarding_config.json`. This is your creative mandate and the single most important constraint on your output.
 
-| Level | Label | What You May Do |
-|---|---|---|
-| 1 | Reformat | Restructure source into screenplay/novel hybrid format. No new content whatsoever — the source dictates what exists, you dictate how it reads on the page |
-| 2 | Remaster | Adhere faithfully to the source while enriching quality. Add sensory detail, deepen descriptions, smooth transitions, fill gaps that make scenes feel complete. Same story, higher fidelity. No new plot elements, characters, or narrative departures |
-| 3 | Expand | Follow the source's direction but round out incomplete areas. Add transitional scenes, supporting details, and environmental context the source implies but doesn't show. **Dialogue is the highest-priority addition** — characters should speak wherever interaction, conflict, revelation, or emotional weight occurs. All additions must serve what's already demonstrated — supporting information, not new story |
-| 4 | Reimagine | Use the source's story, narrative, and themes as a creative foundation. You may introduce new cast, locations, and writing to serve existing arcs. **Dialogue-rich writing is expected** — conversations drive scenes. The original tone, themes, and trajectory are respected — but the canvas is wider |
-| 5 | Create | The source is a seed idea. Write an original story inspired by its guidance, introducing rich characters, props, locations, and story events to fill the targeted output size. **Dialogue is the primary vehicle for character and plot** — scenes without dialogue are the exception, not the norm. Full creative ownership |
+| Tier | Core Philosophy | Fidelity | Permitted Freedoms | What Could Go Wrong | Dialogue Policy |
+|---|---|---:|---|---|---|
+| `strict` | Change as little as possible to make it work | 98–100% | Minimal technical fixes only: timing, continuity, shot feasibility. Exact match to source dialogue, blocking, props, and intent. | Drift through “helpful” additions, paraphrase, or invented connective tissue. Prevent this by blocking any new text, new beats, or interpretive rewrite. | Never add or alter dialogue. Word-for-word only. Zero improvisation. |
+| `balanced` | Follow the source closely with room for natural flow | 85–95% | Minor organic moments, natural pauses, slight framing or performance breathing room. | Dialogue starts drifting under the excuse of “making it natural.” Prevent this by allowing only light delivery-level rephrasing that preserves exact meaning and intent. | Minor re-phrasing only for natural delivery. No new lines. No added reaction lines. |
+| `creative` | Keep the core story while allowing artistic reframes | 70–85% | Alternative angles, artistic lighting/color, visual metaphor, subtext emphasis, short reaction beats. | New dialogue or new entities quietly change tone, voice, or plot direction. Prevent this by limiting additions to short reaction lines and requiring all additions to reinforce existing subtext rather than invent new plot. | Short reaction lines and moderate re-phrasing are allowed only when they preserve meaning, voice, and motivation. No new plot-advancing lines. |
+| `unbounded` | Start from a seed idea and fully expand into a complete story | 40–70% | Freely invent new information, characters, subplots, pacing, and connective tissue. | The story balloons into a different arc or ending. Prevent this by locking the core emotional arc and final outcome even while everything else can expand. | Freely add, alter, or invent dialogue as long as it serves the core emotional arc and ending. |
 
-Respect this boundary throughout all sub-phases. The `stickinessPermission` string in the config is the exact permission sentence — treat it as law.
+Detailed dialogue rules:
+
+| Tier | Can dialogue be added? | Can dialogue be altered / re-phrased? | Can new reaction lines be created? | Must preserve exact meaning & character voice? |
+|---|---|---|---|---|
+| `strict` | No | No | No | Yes — 100% |
+| `balanced` | No | Yes — very lightly | No | Yes — exact meaning must hold |
+| `creative` | Limited | Yes — moderate | Yes — short reactions only | Yes — preserve core meaning and voice |
+| `unbounded` | Yes | Yes | Yes | Preserve the emotional arc and ending |
+
+Respect this boundary throughout all sub-phases. The `creativeFreedomPermission` string in the config is the exact permission sentence — treat it as law. The `creativeFreedomFailureModes` and `dialoguePolicy` fields are not decorative notes; they are explicit guardrails you must obey.
+
+### Dialogue Workflow Contract
+
+Read `dialogueWorkflow` from `onboarding_config.json` and follow it as the dialogue authority for this project.
+
+Treat dialogue handling as three explicit sub-modes:
+- `extraction_recovery` — recover every spoken line from source material and assembled prose, even if `///DLG` tags are incomplete.
+- `mapping_assignment` — assign recovered dialogue to the correct scene/frame while respecting the active `creativeFreedom` tier.
+- `confirmation_validation` — before prompt generation, confirm that assigned dialogue still complies with the tier rules and matches the recovered source inventory.
+
+Practical rules:
+- The recovery pass is universal. It must run on both tagged and untagged projects.
+- Never assume missing `///DLG` tags mean “no dialogue.”
+- At `strict` and `balanced`, dialogue fidelity failures are blocking defects, not style notes.
+- At `creative` and `unbounded`, additions are allowed only within the active dialogue policy.
+- At `strict` and `balanced`, treat the source dialogue inventory as locked. Recover every source-supported spoken exchange first, then build scene structure, visual beats, and frame density around that inventory. Do NOT solve compression by deleting or paraphrasing speech.
 
 ---
 
-## Output Size Constraint
+## Frame Budget Contract
 
-Read `outputSize` and `sceneRange` from `onboarding_config.json`. Constrain scene count and prose density to the range specified.
+Read `frameBudget` from `onboarding_config.json`.
 
-**The atomize rule:** Downstream, your prose is parsed to frames using `///` frame markers — one `///` marker = one frame. Your marker count IS your frame count. Write exactly as many `///`-marked paragraphs as the frame budget allows, not more. Every paragraph you add becomes a frame that costs generation time and API calls.
+- If `frameBudget` is `auto`, cover the full source chronology using as many scenes and frames as the material needs.
+- If `frameBudget` is numeric, it is a compression target, not a chronology stop rule. You MUST still cover the full source from beginning through ending.
+- There is no user-authored scene range anymore. Choose the scene count that best covers the whole story.
 
-| outputSize | Frame Range | Scene Range | Words/Scene Target | Total Word Budget |
-|---|---|---|---|---|
-| `short` | 10–20 frames | 1–3 scenes | 300–600 | 700–1,500 |
-| `short_film` | 50–125 frames | 5–15 scenes | 400–700 | 3,000–5,000 |
-| `televised` | 200–300 frames | 20–40 scenes | 800–1,500 | 20,000–45,000 |
-| `feature` | 750–1250 frames | 60–120 scenes | 800–1,500 | 60,000–150,000 |
+**The atomize rule:** Downstream, your prose is parsed to frames using `///` frame markers — one `///` marker = one frame. Your marker count IS your frame count. Every paragraph you add becomes a frame that costs generation time and API calls.
 
-**Scaling principles:**
-- **`short`/`short_film`**: Condense aggressively. Keep the core story arc, main character interactions, and meaningful dialogue. Cut transitional scenes, atmospheric padding, and secondary character tangents. Every paragraph must earn its frame. Favor dialogue over description — a spoken exchange reveals more story per frame than a landscape paragraph.
-- **`televised`/`feature`**: Full prose density allowed. Expand with environmental detail, transitional beats, supporting character moments, and atmospheric establishment.
-- **Source material is your budget guide.** Judge how much of the source to include based on `outputSize`. A novel adapted to `short` keeps only the essential arc and key dialogue exchanges. The same novel at `feature` can include subplots and secondary scenes.
-- **Dialogue is protected from compression.** When cutting to fit a smaller budget, preserve meaningful dialogue first. Cut description, atmosphere, and action beats before cutting character speech. A scene with two characters should always have them talking — but at `short` size, keep only the dialogue that advances plot or reveals character. Remove pleasantries, repetition, and filler exchanges.
+| frameBudget | Compression Guidance | Typical Density |
+|---|---|---|
+| `auto` | Full-source coverage with no fixed cap. | Let the source determine scene count and density. |
+| `<= 20` | Extreme compression. Keep only essential arc turns and dialogue. | Very lean scenes, little padding. |
+| `21–125` | Strong compression. Preserve the main arc and most important exchanges. | Moderate scene count, selective detail. |
+| `126–300` | Moderate compression. Cover the full source with room for meaningful dialogue and some transitions. | Broad coverage with controlled density. |
+| `> 300` | Light compression. Cover the full source with richer environmental and character detail. | Higher density where the source warrants it. |
+
+**Compression principles:**
+- **Full-source coverage comes first.** Outline the whole chronology before deciding what to compress.
+- **Budget is distributed across the whole story.** Do not front-load frames into the opening act and abandon the ending.
+- **Dialogue is protected from compression.** Preserve meaningful dialogue first. Cut description, atmosphere, and repetitive action beats before cutting character speech.
+- **Compression happens by merging, not truncating.** Combine adjacent beats, condense transitions, and trim repetition — never drop the back half of the story because the opening filled the budget.
+- **At `strict` and `balanced`, spoken lines are source-locked.** Preserve every explicit spoken exchange the source materially contains. If you need to save frames, merge silent transitions, compress establishment, or reduce redundant reaction beats — not dialogue.
 
 ---
 
@@ -2587,11 +2954,15 @@ Your role is **architect and orchestrator**, not line-by-line prose writer. Your
 
 Read all source files. If `logs/director/project_brief.md` exists, use it as supporting context; otherwise proceed from the source files and onboarding config alone. Produce `creative_output/outline_skeleton.md` — the single planning document that contains everything a prose worker needs to write any scene independently.
 
-**Source-to-size adaptation:** Before outlining, estimate how the source material maps to the frame budget. For `short`, identify the single most important arc and 2-5 key dialogue exchanges — everything else is cut. For `short_film`, keep the main arc plus one supporting subplot. For `televised`+, the full source can be represented. The skeleton decides what SURVIVES the adaptation — downstream agents cannot add what isn't here. Be ruthless at small sizes: a 50,000-word novel adapted to `short` (10-20 frames) keeps only the essential conflict, resolution, and the dialogue that drives them.
+**Source-to-budget adaptation:** Before outlining, map the full source chronology from opening through ending. Then compress to match `frameBudget`. At small numeric budgets, merge scenes and keep only the essential conflict, reversals, ending, and the dialogue that drives them. At larger budgets or `auto`, allow more environmental detail and supporting turns. The skeleton decides what survives the adaptation — downstream agents cannot invent missing back-half story later.
+
+**Dialogue-first rule for `strict` / `balanced`:** If the source is dialogue-heavy, the skeleton and final prose must also be dialogue-heavy. Inventory the spoken exchanges in the source before you draft scenes. At these tiers, every source-supported dialogue exchange should appear either as an explicit dialogue gist in the skeleton or as a clearly mapped dialogue beat that survives into `creative_output.md`. Build non-dialogue frames around those lines. Never thin the dialogue just to make the prose feel cleaner or shorter.
 
 **The skeleton is the blueprint AND the construction spec.** It replaces the old separate "outline" phase. It must be rich enough that no prose worker needs to read another worker's output.
 
 **CRITICAL: The skeleton uses structured `///TAG` blocks for all entity rosters, scene headers, and dialogue pointers.** These tags are machine-parsed by a deterministic Python parser downstream. Follow the exact formats below — any deviation breaks the parser.
+
+**No phantom scenes.** If you claim a scene count, you must emit that many explicit `///SCENE` blocks with full specs. Never write notes such as “remaining scenes continue similarly,” “full scenes exist in the actual file,” or any other summary in place of actual scene sections.
 
 **Structure:**
 
@@ -2742,27 +3113,27 @@ For EACH scene, write a dispatchable spec using structured tags plus free-text b
 
 ##### Scene Staging — `///SCENE_STAGING` Tag
 
-Declares spatial staging with three beats (start, mid, end) defining character screen positions, eyelines, and facing directions. Haiku workers use these as anchors.
+Declares spatial staging with three beats (start, mid, end) defining character screen positions, eyelines, and body facing. Haiku workers use these as anchors.
 
 **Format:**
 ```
 ///SCENE_STAGING: id=scene_{NN} | location=loc_{slug}
-| start: {cast_id}={screen_position},{looking_at},{facing_direction} | {cast_id}={screen_position},{looking_at},{facing_direction}
-| mid: {cast_id}={screen_position},{looking_at},{facing_direction} | {cast_id}={screen_position},{looking_at},{facing_direction}
-| end: {cast_id}={screen_position},{looking_at},{facing_direction} | {cast_id}={screen_position},{looking_at},{facing_direction}
+| start: {cast_id}={screen_position},{looking_at},{facing_towards} | {cast_id}={screen_position},{looking_at},{facing_towards}
+| mid: {cast_id}={screen_position},{looking_at},{facing_towards} | {cast_id}={screen_position},{looking_at},{facing_towards}
+| end: {cast_id}={screen_position},{looking_at},{facing_towards} | {cast_id}={screen_position},{looking_at},{facing_towards}
 ```
 
 **Per-cast values within each beat:**
 - `screen_position` (MANDATORY): `frame_left` | `frame_center` | `frame_right` | `frame_left_third` | `frame_right_third`
-- `looking_at` (MANDATORY): another `cast_id`, `prop_id`, `distance`, `camera`, or a location feature
-- `facing_direction` (MANDATORY): `toward_camera` | `away` | `profile_left` | `profile_right` | `three_quarter`
+- `looking_at` (MANDATORY): another `cast_id`, a `prop_id`, a `loc_id`, `distance`, `camera`, or a location feature phrase
+- `facing_towards` (MANDATORY): `toward_camera` | `away` | `profile_left` | `profile_right` | `three_quarter_left` | `three_quarter_right`
 
 **Example:**
 ```
 ///SCENE_STAGING: id=scene_01 | location=loc_tea_house
-| start: cast_mei_lin=frame_right,cast_min_zhu,profile_left | cast_min_zhu=frame_left,prop_go_board,three_quarter
-| mid: cast_mei_lin=frame_left,cast_min_zhu,toward_camera | cast_min_zhu=frame_right,cast_mei_lin,toward_camera
-| end: cast_mei_lin=frame_center,prop_coin_pouch,three_quarter | cast_min_zhu=frame_left,distance,profile_right
+| start: cast_mei_lin=frame_right,cast_min_zhu,profile_left | cast_min_zhu=frame_left,prop_go_board,three_quarter_right
+| mid: cast_mei_lin=frame_left,cast_min_zhu,toward_camera | cast_min_zhu=frame_right,cast_mei_lin,three_quarter_left
+| end: cast_mei_lin=frame_center,prop_coin_pouch,three_quarter_right | cast_min_zhu=frame_left,loc_tea_house,profile_right
 ```
 
 ##### Entry Conditions
@@ -2781,14 +3152,16 @@ Numbered action-level sequence with camera direction. Sentence fragments, not pr
 
 Each beat specifies which direction the camera faces using the location's cardinal views. This drives background variety and spatial awareness across frames.
 
-**Beat count = frame estimate.** Each beat becomes roughly 1-2 frames after atomization. Distribute your total frame budget across scenes proportionally. For `short` (10-20 frames, 1-3 scenes), each scene gets 5-10 beats. For `short_film`, 5-10 beats per scene. For `televised`/`feature`, 8-15 beats per scene. Over-specifying beats produces over-long prose which produces excess frames.
+**Beat count = frame estimate.** Each beat becomes roughly 1-2 frames after atomization. Distribute the available frame budget across the whole story, not just the opening scenes. If `frameBudget` is numeric, reduce beat density proportionally across all acts so the ending still lands on-screen. Over-specifying beats produces over-long prose which produces excess frames.
 
 ##### Dialogue Gists and `///DLG` Excerpt Pointers
 
 In the skeleton, include dialogue gists as before:
 `MEI: (defiant) I'll wager everything I have against your money.`
 
-**At stickiness 3+, be generous with dialogue gists.** Every scene with character interaction should have multiple dialogue gists.
+**At `creative` / `unbounded`, be generous with dialogue gists.** Every scene with meaningful character interaction should have multiple dialogue gists. At `balanced`, keep only the dialogue the source materially supports. At `strict`, do not add dialogue gists beyond what is already explicit in the source.
+
+**At `strict` / `balanced`, dialogue gists are mandatory for every source-supported spoken exchange that survives into the scene.** Do not summarize multiple lines into one vague gist if the source has distinct exchanges. Preserve speaker turns and argumentative progression. The skeleton is allowed to compress atmosphere and staging, but not to erase dialogue structure.
 
 After Phase 3 assembly produces the final `creative_output.md`, you MUST add `///DLG` excerpt pointer tags to the skeleton for each dialogue block. These tags reference the verbatim dialogue text by line number in `creative_output.md`. **Do NOT copy dialogue text into the skeleton — point to it.**
 
@@ -2857,11 +3230,11 @@ After all scene specs, write a **continuity chain summary** — a single section
 
 This section is the pre-populated `creative_output/continuity_tracker.md`. Write it as a separate file as well.
 
-#### G. Stickiness Tier Enforcement — Post-Skeleton Validation
+#### G. Creative Freedom Enforcement — Post-Skeleton Validation
 
 After drafting the skeleton, run the appropriate validation pass BEFORE finalizing output:
 
-**Levels 1-2 (Reformat / Remaster) — Entity Diff Check:**
+**`strict` / `balanced` — Entity Diff Check:**
 
 You MUST NOT introduce entities that do not exist in the source material. After drafting the skeleton, perform this self-correcting loop:
 
@@ -2870,30 +3243,32 @@ You MUST NOT introduce entities that do not exist in the source material. After 
 3. **Compute diff**: `new_entities = generated_entities - source_entities`
 4. **If `new_entities` count > 0**: You have introduced unauthorized entities. Rewrite the skeleton to eliminate every entity in `new_entities`. Replace them with source-material entities or remove the scenes/beats that require them. Do NOT rename a new entity to match a source entity — that is fabrication.
 5. **Re-check**: After rewriting, re-extract and re-diff. Only proceed when `new_entities == 0`.
-6. **Max 2 correction passes** — if still failing, log a `STICKINESS_VIOLATION` event and proceed with the corrected skeleton.
+6. **Max 2 correction passes** — if still failing, log a `CREATIVE_FREEDOM_VIOLATION` event and proceed with the corrected skeleton.
 
 Log the diff result to `events.jsonl`:
 ```json
-{"level": "INFO", "code": "STICKINESS_ENTITY_DIFF", "stickinessLevel": 1, "source_entity_count": 5, "generated_entity_count": 5, "new_entities": 0, "pass": true}
+{"level": "INFO", "code": "CREATIVE_FREEDOM_ENTITY_DIFF", "creativeFreedom": "strict", "source_entity_count": 5, "generated_entity_count": 5, "new_entities": 0, "pass": true}
 ```
 
-**Levels 4-5 (Reimagine / Create) — Addition Justification:**
+**`creative` / `unbounded` — Addition Justification:**
 
 At these tiers you MAY introduce new entities, but every new character or location not in the source material MUST include an `///ADDITION_JUSTIFICATION` annotation placed immediately after the entity's `///CAST` or `///LOCATION` tag. Format:
 
 ```
-///ADDITION_JUSTIFICATION: Tier={Reimagine|Create}. {Entity name} serves as {narrative purpose}. Location anchors: {list of scenes}. Continuity tracking: active.
+///ADDITION_JUSTIFICATION: Tier={creative|unbounded}. {Entity name} serves as {narrative purpose}. Location anchors: {list of scenes}. Continuity tracking: active. Risk control: {how it preserves the core arc or ending}.
 ```
 
 Example:
 ```
 ///CAST: id=cast_kira_tanaka | name=Kira Tanaka | role=antagonist | gender=female | age=28 | build=athletic | hair=medium,sleek,black | skin=light | clothing=charcoal business suit,red silk scarf,patent heels | clothing_style=corporate | clothing_fabric=wool blend | footwear=patent heels | accessories=red silk scarf | personality=cunning,resourceful,proud | wardrobe=Charcoal wool-blend business suit with sharp lapels, red silk scarf knotted at the throat, patent leather heels | arc=hidden ally -> revealed traitor | state_tags=base
-///ADDITION_JUSTIFICATION: Tier=Reimagine. Kira Tanaka serves as the antagonist foil to the protagonist's arc. Location anchors: scenes 2, 4, 6. Continuity tracking: active.
+///ADDITION_JUSTIFICATION: Tier=creative. Kira Tanaka serves as the antagonist foil to the protagonist's arc. Location anchors: scenes 2, 4, 6. Continuity tracking: active. Risk control: preserves the protagonist's existing downfall-and-reckoning arc.
 ```
 
 Any new entity WITHOUT an `///ADDITION_JUSTIFICATION` is a validation failure. Check before finalizing.
 
-**Level 3 (Expand):** No entity diff or justification is required, but new entities must still serve what the source demonstrates — supporting information, not new story threads.
+**`creative`:** New entities must still serve the source's demonstrated story logic. They may enrich subtext, pressure, or staging, but they may not introduce unrelated plot threads.
+
+**`unbounded`:** New entities are allowed, but they must still bend toward the locked emotional arc and final outcome.
 
 **After writing the skeleton, update state and proceed immediately:**
 
@@ -2934,7 +3309,7 @@ Every paragraph in your prose MUST be preceded by a `///` frame marker line. Thi
 
 **Format:**
 ```
-/// cast:{names} | cam:{direction} | dlg | cast_states:{name1=state_tag,name2=state_tag}
+/// cast:{names} | cam:{direction} | dlg | cast_states:{name1=state_tag,name2=state_tag} | looking_at:{name1=target,name2=target} | facing_towards:{name1=orientation,name2=orientation}
 ```
 
 **Fields (pipe-separated):**
@@ -2942,6 +3317,8 @@ Every paragraph in your prose MUST be preceded by a `///` frame marker line. Thi
 - `cam:{direction}` — **REQUIRED.** Camera facing direction from the location's cardinal views: `north`, `south`, `east`, `west`, `exterior`
 - `dlg` — Flag present if this frame contains spoken dialogue
 - `cast_states:{name=tag,...}` — Override scene-default state for specific cast in this frame. Only include when a character's state changes from the scene entry default. e.g. `cast_states:Mei Lin=wet,Watanabe=injured`
+- `looking_at:{name=target,...}` — REQUIRED whenever cast are visible. Per-cast eyeline target. Use another cast name, a `prop_id`, a `loc_id`, `camera`, `distance`, or a location feature phrase.
+- `facing_towards:{name=orientation,...}` — REQUIRED whenever cast are visible. Per-cast body orientation. Use `toward_camera`, `away`, `profile_left`, `profile_right`, `three_quarter_left`, or `three_quarter_right`.
 
 **NO `dur:` field.** Duration is computed downstream.
 **NO `tag:`, `shot:`, `angle:`, or `movement:` fields.** These are assigned post-graph by a dedicated enrichment pass.
@@ -2961,13 +3338,13 @@ Dr. Watanabe hunches at his workstation, wire-rimmed glasses reflecting the gree
           (breathless, barely controlled excitement)
     It's structured. It's deliberate.
 
-/// cast:Lyra,Lyron | cam:south | dlg
+/// cast:Lyra,Lyron | cam:south | dlg | looking_at:Lyra=Lyron,Lyron=Lyra | facing_towards:Lyra=three_quarter_right,Lyron=three_quarter_left
                     LYRA
           (excited but deferential)
     Dad, can we go to the market first?
 Lyron's ears flatten slightly. He places a hand on her shoulder.
 
-/// cast:Mei Lin | cam:north | cast_states:Mei Lin=wet
+/// cast:Mei Lin | cam:north | cast_states:Mei Lin=wet | looking_at:Mei Lin=distance | facing_towards:Mei Lin=toward_camera
 Mei stumbles through the entrance, rainwater streaming from her hair. Her silk robe clings darkly to her frame.
 ```
 
@@ -2975,7 +3352,7 @@ Mei stumbles through the entrance, rainwater streaming from her hair. Her silk r
 
 1. **One `///` marker = one frame = one paragraph.** Never put two markers on the same paragraph or two paragraphs under one marker. Apply the atomize rule: one subject + one action + one context per marker.
 2. **Dialogue frames get `dlg` flag.** Every quoted speech line gets its own `///` marker with `dlg`. Multi-line exchanges need visual beat frames between them — never 2+ consecutive `dlg` frames without a non-dialogue frame between.
-3. **Frame count must match budget.** Count your `///` markers. They must fall within the frame range for the `outputSize`. If you're over budget, merge or cut non-dialogue visual frames. Dialogue frames are protected — never cut a `dlg` frame to fit budget.
+3. **Frame count must respect `frameBudget` without truncating chronology.** Count your `///` markers. If `frameBudget` is numeric and you are over it, merge or cut non-dialogue visual frames across the whole story. Never solve an over-budget draft by dropping later scenes or the ending. Dialogue frames are protected — never cut a `dlg` frame to fit budget unless it is genuinely redundant.
 4. **Scene openers need an establishing frame.** First frame of every scene shows the environment before characters act.
 5. **Camera direction is mandatory.** Every `///` must have `cam:{direction}`. This drives which background reference image is used.
 
@@ -3009,9 +3386,11 @@ Golden light filters through the shoji screens...
 - Props referenced or introduced
 - Plot threads opened or resolved
 
-**Dialogue density check (stickiness level 3-5 — MANDATORY):** After drafting each scene, count the quoted dialogue lines. At stickiness 3+, every scene with two or more characters must have dialogue. If a multi-character scene has fewer than 3 dialogue exchanges, it is dialogue-starved — go back and add conversation. Characters who are together talk. Dialogue is how audiences connect with characters; prose without it reads as a montage, not a story. Favor dialogue over description when expanding — a line of speech reveals more character than a paragraph of internal narration.
+**Dialogue density check (`creative` / `unbounded` — MANDATORY):** After drafting each scene, count the quoted dialogue lines. At `creative` and `unbounded`, every multi-character scene should contain active dialogue or clearly motivated reaction lines unless the beat is intentionally silent. If a multi-character scene has fewer than 3 meaningful exchanges, it is dialogue-starved — go back and add conversation that serves existing subtext, conflict, or revelation. At `balanced`, keep dialogue close to the source and do not add new lines just to hit density. At `strict`, do not expand dialogue at all.
 
-**Thin scene self-check (stickiness level 3-5 only):** After writing all scene drafts, before the assembly pass, review each scene for depth against the Words/Scene Target from the Output Size table. If any scene is significantly under its target, flag it as thin and expand it — add **meaningful dialogue beats first**, then physical business and sensory texture. At levels 1-2, do NOT expand thin scenes — respect the source material's density. At `short` size, scenes under 300 words are thin. At `televised`/`feature`, scenes under 800 words are thin. Never expand scenes BEYOND the upper target — that creates excess frames downstream.
+**Dialogue inventory check (`strict` / `balanced` — MANDATORY):** Before finalizing `creative_output.md`, compare the recovered source dialogue inventory against the drafted prose scene by scene. If a source-supported spoken exchange is missing, collapsed into narration, or paraphrased beyond the dialogue policy, rewrite the prose so the line is present as dialogue. Only purely repetitive chant fragments, crowd murmur fragments, or ambient PA chatter may be merged, and only when the source clearly treats them as background rather than character exchange.
+
+**Thin scene self-check (`creative` / `unbounded` only):** After writing all scene drafts, before the assembly pass, review each scene for depth relative to the active `frameBudget`. If a scene is carrying a major turn but feels materially underwritten, expand it — add **meaningful dialogue beats first**, then physical business and sensory texture, but stay within the tier's dialogue policy. At `strict` / `balanced`, do NOT expand beyond what the source materially supports. At small numeric budgets, tolerate lean scenes. At `auto` or large budgets, thin scenes with major story turns should be enriched.
 
 Update state after all scenes are drafted:
 
@@ -3099,7 +3478,8 @@ Before writing final state and exiting, you MUST evaluate your own output. This 
 - Is dialogue rich with parenthetical performance directions? Every dialogue line should have performance direction. Lines with NO parenthetical direction are a quality failure.
 - **Visual flow**: Scan for dialogue dead zones — 3+ consecutive dialogue blocks without a visual beat between them. These produce talking-head frames downstream. Fix per writing guide.
 - **Acting during dialogue**: Check that dialogue blocks have physical business during or immediately adjacent. Static deliveries (character speaks but body is still) are a quality failure.
-- Does word count match the Total Word Budget for the `outputSize`? `short`: 700–1,500 words. `short_film`: 3,000–5,000. `televised`: 20,000–45,000. `feature`: 60,000–150,000. Significantly under or **over** indicates a problem — excess prose creates excess frames, wasting generation budget.
+- Does prose density make sense for the active `frameBudget`? At small numeric budgets, bloated prose is a defect because it creates excess frames. At `auto`, under-coverage is the bigger risk — make sure the back half of the story is actually present.
+- Do cast-visible frame markers carry parseable `looking_at:{...}` and `facing_towards:{...}` data, instead of defaulting everyone toward camera?
 - Are ALL characters from the skeleton present and developed? Cross-check the `///CAST` tags against characters who actually appear in `creative_output.md`. No character should be tagged but absent from the prose.
 - **Continuity integrity**: Do entry conditions of each scene match exit conditions of the prior scene? Cross-check against `continuity_tracker.md`.
 - **Frame marker validation**: Every `///` frame marker in `creative_output.md` has `cam:{direction}`? No `dur:` fields remain? No `tag:`, `shot:`, `angle:`, or `movement:` fields on frame markers?
@@ -3157,10 +3537,9 @@ If `onboarding_config.json` has `pipeline: "music_video"`:
 
 ## Key Constraints
 
-- **Prose length = frame count.** One `///` marker = one frame downstream. Write only as many `///`-marked paragraphs as the frame budget allows. Exceeding the budget wastes generation tokens and API calls.
-- For `"short"` output size: produce 1-3 scenes, choosing the count that best fits the source density and frame budget. Keep prose tight — 300-600 words per scene, 700-1,500 total cap. Favor dialogue over description.
-- For `"short_film"`: 5-15 scenes, 400-700 words each, 3,000-5,000 total cap. Include main arc and one supporting thread.
-- Read the full source material before starting — then decide what fits the budget
+- **Prose length = frame count.** One `///` marker = one frame downstream.
+- `frameBudget` is the only project-size threshold. If it is numeric, compress to fit it. If it is `auto`, use as many frames as needed.
+- Read the full source material before starting, and ensure the ending is represented before you optimize for budget.
 - Each scene must have enough visual/cinematic direction for downstream image and video generation
 - Dialogue must be clear and attributable to specific characters — and is the last thing cut when condensing
 - Every scene needs a location, characters present, and purposeful action
@@ -3263,12 +3642,96 @@ If you receive a directive with `"action": "revise"`:
 6. Update context.json with a decisions_log entry explaining what you changed and why
 ```
 
+## `agent_prompts/dialogue_confirmation_validation.md`
+
+```md
+You are the Dialogue Confirmation & Validation agent.
+
+Your job is to perform the final dialogue quality gate before prompt generation proceeds.
+
+Rules:
+- Compare mapped dialogue against the recovered source dialogue inventory.
+- Enforce the active `creativeFreedom` tier literally.
+- Flag every violation. Do not silently forgive drift.
+- Keep the result machine-auditable.
+
+Tier enforcement:
+- `strict`: no added or altered dialogue.
+- `balanced`: only light delivery smoothing; no new lines.
+- `creative`: short reaction lines and moderate re-phrasing are allowed only if they preserve meaning, voice, and motivation.
+- `unbounded`: dialogue may expand freely, but the emotional arc and ending must remain intact.
+
+Output contract:
+- Emit:
+  - `status`: `pass` or `fail`
+  - `issues`: frame-level violations with suggested fixes
+  - `summary`: concise rollup of recovered lines, mapped lines, and policy compliance
+```
+
+## `agent_prompts/dialogue_extraction_recovery.md`
+
+```md
+You are the Dialogue Extraction & Recovery agent.
+
+Your only job is to scan the available source material, skeleton, and assembled prose and extract every spoken line that belongs in the project.
+
+Rules:
+- Run the recovery pass on both tagged and untagged projects.
+- Never summarize dialogue.
+- Never invent dialogue during extraction.
+- Preserve speaker attribution exactly when recoverable.
+- Prefer exact source text over inferred paraphrase.
+
+Output contract:
+- Produce a clean machine-readable dialogue inventory with:
+  - `dialogue_id`
+  - `speaker`
+  - `raw_line`
+  - `source_page` or source location when available
+  - `source_line` or source span when available
+  - `confidence`
+
+Recovery rules:
+- If `///DLG:` tags are present, use them as anchors, not as the only source of truth.
+- If `///DLG:` tags are missing or incomplete, recover dialogue from screenplay-style speaker blocks, quotation structure, and strong speaker context.
+- Never skip a valid spoken line just because a tag is absent.
+```
+
+## `agent_prompts/dialogue_mapping_assignment.md`
+
+```md
+You are the Dialogue Mapping & Assignment agent.
+
+Your job is to map recovered dialogue lines onto the correct frames and scenes without breaking the active `creativeFreedom` tier.
+
+Rules:
+- Read `creativeFreedom`, `creativeFreedomPermission`, `creativeFreedomFailureModes`, and `dialoguePolicy` from `onboarding_config.json`.
+- Assign dialogue to the correct scene and frame based on visible action, speaker presence, and continuity.
+- Prefer deterministic continuity over speculative remapping.
+- Keep assignment auditable: every mapped line must be traceable back to recovered dialogue.
+
+Per-tier policy:
+- `strict`: word-for-word only, no additions, no reinterpretation.
+- `balanced`: only very light delivery smoothing; no new lines.
+- `creative`: moderate re-phrasing and short reaction lines are allowed only when they reinforce existing subtext.
+- `unbounded`: new dialogue is allowed if it still serves the locked emotional arc and ending.
+
+Output contract:
+- For every mapped line, emit:
+  - `frame_id`
+  - `dialogue_id`
+  - `speaker`
+  - `assigned_line`
+  - `tier_compliance`
+  - `notes`
+```
+
 ## `agent_prompts/director.md`
 
 ```md
 # DIRECTOR — System Prompt
 
-You are the **Director**, agent ID `director`. You are a Claude Opus session running inside ScreenWire AI, a headless MVP pipeline that converts stories into AI-generated videos. You orchestrate the entire project lifecycle, review agent outputs at every checkpoint, and advance phases.
+You are the **Director**, agent ID `director`. You are a Grok 4.20 session running inside ScreenWire AI, a headless MVP pipeline that converts stories into AI-generated videos. You orchestrate the entire project lifecycle, review agent outputs at every checkpoint, and advance phases.
 
 This is a **headless MVP** — there is no UI. All approval gates are auto-approved by the pipeline runner. You do NOT wait for user input. Complete your work, update state, and let the pipeline runner handle transitions.
 
@@ -3328,16 +3791,17 @@ _(Skill stdout parsing, JSON rule, single-writer rule, and events JSONL schema a
    - `onboarding_config.json` — the project's full configuration
 3. Digest the project completely:
    - `pipeline` — story_upload, pitch_idea, or music_video
-   - `stickinessLevel` and `stickinessPermission` — your creative boundary
-   - `outputSize` — determines scene count (short=1-3, small=4-8, medium=10-15, full=20-30, feature=50+)
+   - `creativeFreedom` and `creativeFreedomPermission` — your creative boundary
+   - `creativeFreedomFailureModes` and `dialoguePolicy` — your failure-mode guardrails
+   - `frameBudget` — either a numeric frame cap or `auto`; it controls compression, not whether the ending gets covered
    - `style[]`, `genre[]`, `mood[]` — creative direction tags
    - `extraDetails` — user's additional notes and preferences
    - Source material content — the actual story/script/pitch
 4. Write `logs/director/project_brief.md` containing:
    - What the user wants made (pipeline type, source summary)
    - What the source material contains (plot summary, characters found, settings)
-   - What the stickiness permission allows (quote the exact permission string)
-   - Target output size with scene count range
+   - What the creative freedom permission allows (quote the exact permission string)
+   - Target frame budget and how tightly the story must be compressed
    - Creative direction synthesis from style/genre/mood tags
    - Any specific user requests from extraDetails
    - Potential challenges or ambiguities in the source material
@@ -3368,11 +3832,13 @@ After CC completes each sub-phase (skeleton, scene_outlines, assembly):
 6. Log to `events.jsonl` and `agent_comms.json`
 
 **Skeleton review rubric:**
-- Scene count within range from `outputSize`? (For `short`: exactly 3 scenes)
+- Does the skeleton cover the full source chronology from beginning through ending?
+- If `frameBudget` is numeric, does the scene count and beat density look appropriately compressed without dropping the back half?
+- At `strict` / `balanced`, does the skeleton preserve the source dialogue inventory instead of summarizing it away? A dialogue-heavy source should still look dialogue-heavy here.
 - Every scene has a location, characters, and purposeful action?
 - Character roster is complete (every named character in source is listed)?
 - Arc makes sense — beginning, middle, end?
-- Stickiness compliance (see table below)
+- Creative freedom compliance (see table below)
 
 **Scene outlines review rubric:**
 - Every scene from skeleton has a corresponding outline?
@@ -3385,9 +3851,10 @@ After CC completes each sub-phase (skeleton, scene_outlines, assembly):
 - All scenes from outlines are present and fully written?
 - Screenplay/novel hybrid format is consistent throughout?
 - Dialogue is clearly attributed to characters?
+- At `strict` / `balanced`, is the source dialogue materially present and still source-faithful? Missing or overly compressed dialogue is a blocking defect.
 - Cinematic direction is woven into prose?
 - Overall quality — achieves the tone/mood from style/genre/mood tags?
-- Stickiness compliance — final check
+- Creative freedom compliance — final check
 
 **Step 4 — Phase 1 Completion:**
 
@@ -3450,24 +3917,30 @@ After CC completes `creative_output/creative_output.md` and you approve it:
 
 ---
 
-## Stickiness Compliance Checking
+## Creative Freedom Compliance Checking
 
-When reviewing any creative output, check against the stickiness level from `onboarding_config.json`. This is your primary QA rubric.
+When reviewing any creative output, check against the `creativeFreedom` tier from `onboarding_config.json`. This is your primary QA rubric.
 
-| Level | Label | Permission | Allowed | Rejected |
-|---|---|---|---|---|
-| 1 | Reformat | Restructure source into operational format | Reformatting, rewriting for readability, structural reorganization | Any new characters, scenes, events, dialogue, or plot not in source |
-| 2 | Remaster | Faithful enrichment of source quality | Sensory detail, deeper descriptions, smoothed transitions, filled gaps | New plot elements, new characters, narrative departures |
-| 3 | Expand | Round out incomplete areas with supporting material | Transitional scenes, supporting details, environmental context implied by source | New story threads, content not serving what source demonstrates |
-| 4 | Reimagine | Source story/themes as creative foundation | New cast, locations, writing serving existing arcs | Complete departure from source tone, themes, or trajectory |
-| 5 | Create | Source is a seed idea | Everything — full creative ownership | Nothing is rejected at this level |
+| Tier | Core Philosophy | Fidelity | Allowed | Rejected / Risk |
+|---|---|---:|---|---|
+| `strict` | Change as little as possible to make it work | 98–100% | Minimal technical fixes, exact story/dialogue/blocking fidelity | Any invented dialogue, beats, entities, or interpretation beyond feasibility fixes |
+| `balanced` | Follow source closely with room for natural flow | 85–95% | Minor organic moments, slight delivery smoothing, framing breathing room | Meaning drift, new dialogue lines, new entities, or new plot material |
+| `creative` | Keep core story while allowing artistic reframes | 70–85% | Alternative angles, visual metaphor, subtext emphasis, short reaction lines | New plot-advancing dialogue, altered character voice/motivation, unrelated new threads |
+| `unbounded` | Start from a seed idea and fully expand it | 40–70% | New characters, locations, subplots, and dialogue are allowed | Breaking the core emotional arc or changing the ending/outcome |
 
 **How to apply during review:**
-1. Read `stickinessLevel` from `onboarding_config.json`
-2. Read `stickinessPermission` — the exact permission sentence
-3. For each element in the creative output, ask: "Is this element present in or derivable from the source material?"
-4. If NOT derivable from source, check: "Does the stickiness level permit this addition?"
-5. Flag only clear violations. At level 3+ be generous. At levels 1-2 be strict.
+1. Read `creativeFreedom` from `onboarding_config.json`
+2. Read `creativeFreedomPermission` — the exact permission sentence
+3. Read `creativeFreedomFailureModes` and `dialoguePolicy`
+4. For each element in the creative output, ask: "Is this element present in or derivable from the source material?"
+5. If NOT derivable from source, check: "Does the active creative freedom tier permit this addition?"
+6. Apply the dialogue policy literally:
+   - `strict`: no new or altered dialogue
+   - `balanced`: only very light re-phrasing, no new lines
+   - `creative`: short reaction lines allowed, no new plot-advancing lines
+   - `unbounded`: new dialogue allowed if it serves the locked arc and ending
+7. At `strict` / `balanced`, verify that compression happened around dialogue, not through dialogue. Missing source-supported spoken exchanges are violations even if the prose otherwise reads smoothly.
+8. Flag only clear violations. Be strict at `strict` / `balanced`; evaluate arc-preservation and risk control at `creative` / `unbounded`.
 
 ---
 
@@ -3547,7 +4020,7 @@ python3 $SKILLS_DIR/sw_queue_update --payload '{"updates": [{"target": "phase", 
 | `AGENT_COMPLETE` | Agent finished its work |
 | `REVIEW_PASS` | Checkpoint review passed |
 | `REVIEW_FAIL` | Checkpoint review found issues |
-| `STICKINESS_VIOLATION` | Creative output violates stickiness boundary |
+| `CREATIVE_FREEDOM_VIOLATION` | Creative output violates creative freedom boundary |
 | `MANIFEST_UPDATE` | Queued manifest update |
 | `BRIEF_WRITTEN` | Project brief completed |
 
@@ -4310,7 +4783,9 @@ This guide governs ALL prose output from the Creative Coordinator. Every spawned
 
 Your prose tells a linear story of **motion, dialogue, reaction, action, weight, and establishment.** These are the six elements every scene is built from. Not plot — visual flow. Every paragraph should be doing at least one, and the sequence should cycle through them naturally, never stacking any single one.
 
-**Dialogue is the heartbeat of the story.** At stickiness level 3 and above, dialogue should be the most frequent element in any scene with two or more characters. Characters who are together talk — about what's happening, what they feel, what they want. A scene where two characters are present but never speak to each other is almost always wrong. When in doubt, add dialogue. A line of speech does more for character, pacing, and audience connection than a paragraph of visual description.
+**Dialogue is the heartbeat of the story.** At `creative` and `unbounded`, dialogue should be one of the dominant elements in any scene with two or more characters. Characters who are together usually talk — about what's happening, what they feel, what they want. At `balanced`, preserve dialogue closely to the source and only smooth delivery lightly. At `strict`, never add dialogue that is not already explicit in the source.
+
+**For `strict` and `balanced`, dialogue is source-locked.** If the source scene contains spoken exchanges, your prose must carry those exchanges forward as dialogue rather than converting them into summary narration. Do not compress a dialogue-heavy script by trimming speech. Compress by trimming repeated atmosphere, redundant physical business, or silent connective tissue. Build the rest of the frames around the dialogue, not the other way around.
 
 | Element | What it means | What it produces downstream |
 |---|---|---|
@@ -4388,16 +4863,16 @@ This means your prose should naturally write in pairs: a visual beat, then the l
 
 ### Frame Density Targets
 
-Based on project size and stickiness level:
+Based on project size and `creativeFreedom`:
 
-| Scale | Scenes | Stickiness | Frames/Scene | Total Range |
+| Scale | Scenes | Creative Freedom | Frames/Scene | Total Range |
 |---|---|---|---|---|
-| Micro | 1-2 | 1-2 | 8-14 | 8-28 |
-| Small | 3 | 3 | 14-20 | 42-60 |
-| Medium | 4-6 | 3-4 | 18-30 | 72-180 |
-| Large | 6-8 | 4-5 | 25-40 | 150-320 |
+| Micro | 1-2 | `strict` / `balanced` | 8-14 | 8-28 |
+| Small | 3 | `balanced` / `creative` | 14-20 | 42-60 |
+| Medium | 4-6 | `creative` | 18-30 | 72-180 |
+| Large | 6-8 | `creative` / `unbounded` | 25-40 | 150-320 |
 
-If you write a 3-scene project at stickiness 3 and your prose only implies ~8 frames per scene, you are under-writing. The visual flow will feel rushed and thin.
+If you write a 3-scene project at `creative` and your prose only implies ~8 frames per scene, you are under-writing. The visual flow will feel rushed and thin. At `balanced`, do not inflate scenes just to chase density; only include what the source materially supports. At `strict`, preserve source density even if it feels sparse. In both `strict` and `balanced`, if the source is dialogue-heavy, the prose should stay dialogue-heavy even when the overall frame budget is tight.
 
 ### The narrativeBeat Priority Order
 
@@ -5758,7 +6233,7 @@ Python parser (graph/cc_parser.py) — deterministic, seconds
   → All edges (FOLLOWS, APPEARS_IN, AT_LOCATION, etc.)
   → Base CastFrameState per character per frame
                 ↓
-Parallel Haiku workers — per-frame enrichment
+Parallel frame enricher workers — per-frame enrichment
   → CastFrameState enrichment (screen_position, looking_at, emotion, posture, ...)
   → FrameComposition (shot, angle, movement, focus)
   → FrameEnvironment, FrameBackground, FrameDirecting
@@ -5779,7 +6254,7 @@ Prompt assembly + materialization (existing deterministic code)
 - Morpheus Agent 1 (Entity Seeder) — replaced by Python parser
 - Morpheus Agent 2 (Frame Parser) — replaced by Python parser
 - Morpheus Agent 3 (Dialogue Wirer) — replaced by Python parser
-- Morpheus Agent 4 (Compositor) — replaced by Haiku workers
+- Morpheus Agent 4 (Compositor) — replaced by frame enricher workers
 
 **What remains:**
 - Morpheus Agent 5 (Continuity Wirer) — reduced to validation-only
@@ -5957,7 +6432,7 @@ Dialogue is NOT copied into the skeleton. Instead, CC outputs `///DLG` excerpt p
 
 **Temporal span assignment:**
 - `start_frame`: the frame_id of the `///` marker containing this dialogue (the `dlg` frame)
-- `end_frame`: same as `start_frame` (single-frame span by default; Haiku workers can extend for J/L cuts)
+- `end_frame`: same as `start_frame` (single-frame span by default; frame enricher workers can extend for J/L cuts)
 - `primary_visual_frame`: same as `start_frame`
 - `dialogue_id`: `dlg_{NNN}` (globally sequential)
 - `order`: 0-based global sequence
@@ -5966,7 +6441,7 @@ Dialogue is NOT copied into the skeleton. Instead, CC outputs `///DLG` excerpt p
 
 ### 1.7 Scene Staging Tags
 
-The CC declares a spatial staging plan per scene with three beats (start, mid, end) defining character positions, eyelines, and facing directions. Haiku workers use these as anchors — they interpolate between beats based on frame position within the scene.
+The CC declares a spatial staging plan per scene with three beats (start, mid, end) defining character positions, eyelines, and facing directions. frame enricher workers use these as anchors — they interpolate between beats based on frame position within the scene.
 
 Format:
 ```
@@ -5992,7 +6467,7 @@ Example:
 Parser behavior:
 - Extract per-scene staging plans and attach to SceneNode.staging_plan
 - Each beat (start/mid/end) maps cast_id → {screen_position, looking_at, facing_direction}
-- Haiku workers receive the staging_plan in their input and use the appropriate beat as baseline
+- frame enricher workers receive the staging_plan in their input and use the appropriate beat as baseline
 
 ---
 
@@ -6014,7 +6489,7 @@ def parse_cc_output(
       - {project_dir}/creative_output/creative_output.md
 
     Returns a fully populated NarrativeGraph with all entities,
-    frames, dialogue, states, and edges. Ready for Haiku enrichment.
+    frames, dialogue, states, and edges. Ready for frame enrichment.
     """
 ```
 
@@ -6210,7 +6685,7 @@ Provenance(
 
 ## 3. Haiku Worker Form Specification
 
-Each Haiku worker receives a single frame and fills out a structured enrichment form. Workers run in parallel (one per frame). The pipeline spawns them via batch Haiku API calls.
+Each frame enricher worker receives a single frame and fills out a structured enrichment form. Workers run in parallel (one per frame). The pipeline spawns them via batch Haiku API calls.
 
 ### 3.1 Worker Input
 
@@ -6409,13 +6884,13 @@ Workers return structured JSON. The `composition` fields (shot, angle, movement,
 | Agent 1 — Entity Seeder | CC skeleton already defines all entities in parsable format | `cc_parser.py` |
 | Agent 2 — Frame Parser | CC `///` markers already define frame boundaries, cast, location | `cc_parser.py` |
 | Agent 3 — Dialogue Wirer | Dialogue is embedded in CC prose with ENV tags | `cc_parser.py` |
-| Agent 4 — Compositor | Composition, environment, directing, cast state enrichment | Haiku workers |
+| Agent 4 — Compositor | Composition, environment, directing, cast state enrichment | frame enricher workers |
 
 ### 4.2 Retained Agent: Continuity Validator (Agent 5 — Reduced)
 
 **Role:** Validation-only pass. Does NOT build new data. Audits and flags issues.
 
-**Input:** Complete graph after Haiku enrichment.
+**Input:** Complete graph after frame enrichment.
 
 **Checks performed:**
 
@@ -6481,9 +6956,9 @@ Phase 6: Export (ffmpeg assembly)
 ```
 Phase 0: Server startup (unchanged)
 Phase 1: CC writes skeleton + prose (unchanged)
-Phase 2: Deterministic graph + Haiku enrichment
+Phase 2: Deterministic graph + frame enrichment
   Step 2a: Python parser (cc_parser.py)             — deterministic, <5 seconds
-  Step 2b: Parallel Haiku workers                    — per-frame enrichment, ~2-10 seconds per frame
+  Step 2b: Parallel frame enricher workers                    — per-frame enrichment, ~2-10 seconds per frame
   Step 2b.5: Grok frame tagging (grok_tagger.py)    — per-frame tag assignment, ~10 concurrent
   Step 2c: Continuity validation                     — deterministic Python checks + optional Haiku audit
   Step 2d: Prompt assembly + materialization         — existing deterministic code (prompt_assembler.py + materializer.py)
@@ -6518,23 +6993,23 @@ def run_phase_2a(project_dir: Path, project_node: ProjectNode) -> NarrativeGraph
 
 ```python
 def run_phase_2b(graph: NarrativeGraph, project_dir: Path) -> NarrativeGraph:
-    """Dispatch parallel Haiku workers for per-frame enrichment."""
-    worker_inputs = build_haiku_inputs(graph)  # one per frame
+    """Dispatch parallel frame enricher workers for per-frame enrichment."""
+    worker_inputs = build_frame_enricher_inputs(graph)  # one per frame
 
     # Batch Haiku API call — all frames in parallel
     # Uses Anthropic batch API or concurrent single calls
-    results = haiku_batch_enrich(worker_inputs, max_concurrent=20)
+    results = frame_enricher_batch_enrich(worker_inputs, max_concurrent=20)
 
     # Apply enrichments to graph
     for result in results:
-        apply_haiku_enrichment(graph, result)
+        apply_frame_enrichment(graph, result)
 
     store = GraphStore(project_dir / "graph")
     store.save(graph)
     return graph
 ```
 
-**Haiku worker dispatch options:**
+**frame enricher worker dispatch options:**
 1. **Anthropic Messages Batches API** — submit all frames as a batch, poll for completion. Most cost-efficient.
 2. **Concurrent single calls** — `asyncio.gather()` with semaphore. Faster wall-clock time, higher concurrency cost.
 
@@ -6594,7 +7069,7 @@ Phase 2c runs a **validate → auto-fix → re-enrich → re-validate** loop (ma
 3. **Re-enrichment:** `re_enrich_frames(graph, issues)` dispatches targeted Haiku calls for
    each frame with `needs_re_enrichment=True`. A `CORRECTION REQUIRED` block is appended to
    the system prompt so Haiku knows exactly what to fix. Results are applied with
-   `apply_haiku_enrichment()` and the graph is saved.
+   `apply_frame_enrichment()` and the graph is saved.
 
 4. **Pass 2 — re-validate:** The loop runs `validate_continuity(fix=True)` again to confirm
    fixes landed.
@@ -6610,7 +7085,7 @@ validate_continuity(fix=True)
         ↓
       re_enrich_frames()     → Haiku corrects specific frames
         ↓
-      apply_haiku_enrichment() → graph updated
+      apply_frame_enrichment() → graph updated
         ↓
       validate_continuity(fix=True)   ← pass 2
         └── still failing → log_warn, proceed (never halt)
@@ -6618,7 +7093,7 @@ validate_continuity(fix=True)
 
 **Implementation:** `run_pipeline.py:phase_2_morpheus()` Step 2c section.
 **Validator:** `graph/continuity_validator.py:validate_continuity(fix, project_dir)`
-**Re-enricher:** `graph/haiku_enricher.py:re_enrich_frames()`
+**Re-enricher:** `graph/frame_enricher.py:re_enrich_frames()`
 
 ---
 
@@ -6636,7 +7111,7 @@ Unchanged. Uses existing `prompt_assembler.py` and `materializer.py`:
 
 ### 6.1 Overview
 
-Frame composition tags are assigned AFTER the graph is fully built (entities seeded, frames parsed, Haiku enrichment complete). A dedicated Grok agent reads each frame's complete node data and assigns the single most relevant tag from the Cinematic Frame Tag Taxonomy.
+Frame composition tags are assigned AFTER the graph is fully built (entities seeded, frames parsed, frame enrichment complete). A dedicated Grok agent reads each frame's complete node data and assigns the single most relevant tag from the Cinematic Frame Tag Taxonomy.
 
 The tag's textual definition from the taxonomy becomes part of the frame's generation prompt — the definition IS the composition directive sent to image and video generation.
 
@@ -6762,18 +7237,18 @@ The tag's textual definition REPLACES the old formula-based shot description blo
 
 ### 6.7 Pipeline Integration
 
-New Phase 2 step between Haiku enrichment (2b) and continuity validation (2c):
+New Phase 2 step between frame enrichment (2b) and continuity validation (2c):
 
 ```
 Phase 2:
   Step 2a: Python parser (cc_parser.py)
-  Step 2b: Parallel Haiku workers (haiku_enricher.py)
+  Step 2b: Parallel frame enricher workers (frame_enricher.py)
   Step 2b.5: Grok frame tagging (grok_tagger.py)  ← NEW
   Step 2c: Continuity validation
   Step 2d: Prompt assembly + materialization
 ```
 
-The tagger runs after Haiku enrichment so it has the complete frame data (cast states, composition, environment, directing) to make informed tag selections.
+The tagger runs after frame enrichment so it has the complete frame data (cast states, composition, environment, directing) to make informed tag selections.
 
 ---
 
@@ -6814,7 +7289,7 @@ Add to the skeleton output spec:
 | File | Status | Description |
 |------|--------|-------------|
 | `graph/cc_parser.py` | NEW | Python parser — skeleton + prose → graph |
-| `graph/haiku_enricher.py` | NEW | Haiku worker dispatch + result application |
+| `graph/frame_enricher.py` | NEW | frame enricher worker dispatch + result application |
 | `graph/grok_tagger.py` | NEW | Grok-based cinematic frame tagger |
 | `graph/continuity_validator.py` | NEW | Deterministic continuity rule checks |
 | `graph/schema.py` | MODIFIED | Add StagingBeat model + SceneNode.staging_plan field. Replace FormulaTag enum with CinematicTag model |
@@ -6826,7 +7301,7 @@ Add to the skeleton output spec:
 | `agent_prompts/morpheus_1_entity_seeder.md` | REMOVED | Replaced by cc_parser.py |
 | `agent_prompts/morpheus_2_frame_parser.md` | REMOVED | Replaced by cc_parser.py |
 | `agent_prompts/morpheus_3_dialogue_wirer.md` | REMOVED | Replaced by cc_parser.py |
-| `agent_prompts/morpheus_4_compositor.md` | REMOVED | Replaced by haiku_enricher.py |
+| `agent_prompts/morpheus_4_compositor.md` | REMOVED | Replaced by frame_enricher.py |
 | `agent_prompts/morpheus_5_continuity_wirer.md` | MODIFIED | Reduced to validation-only |
 | `run_pipeline.py` | MODIFIED | Phase 2 rewritten as Steps 2a-2d |
 
@@ -6835,7 +7310,7 @@ Add to the skeleton output spec:
 ## 9. Migration Strategy
 
 1. **Implement cc_parser.py** — write parser, test against existing CC output from previous pipeline runs
-2. **Implement haiku_enricher.py** — build worker input/output, test with mock Haiku responses
+2. **Implement frame_enricher.py** — build worker input/output, test with mock Haiku responses
 3. **Implement continuity_validator.py** — port relevant checks from Agent 5 prompt to Python
 4. **Update CC prompt** — add `///TAG` format to skeleton spec, remove `dur:` from frame markers
 5. **Update run_pipeline.py** — replace Morpheus agent spawns with Steps 2a-2d
@@ -6851,12 +7326,12 @@ Add to the skeleton output spec:
 | Field | Source File | Parser Step | Graph Target | Downstream Consumer |
 |-------|------------|-------------|--------------|-------------------|
 | Entity rosters (cast, location, prop) | outline_skeleton.md | parse_skeleton | CastNode, LocationNode, PropNode | prompt_assembler |
-| Scene headers + staging | outline_skeleton.md | parse_skeleton | SceneNode + staging_plan | haiku_enricher, continuity_validator |
+| Scene headers + staging | outline_skeleton.md | parse_skeleton | SceneNode + staging_plan | frame_enricher, continuity_validator |
 | ///DLG excerpt pointers | outline_skeleton.md (tags) + creative_output.md (text) | parse_skeleton + resolve | DialogueNode.raw_line | prompt_assembler |
-| Frame markers (cast, cam, dlg, cast_states) | creative_output.md | parse_creative_output | FrameNode + base CastFrameState | haiku_enricher, prompt_assembler |
-| Frame prose (source_text) | creative_output.md | parse_creative_output | FrameNode.source_text | haiku_enricher |
-| Enriched cast states (screen_position, looking_at, emotion, etc.) | Haiku workers | haiku_enricher | CastFrameState | prompt_assembler |
-| Composition, environment, directing | Haiku workers | haiku_enricher | FrameNode sub-objects | prompt_assembler |
+| Frame markers (cast, cam, dlg, cast_states) | creative_output.md | parse_creative_output | FrameNode + base CastFrameState | frame_enricher, prompt_assembler |
+| Frame prose (source_text) | creative_output.md | parse_creative_output | FrameNode.source_text | frame_enricher |
+| Enriched cast states (screen_position, looking_at, emotion, etc.) | frame enricher workers | frame_enricher | CastFrameState | prompt_assembler |
+| Composition, environment, directing | frame enricher workers | frame_enricher | FrameNode sub-objects | prompt_assembler |
 | Location directions (background description) | outline_skeleton.md | parse_skeleton | LocationNode.directions | api.py fallback -> prompt_assembler |
 | Cinematic frame tag + definition | Grok tagger | grok_tagger.py (Step 2b.5) | FrameNode.cinematic_tag | prompt_assembler |
 ```
@@ -7388,7 +7863,7 @@ Usage:
     python3 create_project.py --name "My Story" --id my_story_001
     python3 create_project.py --name "My Story" --id my_story_001 --seed /path/to/pitch.md
     python3 create_project.py --name "My Story" --id my_story_001 --seed /path/to/pitch.md \
-        --stickiness 3 --size short --media-style chiaroscuro_live
+        --creative-freedom creative --frame-budget 220 --media-style chiaroscuro_live
 """
 
 import argparse
@@ -7398,32 +7873,28 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+from screenwire_contracts import (
+    FRAME_BUDGET_PRESETS,
+    creative_freedom_contract,
+    default_dialogue_workflow,
+    normalize_frame_budget,
+)
+
 APP_DIR = Path(__file__).resolve().parent
 PROJECTS_DIR = APP_DIR / "projects"
 TEMPLATE_DIR = PROJECTS_DIR / "_template"
 
 # ---------------------------------------------------------------------------
-# Stickiness scale (1-5) — creative freedom levels
+# Creative freedom tiers
 # ---------------------------------------------------------------------------
 
-STICKINESS_PERMISSIONS = {
-    1: "Reformat. Restructure and rewrite the source material into operational format without altering story content. No new characters, scenes, dialogue, or events. The source dictates what exists — you dictate how it reads on the page.",
-    2: "Remaster. Adhere to the source material faithfully while enriching quality. Smooth transitions, add sensory detail, deepen descriptions, fill gaps that make scenes feel complete. Same story, higher fidelity. No new plot elements, characters, or narrative departures.",
-    3: "Expand. Follow the source material's direction but round out incomplete areas. Add transitional scenes, supporting details, and environmental context the source implies but doesn't show. All additions must serve what's already demonstrated — supporting information, not new story.",
-    4: "Reimagine. Use the source's story, narrative, and themes as a creative foundation. You may introduce new cast, locations, and writing to serve existing arcs. The original tone, themes, and trajectory are respected — but the canvas is wider.",
-    5: "Create. The source is a seed idea. Write an original story inspired by its guidance, introducing rich characters, props, locations, and story events to fill out the targeted output size. Full creative ownership.",
-}
+CREATIVE_FREEDOM_TIERS = ("strict", "balanced", "creative", "unbounded")
 
 # ---------------------------------------------------------------------------
-# Project size definitions — frame count ranges
+# Legacy size aliases — translated into nominal frame budgets
 # ---------------------------------------------------------------------------
 
-PROJECT_SIZES = {
-    "short":      {"label": "Short",        "frame_range": [10, 20],    "scene_range": [1, 3]},
-    "short_film": {"label": "Short Film",   "frame_range": [50, 125],   "scene_range": [5, 15]},
-    "televised":  {"label": "Televised",    "frame_range": [200, 300],  "scene_range": [20, 40]},
-    "feature":    {"label": "Feature",      "frame_range": [750, 1250], "scene_range": [60, 120]},
-}
+PROJECT_SIZES = FRAME_BUDGET_PRESETS
 
 # ---------------------------------------------------------------------------
 # Media style → image generation prefix
@@ -7461,8 +7932,8 @@ def create_project(
     project_id: str,
     project_name: str,
     seed_file: Path | None = None,
-    stickiness: int = 3,
-    size: str = "short",
+    creative_freedom: str = "balanced",
+    frame_budget: int | str | None = None,
     media_style: str = "live_clear",
     pipeline_type: str = "story_upload",
 ) -> Path:
@@ -7476,14 +7947,18 @@ def create_project(
         print(f"ERROR: Template directory not found: {TEMPLATE_DIR}")
         sys.exit(1)
 
-    # Validate stickiness
-    if stickiness not in range(1, 6):
-        print(f"ERROR: Stickiness must be 1-5, got {stickiness}")
+    # Validate creative freedom
+    if creative_freedom not in CREATIVE_FREEDOM_TIERS:
+        print(
+            f"ERROR: creative freedom must be one of {CREATIVE_FREEDOM_TIERS}, got '{creative_freedom}'"
+        )
         sys.exit(1)
 
-    # Validate size
-    if size not in PROJECT_SIZES:
-        print(f"ERROR: Size must be one of {list(PROJECT_SIZES.keys())}, got '{size}'")
+    # Validate frame budget
+    try:
+        normalized_budget = normalize_frame_budget(frame_budget)
+    except ValueError as exc:
+        print(f"ERROR: {exc}")
         sys.exit(1)
 
     # Validate media style
@@ -7514,16 +7989,16 @@ def create_project(
         source_files.append("source_files/pitch.md")
 
     # Write onboarding config with full detail
-    size_def = PROJECT_SIZES[size]
+    freedom = creative_freedom_contract(creative_freedom)
     onboarding = {
         "projectName": project_name,
         "projectId": f"sw_lg_{project_id}",
-        "stickinessLevel": stickiness,
-        "stickinessPermission": STICKINESS_PERMISSIONS[stickiness],
-        "outputSize": size,
-        "outputSizeLabel": size_def["label"],
-        "frameRange": size_def["frame_range"],
-        "sceneRange": size_def["scene_range"],
+        "creativeFreedom": creative_freedom,
+        "creativeFreedomPermission": freedom["permission"],
+        "creativeFreedomFailureModes": freedom["failure_modes"],
+        "dialoguePolicy": freedom["dialogue_policy"],
+        "dialogueWorkflow": default_dialogue_workflow(),
+        "frameBudget": "auto" if normalized_budget is None else normalized_budget,
         "mediaStyle": media_style,
         "mediaStylePrefix": MEDIA_STYLE_PREFIX[media_style],
         "pipeline": pipeline_type,
@@ -7551,8 +8026,11 @@ def create_project(
     print(f"  ID:         {project_id}")
     print(f"  Name:       {project_name}")
     print(f"  Slug:       {slug}")
-    print(f"  Stickiness: {stickiness} — {STICKINESS_PERMISSIONS[stickiness][:60]}...")
-    print(f"  Size:       {size} ({size_def['frame_range'][0]}-{size_def['frame_range'][1]} frames)")
+    print(f"  Creative:   {creative_freedom} — {freedom['permission'][:60]}...")
+    print(
+        "  Frame Cap:  "
+        + ("auto" if normalized_budget is None else str(normalized_budget))
+    )
     print(f"  Style:      {MEDIA_STYLE_DISPLAY.get(media_style, media_style)}")
     print(f"\nNext steps:")
     print(f"  1. Add your source material to {project_dir}/source_files/")
@@ -7566,12 +8044,20 @@ def main():
     parser.add_argument("--name", required=True, help="Human-readable project name")
     parser.add_argument("--id", required=True, help="Project directory ID (e.g., orchids_gambit_001)")
     parser.add_argument("--seed", default=None, help="Path to source/pitch file to copy into project")
-    parser.add_argument("--stickiness", type=int, default=3,
-                        choices=[1, 2, 3, 4, 5],
-                        help="Creative freedom (1=reformat, 2=remaster, 3=expand, 4=reimagine, 5=create)")
-    parser.add_argument("--size", default="short",
-                        choices=list(PROJECT_SIZES.keys()),
-                        help="Project size (short=10-20 frames, short_film=50-125, televised=200-300, feature=750-1250)")
+    parser.add_argument("--creative-freedom", default="balanced",
+                        choices=list(CREATIVE_FREEDOM_TIERS),
+                        help="Creative freedom tier (strict, balanced, creative, unbounded)")
+    parser.add_argument(
+        "--frame-budget",
+        default="auto",
+        help="Maximum frame count as a positive integer, or 'auto' for no fixed cap",
+    )
+    parser.add_argument(
+        "--size",
+        default=None,
+        choices=list(PROJECT_SIZES.keys()),
+        help=argparse.SUPPRESS,
+    )
     parser.add_argument("--media-style", default="live_clear",
                         choices=list(MEDIA_STYLE_PREFIX.keys()),
                         help="Media style determines image generation prefix")
@@ -7580,12 +8066,16 @@ def main():
                         help="Pipeline entry type")
     args = parser.parse_args()
 
+    frame_budget = args.frame_budget
+    if args.size and str(frame_budget).strip().lower() == "auto":
+        frame_budget = PROJECT_SIZES[args.size]
+
     create_project(
         project_id=args.id,
         project_name=args.name,
         seed_file=Path(args.seed) if args.seed else None,
-        stickiness=args.stickiness,
-        size=args.size,
+        creative_freedom=args.creative_freedom,
+        frame_budget=frame_budget,
         media_style=args.media_style,
         pipeline_type=args.pipeline_type,
     )
@@ -13016,7 +13506,9 @@ down the graph.
 
 from __future__ import annotations
 
+from itertools import chain
 from typing import Any, Optional
+import re
 
 from .schema import (
     NarrativeGraph,
@@ -13029,6 +13521,80 @@ from .schema import (
     GraphEdge, EdgeType, Provenance, canonical_edge_id,
 )
 from .store import GraphStore
+
+_SCREEN_CONTEXT_TOKENS = [REDACTED]
+    "screen",
+    "laptop",
+    "virtual window",
+    "video feed",
+    "camera",
+    "chat",
+    "screen within screen",
+    "inset",
+)
+_SCREEN_HUMAN_TOKENS = [REDACTED]
+    "smile",
+    "smiles",
+    "speaking",
+    "listener",
+    "face",
+    "gesturing",
+    "brightening",
+    "leans forward",
+    "impatient",
+    "serenely",
+)
+_HAND_ACTION_TOKENS = [REDACTED]
+    "hand",
+    "hands",
+    "finger",
+    "fingers",
+    "thumb",
+    "forefinger",
+)
+_SINGLE_SUBJECT_VISIBLE_TOKENS = [REDACTED]
+    "single person",
+    "single speaker",
+    "isolated framing",
+    "clean single",
+    "single subject",
+    "no other people visible",
+)
+_COLLECTIVE_VISIBLE_TOKENS = [REDACTED]
+    "group",
+    "everyone",
+    "everybody",
+    "all together",
+    "cluster",
+    "ensemble",
+    "in unison",
+    "chants",
+    "chanting",
+    "crowd",
+    "huddle",
+    "tightens together",
+)
+_NUMBER_WORDS = {
+    "zero": 0,
+    "one": 1,
+    "two": 2,
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+    "seven": 7,
+    "eight": 8,
+    "nine": 9,
+    "ten": 10,
+    "eleven": 11,
+    "twelve": 12,
+}
+_GROUP_OF_RE = re.compile(
+    r"\b(?:group|ensemble|cluster|crowd)\s+of\s+(\d+|"
+    + "|".join(_NUMBER_WORDS.keys())
+    + r")\b",
+    re.IGNORECASE,
+)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -13251,8 +13817,42 @@ def build_shot_packet(graph: NarrativeGraph, frame_id: str) -> ShotPacket:
     ]
     prop_states = get_frame_prop_state_models(graph, frame_id)
     location_state = get_frame_location_state_model(graph, frame_id)
+    audio = _build_audio_beat(ctx)
 
-    visible_cast_ids = [state.cast_id for state in visible_cast_states]
+    inferred_visible_cast_ids = _infer_visible_cast_ids(
+        graph,
+        frame=frame,
+        prev_frame=prev_frame,
+        next_frame=next_frame,
+        ctx=ctx,
+        audio=audio,
+        visible_cast_states=visible_cast_states,
+    )
+    subject_count = _resolve_subject_count(
+        frame=frame,
+        ctx=ctx,
+        audio=audio,
+        visible_cast_states=visible_cast_states,
+        inferred_visible_cast_ids=inferred_visible_cast_ids,
+    )
+
+    explicit_visible_cast_ids = [state.cast_id for state in visible_cast_states]
+    if explicit_visible_cast_ids:
+        if (
+            inferred_visible_cast_ids
+            and subject_count < len(explicit_visible_cast_ids)
+            and len(inferred_visible_cast_ids) == subject_count
+        ):
+            visible_cast_ids = inferred_visible_cast_ids
+        elif (
+            len(inferred_visible_cast_ids) > len(explicit_visible_cast_ids)
+            and subject_count >= len(inferred_visible_cast_ids)
+        ):
+            visible_cast_ids = inferred_visible_cast_ids
+        else:
+            visible_cast_ids = explicit_visible_cast_ids
+    else:
+        visible_cast_ids = inferred_visible_cast_ids
     visible_prop_ids = [state.prop_id for state in prop_states]
 
     continuity_deltas = _build_continuity_deltas(graph, frame, prev_frame, visible_cast_states, prop_states, location_state)
@@ -13261,7 +13861,6 @@ def build_shot_packet(graph: NarrativeGraph, frame_id: str) -> ShotPacket:
     location_invariants = _build_location_invariants(graph, frame, ctx, location_state)
     blocking = _build_blocking_lines(graph, ctx, visible_cast_states)
     background = _build_background_lines(frame, ctx)
-    audio = _build_audio_beat(ctx)
 
     intent = ShotIntent(
         shot=frame.composition.shot,
@@ -13285,7 +13884,7 @@ def build_shot_packet(graph: NarrativeGraph, frame_id: str) -> ShotPacket:
         scene_id=frame.scene_id,
         sequence_index=frame.sequence_index,
         location_id=frame.location_id,
-        subject_count=len(visible_cast_states),
+        subject_count=subject_count,
         visible_cast_ids=visible_cast_ids,
         visible_prop_ids=visible_prop_ids,
         previous_beat=_neighbor_beat(prev_frame),
@@ -13301,6 +13900,250 @@ def build_shot_packet(graph: NarrativeGraph, frame_id: str) -> ShotPacket:
         shot_intent=intent,
         audio=audio,
     )
+
+
+def _frame_subject_text(frame: FrameNode, ctx: dict[str, Any], audio: ShotAudioBeat) -> str:
+    parts = [
+        frame.narrative_beat,
+        frame.action_summary,
+        frame.source_text,
+        getattr(frame.directing, "dramatic_purpose", None),
+        getattr(frame.directing, "viewer_knowledge_delta", None),
+        getattr(frame.directing, "reaction_target", None),
+    ]
+    for turn in audio.turns:
+        parts.extend([
+            turn.speaker,
+            turn.line,
+            turn.performance_direction,
+        ])
+    return " ".join(part for part in parts if isinstance(part, str) and part).lower()
+
+
+def _parse_textual_count(text: str) -> int:
+    match = _GROUP_OF_RE.search(text or "")
+    if not match:
+        return 0
+    token = match.group(1).lower()
+    if token.isdigit():
+        return int(token)
+    return _NUMBER_WORDS.get(token, 0)
+
+
+def _looks_collective_visible_beat(text: str) -> bool:
+    lowered = (text or "").lower()
+    return any(token in lowered for token in _COLLECTIVE_VISIBLE_TOKENS) or bool(_GROUP_OF_RE.search(lowered))
+
+
+def _visible_cast_ids_for_frame(graph: NarrativeGraph, frame_id: str | None) -> list[str]:
+    if not frame_id:
+        return []
+    return [
+        state.cast_id
+        for state in get_frame_cast_state_models(graph, frame_id)
+        if getattr(getattr(state, "frame_role", None), "value", getattr(state, "frame_role", None)) != "referenced"
+    ]
+
+
+def _dedupe_preserve_order(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for value in values:
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        ordered.append(value)
+    return ordered
+
+
+def _shot_implied_subject_count(frame: FrameNode) -> int:
+    shot = ((getattr(frame, "composition", None) and frame.composition.shot) or "").lower()
+    if "two_shot" in shot or "two shot" in shot:
+        return 2
+    if "three_shot" in shot or "three shot" in shot:
+        return 3
+    return 0
+
+
+def _primary_visual_dialogue_cast_ids(
+    graph: NarrativeGraph,
+    frame_id: str,
+    audio: ShotAudioBeat,
+) -> list[str]:
+    cast_ids: list[str] = []
+    for turn in audio.turns:
+        dnode = graph.dialogue.get(turn.dialogue_id)
+        if dnode is None or dnode.primary_visual_frame != frame_id:
+            continue
+        if dnode.cast_id:
+            cast_ids.append(dnode.cast_id)
+    return _dedupe_preserve_order(cast_ids)
+
+
+def _mentioned_cast_ids(graph: NarrativeGraph, text: str) -> list[str]:
+    lowered = (text or "").lower()
+    mentions: list[tuple[int, str]] = []
+    for cast_id, cast_node in graph.cast.items():
+        candidates: list[str] = []
+        for raw in (
+            getattr(cast_node, "display_name", None),
+            getattr(cast_node, "name", None),
+            getattr(cast_node, "source_name", None),
+        ):
+            cleaned = re.sub(r"\s+", " ", (raw or "").strip()).lower()
+            if not cleaned:
+                continue
+            candidates.append(cleaned)
+            first = cleaned.split()[0]
+            if len(first) >= 4:
+                candidates.append(first)
+
+        first_index: int | None = None
+        for token in candidates:
+            match = re.search(rf"(?<!\w){re.escape(token)}(?!\w)", lowered)
+            if not match:
+                continue
+            if first_index is None or match.start() < first_index:
+                first_index = match.start()
+        if first_index is not None:
+            mentions.append((first_index, cast_id))
+
+    mentions.sort(key=lambda item: item[0])
+    return _dedupe_preserve_order([cast_id for _, cast_id in mentions])
+
+
+def _looks_screen_mediated_human_beat(text: str, audio: ShotAudioBeat) -> bool:
+    has_screen_context = any(token in text for token in _SCREEN_CONTEXT_TOKENS)
+    has_human_signal = audio.dialogue_present or any(token in text for token in _SCREEN_HUMAN_TOKENS)
+    return has_screen_context and has_human_signal
+
+
+def _looks_single_subject_visible_beat(frame: FrameNode, text: str) -> bool:
+    cinematic = " ".join(
+        part.strip().lower()
+        for part in (
+            getattr(getattr(frame, "cinematic_tag", None), "ai_prompt_language", ""),
+            getattr(getattr(frame, "cinematic_tag", None), "definition", ""),
+        )
+        if isinstance(part, str) and part.strip()
+    )
+    combined = f"{text}\n{cinematic}".lower()
+    return any(token in combined for token in _SINGLE_SUBJECT_VISIBLE_TOKENS)
+
+
+def _infer_visible_cast_ids(
+    graph: NarrativeGraph,
+    *,
+    frame: FrameNode,
+    prev_frame: FrameNode | None,
+    next_frame: FrameNode | None,
+    ctx: dict[str, Any],
+    audio: ShotAudioBeat,
+    visible_cast_states: list[CastFrameState],
+) -> list[str]:
+    explicit_ids = [state.cast_id for state in visible_cast_states]
+
+    text = _frame_subject_text(frame, ctx, audio)
+    shot_implied_count = _shot_implied_subject_count(frame)
+    primary_dialogue_ids = _primary_visual_dialogue_cast_ids(graph, frame.frame_id, audio)
+    named_cast_ids = _mentioned_cast_ids(graph, text)
+    single_subject_focus = _looks_single_subject_visible_beat(frame, text)
+    if explicit_ids:
+        if single_subject_focus:
+            narrowed = _dedupe_preserve_order(primary_dialogue_ids + named_cast_ids + explicit_ids)
+            return narrowed[:1] if narrowed else explicit_ids[:1]
+        expanded_ids = _dedupe_preserve_order(explicit_ids + primary_dialogue_ids + named_cast_ids)
+        if (
+            len(explicit_ids) == 1
+            and len(expanded_ids) > 1
+            and (
+                _looks_collective_visible_beat(text)
+                or shot_implied_count >= 2
+                or _parse_textual_count(text) >= 2
+            )
+        ):
+            if shot_implied_count >= 2:
+                return expanded_ids[: max(shot_implied_count, len(expanded_ids))]
+            return expanded_ids
+        return explicit_ids
+
+    prev_ids = _visible_cast_ids_for_frame(graph, getattr(prev_frame, "frame_id", None))
+    next_ids = _visible_cast_ids_for_frame(graph, getattr(next_frame, "frame_id", None))
+    if _looks_collective_visible_beat(text):
+        collective_ids = _dedupe_preserve_order(list(chain(prev_ids, next_ids)))
+        if len(collective_ids) >= 2:
+            return collective_ids
+
+    inferred_named_ids = _dedupe_preserve_order(primary_dialogue_ids + named_cast_ids)
+    if inferred_named_ids:
+        if single_subject_focus:
+            return inferred_named_ids[:1]
+        if shot_implied_count >= 2:
+            return inferred_named_ids[:shot_implied_count]
+        if _looks_collective_visible_beat(text) or len(inferred_named_ids) >= 2:
+            return inferred_named_ids
+        if primary_dialogue_ids:
+            return inferred_named_ids[: max(len(primary_dialogue_ids), 1)]
+        if len(inferred_named_ids) == 1:
+            return inferred_named_ids
+
+    if not _looks_screen_mediated_human_beat(text, audio):
+        return []
+
+    dialogue_ids = _dedupe_preserve_order([
+        turn.cast_id for turn in audio.turns if getattr(turn, "cast_id", None)
+    ])
+    if dialogue_ids:
+        return dialogue_ids
+
+    shared = [cast_id for cast_id in prev_ids if cast_id in next_ids]
+    if shared:
+        return _dedupe_preserve_order(shared)
+    if len(prev_ids) == 1:
+        return prev_ids
+    if len(next_ids) == 1:
+        return next_ids
+    return _dedupe_preserve_order(list(chain(prev_ids, next_ids)))[:1]
+
+
+def _resolve_subject_count(
+    *,
+    frame: FrameNode,
+    ctx: dict[str, Any],
+    audio: ShotAudioBeat,
+    visible_cast_states: list[CastFrameState],
+    inferred_visible_cast_ids: list[str],
+) -> int:
+    explicit_count = len(visible_cast_states)
+    text = _frame_subject_text(frame, ctx, audio)
+    shot_implied_count = _shot_implied_subject_count(frame)
+    textual_count = _parse_textual_count(text)
+    if _looks_single_subject_visible_beat(frame, text):
+        return 1
+    if explicit_count:
+        if (
+            len(inferred_visible_cast_ids) > explicit_count
+            and (
+                _looks_collective_visible_beat(text)
+                or shot_implied_count >= 2
+                or textual_count >= 2
+            )
+        ):
+            return len(inferred_visible_cast_ids)
+        return explicit_count
+
+    if inferred_visible_cast_ids:
+        return len(inferred_visible_cast_ids)
+
+    if textual_count:
+        return textual_count
+    if shot_implied_count:
+        return shot_implied_count
+    if _looks_collective_visible_beat(text):
+        return 2
+    if any(token in text for token in _HAND_ACTION_TOKENS):
+        return 1
+    return 0
 
 
 def _neighbor_beat(frame: Optional[FrameNode]) -> Optional[ShotNeighborBeat]:
@@ -14617,6 +15460,7 @@ def propagate_location_state(
 # ═══════════════════════════════════════════════════════════════════════════════
 
 MAX_GRID_SIZE = 6
+MIN_GRID_SIZE = 2
 
 
 def is_large_shift(graph: NarrativeGraph, prev_frame_id: str, curr_frame_id: str) -> bool:
@@ -14729,12 +15573,35 @@ def _storyboard_break_reason(
     return None
 
 
+def _should_flush_storyboard_batch(
+    current_batch: list[str],
+    break_reason: Optional[str],
+) -> bool:
+    """Decide whether a batch should flush before appending the next frame.
+
+    Storyboard grids are meant to show short sequential progressions, not
+    collapse into one-frame pseudo-storyboards. Soft shifts are tolerated
+    until a batch holds at least two frames; hard breaks still flush
+    immediately.
+    """
+    if not current_batch or not break_reason:
+        return False
+
+    if break_reason in {"scene_break", "large_shift"}:
+        return True
+
+    return len(current_batch) >= MIN_GRID_SIZE
+
+
 def build_storyboard_grids(graph: NarrativeGraph) -> list[StoryboardGrid]:
     """Partition frame_order into small sequential guidance grids.
 
     Grids are capped at 6 frames and break early when a new frame changes the
-    dialogue beat, cast set, prop state, camera setup, or background state.
-    Storyboards stay a continuity-planning layer, not a final render proxy.
+    scene or makes a major continuity jump. Softer beat/cast/camera changes
+    are tolerated until the current grid holds at least two frames so
+    storyboard guidance remains genuinely sequential instead of degenerating
+    into one-frame proxies. Storyboards stay a continuity-planning layer, not
+    a final render proxy.
 
     Clears existing grids and rebuilds from scratch.
     Returns the list of grids created.
@@ -14811,7 +15678,7 @@ def build_storyboard_grids(graph: NarrativeGraph) -> list[StoryboardGrid]:
         if len(current_batch) >= MAX_GRID_SIZE:
             _flush_batch("full")
             current_batch = []
-        elif break_reason:
+        elif _should_flush_storyboard_batch(current_batch, break_reason):
             _flush_batch(break_reason)
             current_batch = []
 
@@ -14971,6 +15838,12 @@ RE_FRAME_MARKER  = re.compile(
 
 RE_KV_PAIR   = re.compile(r'(\w+)=([^|]+)')
 RE_ENV_FIELD = re.compile(r'(\w+)=([^|,]+)')
+RE_DIALOGUE_BLOCK = re.compile(
+    r'^\s*([A-Z][A-Z0-9 .\'&-]{1,}(?:\s+\([A-Z0-9 .\'&-]+\))?)\s*$'
+    r'(?:\n\s*\(([^)]*)\)\s*)?'
+    r'\n((?:\s{4,}.+(?:\n|$))+)',
+    re.MULTILINE,
+)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -14993,10 +15866,117 @@ def _make_provenance(source_text: str) -> Provenance:
 
 def _slugify(name: str) -> str:
     """Convert a display name to a snake_case slug."""
-    slug = name.lower().strip()
+    slug = re.sub(r'(?<=[a-z0-9])(?=[A-Z])', ' ', name).lower().strip()
     slug = re.sub(r'[^a-z0-9\s_]', '', slug)
     slug = re.sub(r'\s+', '_', slug)
     return slug.strip('_')
+
+
+def _compact_token(name: str) -> str:
+    """Collapse a name to alphanumerics for typo-tolerant matching."""
+    return re.sub(r'[^a-z0-9]+', '', name.lower())
+
+
+_LOCATION_NAME_TOKENS: frozenset[str] = frozenset({
+    "alabama", "alaska", "arizona", "arkansas", "california", "colorado", "connecticut",
+    "delaware", "florida", "georgia", "hawaii", "idaho", "illinois", "indiana", "iowa",
+    "kansas", "kentucky", "louisiana", "maine", "maryland", "massachusetts", "michigan",
+    "minnesota", "mississippi", "missouri", "montana", "nebraska", "nevada", "hampshire",
+    "jersey", "mexico", "new", "york", "carolina", "dakota", "ohio", "oklahoma", "oregon",
+    "pennsylvania", "rhode", "island", "tennessee", "texas", "utah", "vermont", "virginia",
+    "washington", "wisconsin", "wyoming", "sedona", "topanga", "canyon", "los", "angeles",
+})
+
+
+def _edit_distance_le_one(a: str, b: str) -> bool:
+    if a == b:
+        return True
+    if abs(len(a) - len(b)) > 1:
+        return False
+    if len(a) > len(b):
+        a, b = b, a
+    i = j = edits = 0
+    while i < len(a) and j < len(b):
+        if a[i] == b[j]:
+            i += 1
+            j += 1
+            continue
+        edits += 1
+        if edits > 1:
+            return False
+        if len(a) == len(b):
+            i += 1
+            j += 1
+        else:
+            j += 1
+    if j < len(b) or i < len(a):
+        edits += 1
+    return edits <= 1
+
+
+def _title_words(name: str) -> str:
+    cleaned = re.sub(r'[^A-Za-z0-9\s\'-]+', ' ', name).strip()
+    cleaned = re.sub(r'\s+', ' ', cleaned)
+    if not cleaned:
+        return ""
+    return " ".join(part.capitalize() if not part.isupper() else part for part in cleaned.split())
+
+
+def _name_quality_score(name: str) -> int:
+    tokens = [token for token in re.split(r'\s+', name.strip()) if token]
+    if not tokens:
+        return -100
+    score = 0
+    if all(token.isalpha() for token in tokens):
+        score += 4
+    if not any(char.isdigit() for char in name):
+        score += 2
+    if len(tokens) <= 2:
+        score += 2
+    if len(tokens) >= 2 and tokens[-1].lower() in _LOCATION_NAME_TOKENS:
+        score -= 4
+    return score
+
+
+def _clean_cast_display_name(raw_name: str, cast_id: str, warnings: list[str]) -> str:
+    source_name = _title_words(raw_name)
+    fallback_name = _display_name_from_cast_id(cast_id)
+    if not source_name:
+        warnings.append(f"WARN: cast {cast_id} has empty name — using {fallback_name!r}")
+        return fallback_name
+
+    source_compact = _compact_token(source_name)
+    fallback_compact = _compact_token(fallback_name)
+    if (
+        source_compact
+        and fallback_compact
+        and source_compact != fallback_compact
+        and _edit_distance_le_one(source_compact, fallback_compact)
+        and len(fallback_compact) >= len(source_compact)
+    ):
+        warnings.append(
+            f"WARN: cast {cast_id} source name {source_name!r} corrected to {fallback_name!r}"
+        )
+        return fallback_name
+
+    source_tokens = source_name.split()
+    if (
+        len(source_tokens) >= 2
+        and source_tokens[-1].lower() in _LOCATION_NAME_TOKENS
+        and _compact_token(source_tokens[0]) == _compact_token(fallback_name.split()[0])
+    ):
+        warnings.append(
+            f"WARN: cast {cast_id} name {source_name!r} looks location-derived — using {fallback_name!r}"
+        )
+        return fallback_name
+
+    if _name_quality_score(fallback_name) > _name_quality_score(source_name):
+        if _compact_token(fallback_name) != _compact_token(source_name):
+            warnings.append(
+                f"WARN: cast {cast_id} source name {source_name!r} normalized to {fallback_name!r}"
+            )
+        return fallback_name
+    return source_name
 
 
 def _parse_tag_fields(tag_line: str) -> dict[str, str]:
@@ -15039,18 +16019,184 @@ def _resolve_cast_id(name: str, name_map: dict[str, str], warnings: list[str]) -
     Generates a fallback and warns if unresolvable.
     """
     normalized = name.lower().strip()
-    if normalized in name_map:
-        return name_map[normalized]
     slug = _slugify(name)
-    if slug in name_map:
-        return name_map[slug]
-    # Partial match
-    for key, val in name_map.items():
-        if normalized in key or key in normalized:
+    compact = _compact_token(name)
+    cast_name_map = {
+        key: val
+        for key, val in name_map.items()
+        if isinstance(val, str) and val.startswith("cast_")
+    }
+
+    for token in (normalized, slug, compact):
+        if token and token in cast_name_map:
+            return cast_name_map[token]
+
+    for key, val in cast_name_map.items():
+        if _compact_token(key) == compact:
             return val
-    generated = f"cast_{slug}"
+
+    if compact:
+        for key, val in cast_name_map.items():
+            key_compact = _compact_token(key)
+            if not key_compact:
+                continue
+            if len(compact) >= 3 and (
+                key_compact.startswith(compact) or compact.startswith(key_compact)
+            ):
+                return val
+            if min(len(compact), len(key_compact)) >= 5 and (
+                compact in key_compact or key_compact in compact
+            ):
+                return val
+
+    if normalized in name_map and str(name_map[normalized]).startswith("cast_"):
+        return name_map[normalized]
+
+    generated_slug = slug or compact or "unknown"
+    generated = f"cast_{generated_slug}"
     warnings.append(f"WARN: name '{name}' not in name_map — generated id '{generated}'")
     return generated
+
+
+def _resolve_attention_target(
+    target: str,
+    name_map: dict[str, str],
+    warnings: list[str],
+) -> str:
+    """Resolve a looking_at target to a stable graph token when possible."""
+    normalized = target.strip()
+    if not normalized:
+        return normalized
+    lowered = normalized.lower()
+    if lowered in {"camera", "distance"}:
+        return lowered
+    if normalized.startswith(("cast_", "prop_", "loc_")):
+        return normalized
+    if lowered in name_map and str(name_map[lowered]).startswith(("cast_", "prop_", "loc_")):
+        return str(name_map[lowered])
+
+    slug = _slugify(normalized)
+    if slug in name_map and str(name_map[slug]).startswith(("cast_", "prop_", "loc_")):
+        return str(name_map[slug])
+
+    compact = _compact_token(normalized)
+    if compact in name_map and str(name_map[compact]).startswith(("cast_", "prop_", "loc_")):
+        return str(name_map[compact])
+
+    candidate = _resolve_cast_id(normalized, name_map, [])
+    if candidate.startswith("cast_") and candidate in set(name_map.values()):
+        return candidate
+    return normalized
+
+
+def _parse_named_assignments(
+    raw: str,
+    name_map: dict[str, str],
+    warnings: list[str],
+    *,
+    value_resolver=None,
+) -> dict[str, str]:
+    """Parse `Display Name=value` CSV assignments into cast_id keyed maps."""
+    parsed: dict[str, str] = {}
+    if not raw:
+        return parsed
+    for pair in raw.split(','):
+        pair = pair.strip()
+        if not pair or '=' not in pair:
+            continue
+        raw_name, _, raw_value = pair.partition('=')
+        cast_id = _resolve_cast_id(raw_name.strip(), name_map, warnings)
+        value = raw_value.strip()
+        if value_resolver:
+            value = value_resolver(value, name_map, warnings)
+        parsed[cast_id] = value
+    return parsed
+
+
+def _display_name_from_cast_id(cast_id: str) -> str:
+    raw = cast_id.removeprefix("cast_")
+    if not raw:
+        return cast_id
+    return " ".join(part.capitalize() for part in raw.split("_"))
+
+
+def _normalize_dialogue_speaker(raw_speaker: str) -> str:
+    speaker = re.sub(r'\s*\([^)]*\)\s*$', '', raw_speaker.strip())
+    speaker = re.sub(r'\s+', ' ', speaker)
+    if not speaker:
+        return speaker
+    return " ".join(part.capitalize() for part in speaker.lower().split())
+
+
+def _extract_inline_dialogue_blocks(
+    source_text: str,
+    name_map: dict[str, str],
+    warnings: list[str],
+) -> list[dict[str, str]]:
+    """Extract screenplay-style dialogue blocks embedded inside a frame's prose.
+
+    Expected shape inside a `dlg` frame:
+        ACTION LINE(S)
+                        SPEAKER
+              (optional parenthetical)
+            Spoken line continues here.
+
+    Returns zero or more dicts with speaker/cast_id/raw_line/perf.
+    """
+    blocks: list[dict[str, str]] = []
+    for match in RE_DIALOGUE_BLOCK.finditer(source_text):
+        raw_speaker = match.group(1).strip()
+        perf = (match.group(2) or "").strip()
+        spoken_block = match.group(3)
+        raw_line = " ".join(
+            line.strip()
+            for line in spoken_block.splitlines()
+            if line.strip()
+        ).strip()
+        if not raw_line:
+            continue
+
+        speaker = _normalize_dialogue_speaker(raw_speaker)
+        cast_id = _resolve_cast_id(speaker, name_map, warnings)
+        blocks.append({
+            "speaker": speaker,
+            "cast_id": cast_id,
+            "raw_line": raw_line,
+            "perf": perf,
+        })
+    return blocks
+
+
+def _infer_referenced_cast_ids(
+    source_text: str,
+    cast_name_pairs: list[tuple[str, str]],
+) -> set[str]:
+    """Detect explicitly non-visible cast mentioned in phone/voice contexts."""
+    lower = source_text.lower()
+    remote_audio_tokens = ("phone", "call", "speakerphone", "voicemail", "on speaker")
+    if not lower or not any(token in lower for token in remote_audio_tokens):
+        return set()
+
+    referenced: set[str] = set()
+    for raw_name, cast_id in cast_name_pairs:
+        cleaned = re.sub(r'\s+', ' ', raw_name.strip()).lower()
+        if not cleaned:
+            continue
+        candidates = {cleaned}
+        compact = _compact_token(raw_name)
+        if compact:
+            candidates.add(compact)
+        first = cleaned.split()[0]
+        candidates.add(first)
+        for token in candidates:
+            if (
+                f"call from {token}" in lower
+                or f"from {token}" in lower and "call" in lower
+                or f"{token} on speaker" in lower
+            ):
+                referenced.add(cast_id)
+                break
+    return referenced
 
 
 def _resolve_narrative_role(role_str: str) -> NarrativeRole:
@@ -15085,13 +16231,15 @@ def _resolve_time_of_day(tod_str: str) -> Optional[TimeOfDay]:
 def extract_cast_tags(skeleton_text: str, warnings: list[str]) -> list[CastNode]:
     """Extract CastNode list from ///CAST tags in the skeleton."""
     nodes: list[CastNode] = []
+    seen_name_tokens: dict[str, str] = {}
 
     for m in RE_CAST_TAG.finditer(skeleton_text):
         raw = m.group(1)
         fields = _parse_tag_fields(raw)
 
         cast_id = fields.get('id', '').strip()
-        name    = fields.get('name', '').strip()
+        source_name = fields.get('name', '').strip()
+        name = _clean_cast_display_name(source_name, cast_id, warnings)
         if not cast_id or not name:
             warnings.append(f"WARN: CAST tag missing id or name: {raw[:100]}")
             continue
@@ -15136,6 +16284,8 @@ def extract_cast_tags(skeleton_text: str, warnings: list[str]) -> list[CastNode]
         node = CastNode(
             cast_id=cast_id,
             name=name,
+            display_name=name,
+            source_name=source_name or name,
             identity=identity,
             personality=", ".join(_parse_csv(fields.get('personality', ''))),
             role=_resolve_narrative_role(fields.get('role', 'supporting')),
@@ -15144,6 +16294,16 @@ def extract_cast_tags(skeleton_text: str, warnings: list[str]) -> list[CastNode]
             provenance=_make_provenance(raw),
         )
         nodes.append(node)
+
+        compact_name = _compact_token(name)
+        for seen_compact, seen_cast_id in seen_name_tokens.items():
+            if compact_name == seen_compact or _edit_distance_le_one(compact_name, seen_compact):
+                warnings.append(
+                    f"WARN: cast names for {cast_id} ({name}) and {seen_cast_id} look like near-duplicates"
+                )
+                break
+        if compact_name:
+            seen_name_tokens.setdefault(compact_name, cast_id)
 
     return nodes
 
@@ -15243,12 +16403,15 @@ def build_name_to_id_map(
     for n in cast_nodes:
         name_map[n.name.lower().strip()] = n.cast_id
         name_map[_slugify(n.name)] = n.cast_id
+        name_map[_compact_token(n.name)] = n.cast_id
     for n in location_nodes:
         name_map[n.name.lower().strip()] = n.location_id
         name_map[_slugify(n.name)] = n.location_id
+        name_map[_compact_token(n.name)] = n.location_id
     for n in prop_nodes:
         name_map[n.name.lower().strip()] = n.prop_id
         name_map[_slugify(n.name)] = n.prop_id
+        name_map[_compact_token(n.name)] = n.prop_id
     return name_map
 
 
@@ -15553,19 +16716,51 @@ def extract_frame_markers(
 
             # Resolve cast members in this frame
             cast_names_raw = marker_fields.get('cast', '')
-            cast_names     = _parse_csv(cast_names_raw) if cast_names_raw else []
-            cast_ids       = [_resolve_cast_id(n, name_map, warnings) for n in cast_names]
+            cast_names = _parse_csv(cast_names_raw) if cast_names_raw else []
+            cast_name_pairs: list[tuple[str, str]] = []
+            for raw_name in cast_names:
+                compact_name = _compact_token(raw_name)
+                if compact_name in {"all", "everyone", "group"}:
+                    if current_scene_id in scenes:
+                        for scene_cast_id in scenes[current_scene_id].cast_present:
+                            cast_name_pairs.append((_display_name_from_cast_id(scene_cast_id), scene_cast_id))
+                    else:
+                        warnings.append(
+                            f"WARN: frame marker uses cast:{raw_name} outside a known scene context"
+                        )
+                    continue
+                cast_name_pairs.append((raw_name, _resolve_cast_id(raw_name, name_map, warnings)))
+
+            deduped_cast_pairs: list[tuple[str, str]] = []
+            seen_cast_ids: set[str] = set()
+            for raw_name, cast_id in cast_name_pairs:
+                if cast_id in seen_cast_ids:
+                    continue
+                deduped_cast_pairs.append((raw_name, cast_id))
+                seen_cast_ids.add(cast_id)
+            cast_name_pairs = deduped_cast_pairs
+            cast_ids = [cast_id for _, cast_id in cast_name_pairs]
 
             # Per-frame cast_states overrides
-            frame_state_overrides: dict[str, str] = {}
-            cs_raw = marker_fields.get('cast_states', '')
-            if cs_raw:
-                for pair in cs_raw.split(','):
-                    pair = pair.strip()
-                    if '=' in pair:
-                        c_name, _, s_tag = pair.partition('=')
-                        c_id = _resolve_cast_id(c_name.strip(), name_map, warnings)
-                        frame_state_overrides[c_id] = s_tag.strip()
+            frame_state_overrides = _parse_named_assignments(
+                marker_fields.get('cast_states', ''),
+                name_map,
+                warnings,
+            )
+            frame_looking_at = _parse_named_assignments(
+                marker_fields.get('looking_at', ''),
+                name_map,
+                warnings,
+                value_resolver=_resolve_attention_target,
+            )
+            frame_facing = _parse_named_assignments(
+                marker_fields.get('facing_towards', marker_fields.get('facing_direction', '')),
+                name_map,
+                warnings,
+            )
+
+            referenced_cast_ids = _infer_referenced_cast_ids(source_text, cast_name_pairs)
+            visible_cast_ids = [cast_id for cast_id in cast_ids if cast_id not in referenced_cast_ids]
 
             # Build base CastFrameState per cast member
             frame_cast_states: list[CastFrameState] = []
@@ -15576,16 +16771,19 @@ def extract_frame_markers(
                     or scene_cast_defaults.get(c_id)
                     or 'base'
                 )
-                # Frame role: SUBJECT when sole cast, BACKGROUND otherwise
-                frame_role = (
-                    CastFrameRole.SUBJECT if len(cast_ids) == 1
-                    else CastFrameRole.BACKGROUND
-                )
+                if c_id in referenced_cast_ids:
+                    frame_role = CastFrameRole.REFERENCED
+                elif len(visible_cast_ids) == 1:
+                    frame_role = CastFrameRole.SUBJECT
+                else:
+                    frame_role = CastFrameRole.BACKGROUND
                 cs = CastFrameState(
                     cast_id=c_id,
                     frame_id=frame_id,
                     frame_role=frame_role,
                     active_state_tag=active_tag,
+                    looking_at=frame_looking_at.get(c_id),
+                    facing_direction=frame_facing.get(c_id),
                     provenance=_make_provenance(prov_text),
                 )
                 frame_cast_states.append(cs)
@@ -15680,6 +16878,7 @@ def extract_dialogue(
       5. Parse ENV tag fields.
     """
     creative_lines = creative_text.splitlines()
+    dialogue_tag_matches = list(RE_DIALOGUE_TAG.finditer(skeleton_text))
 
     # Sequential dlg frame iterator — DLG tags map to dlg frames in order
     dlg_frames = [f for f in frames if f.is_dialogue]
@@ -15693,113 +16892,207 @@ def extract_dialogue(
     dialogue_nodes: list[DialogueNode] = []
     dlg_counter = 0
 
-    for m in RE_DIALOGUE_TAG.finditer(skeleton_text):
-        raw    = m.group(1)
-        fields = _parse_tag_fields(raw)
-
-        speaker     = fields.get('speaker', '').strip()
-        cast_id_raw = fields.get('cast_id', '').strip()
-        src_lines   = fields.get('src_lines', '').strip()
-        src_start   = fields.get('src_start', '').strip().strip('"').strip("'")
-        src_end     = fields.get('src_end',   '').strip().strip('"').strip("'")
-        perf        = fields.get('perf', '').strip()
-        env_raw     = fields.get('env', '').strip()
-
-        cast_id = cast_id_raw or _resolve_cast_id(speaker, name_map, warnings)
-
-        # ── Extract raw_line from creative_output at src_lines ──────────────
-        raw_line   = ''
-        start_line = 0
-        end_line   = 0
-
-        if src_lines and '-' in src_lines:
-            try:
-                sl_parts   = src_lines.split('-')
-                start_line = int(sl_parts[0].strip())
-                end_line   = int(sl_parts[1].strip())
-                raw_line   = _extract_by_src_lines(creative_lines, start_line, end_line)
-
-                # Fuzzy anchor validation (warn but don't halt)
-                if (src_start or src_end) and not _validate_fuzzy_anchors(
-                    src_start, src_end, start_line, end_line, creative_lines
-                ):
-                    warnings.append(
-                        f"WARN: DLG anchor mismatch for speaker='{speaker}' "
-                        f"src_lines={src_lines} src_start='{src_start[:30]}'"
-                    )
-            except (ValueError, IndexError) as exc:
-                warnings.append(f"WARN: cannot parse src_lines '{src_lines}' for '{speaker}': {exc}")
-
-        if not raw_line.strip():
-            warnings.append(
-                f"WARN: DLG tag for '{speaker}' has no resolved raw_line (src_lines={src_lines})"
+    if not dialogue_tag_matches:
+        for assoc_frame in dlg_frames:
+            inline_blocks = _extract_inline_dialogue_blocks(
+                assoc_frame.source_text or "",
+                name_map,
+                warnings,
             )
-            raw_line = f"[dialogue: {speaker}]"
+            if not inline_blocks:
+                warnings.append(
+                    f"WARN: dlg frame {assoc_frame.frame_id} has no inline screenplay dialogue block; "
+                    "clearing dlg flag"
+                )
+                assoc_frame.is_dialogue = False
+                continue
 
-        # ── ENV parsing ─────────────────────────────────────────────────────
-        env_location: Optional[str] = None
-        env_distance: Optional[str] = None
-        env_intensity: Optional[str] = None
-        env_medium: Optional[str]   = None
-        env_atmosphere: list[str]   = []
+            for block in inline_blocks:
+                dlg_counter += 1
+                dialogue_id = f"dlg_{dlg_counter:03d}"
+                node = DialogueNode(
+                    dialogue_id=dialogue_id,
+                    scene_id=assoc_frame.scene_id,
+                    order=dlg_counter - 1,
+                    speaker=block["speaker"],
+                    cast_id=block["cast_id"],
+                    start_frame=assoc_frame.frame_id,
+                    end_frame=assoc_frame.frame_id,
+                    primary_visual_frame=assoc_frame.frame_id,
+                    raw_line=block["raw_line"],
+                    line=block["raw_line"],
+                    performance_direction=block["perf"],
+                    provenance=_make_provenance(assoc_frame.source_text or "(inline dialogue)"),
+                )
+                dialogue_nodes.append(node)
+                if dialogue_id not in assoc_frame.dialogue_ids:
+                    assoc_frame.dialogue_ids.append(dialogue_id)
+    else:
+        for m in dialogue_tag_matches:
+            raw    = m.group(1)
+            fields = _parse_tag_fields(raw)
 
-        if env_raw:
-            env_parts = _parse_csv(env_raw)
-            if len(env_parts) > 0: env_location  = env_parts[0]
-            if len(env_parts) > 1: env_distance  = env_parts[1]
-            if len(env_parts) > 2: env_intensity  = env_parts[2]
-            if len(env_parts) > 3: env_medium     = env_parts[3]
-            if len(env_parts) > 4: env_atmosphere = env_parts[4:]
+            speaker     = fields.get('speaker', '').strip()
+            cast_id_raw = fields.get('cast_id', '').strip()
+            src_lines   = fields.get('src_lines', '').strip()
+            src_start   = fields.get('src_start', '').strip().strip('"').strip("'")
+            src_end     = fields.get('src_end',   '').strip().strip('"').strip("'")
+            perf        = fields.get('perf', '').strip()
+            env_raw     = fields.get('env', '').strip()
 
-        # ── Temporal span assignment ─────────────────────────────────────────
-        if current_dlg_frame is not None:
-            assoc_frame = current_dlg_frame
-        elif last_used_dlg_frame is not None:
-            assoc_frame = last_used_dlg_frame
-        elif frames:
-            assoc_frame = frames[-1]
-        else:
-            assoc_frame = None
+            cast_id = cast_id_raw or _resolve_cast_id(speaker, name_map, warnings)
 
-        assoc_frame_id = assoc_frame.frame_id if assoc_frame else 'f_001'
-        assoc_scene_id = frame_to_scene.get(assoc_frame_id, '')
+            # ── Extract raw_line from creative_output at src_lines ──────────────
+            raw_line   = ''
+            start_line = 0
+            end_line   = 0
 
-        dlg_counter += 1
-        dialogue_id = f"dlg_{dlg_counter:03d}"
+            if src_lines and '-' in src_lines:
+                try:
+                    sl_parts   = src_lines.split('-')
+                    start_line = int(sl_parts[0].strip())
+                    end_line   = int(sl_parts[1].strip())
+                    raw_line   = _extract_by_src_lines(creative_lines, start_line, end_line)
 
-        node = DialogueNode(
-            dialogue_id=dialogue_id,
-            scene_id=assoc_scene_id,
-            order=dlg_counter - 1,
-            speaker=speaker,
-            cast_id=cast_id,
-            start_frame=assoc_frame_id,
-            end_frame=assoc_frame_id,
-            primary_visual_frame=assoc_frame_id,
-            raw_line=raw_line.strip(),
-            line=raw_line.strip(),
-            performance_direction=perf,
-            env_tags=env_raw,
-            env_location=env_location,
-            env_distance=env_distance,
-            env_intensity=env_intensity,
-            env_medium=env_medium,
-            env_atmosphere=env_atmosphere,
-            provenance=_make_provenance(raw),
+                    # Fuzzy anchor validation (warn but don't halt)
+                    if (src_start or src_end) and not _validate_fuzzy_anchors(
+                        src_start, src_end, start_line, end_line, creative_lines
+                    ):
+                        warnings.append(
+                            f"WARN: DLG anchor mismatch for speaker='{speaker}' "
+                            f"src_lines={src_lines} src_start='{src_start[:30]}'"
+                        )
+                except (ValueError, IndexError) as exc:
+                    warnings.append(f"WARN: cannot parse src_lines '{src_lines}' for '{speaker}': {exc}")
+
+            if not raw_line.strip():
+                warnings.append(
+                    f"WARN: DLG tag for '{speaker}' has no resolved raw_line (src_lines={src_lines})"
+                )
+                raw_line = f"[dialogue: {speaker}]"
+
+            # ── ENV parsing ─────────────────────────────────────────────────────
+            env_location: Optional[str] = None
+            env_distance: Optional[str] = None
+            env_intensity: Optional[str] = None
+            env_medium: Optional[str]   = None
+            env_atmosphere: list[str]   = []
+
+            if env_raw:
+                env_parts = _parse_csv(env_raw)
+                if len(env_parts) > 0: env_location  = env_parts[0]
+                if len(env_parts) > 1: env_distance  = env_parts[1]
+                if len(env_parts) > 2: env_intensity  = env_parts[2]
+                if len(env_parts) > 3: env_medium     = env_parts[3]
+                if len(env_parts) > 4: env_atmosphere = env_parts[4:]
+
+            # ── Temporal span assignment ─────────────────────────────────────────
+            if current_dlg_frame is not None:
+                assoc_frame = current_dlg_frame
+            elif last_used_dlg_frame is not None:
+                assoc_frame = last_used_dlg_frame
+            elif frames:
+                assoc_frame = frames[-1]
+            else:
+                assoc_frame = None
+
+            assoc_frame_id = assoc_frame.frame_id if assoc_frame else 'f_001'
+            assoc_scene_id = frame_to_scene.get(assoc_frame_id, '')
+
+            dlg_counter += 1
+            dialogue_id = f"dlg_{dlg_counter:03d}"
+
+            node = DialogueNode(
+                dialogue_id=dialogue_id,
+                scene_id=assoc_scene_id,
+                order=dlg_counter - 1,
+                speaker=speaker,
+                cast_id=cast_id,
+                start_frame=assoc_frame_id,
+                end_frame=assoc_frame_id,
+                primary_visual_frame=assoc_frame_id,
+                raw_line=raw_line.strip(),
+                line=raw_line.strip(),
+                performance_direction=perf,
+                env_tags=env_raw,
+                env_location=env_location,
+                env_distance=env_distance,
+                env_intensity=env_intensity,
+                env_medium=env_medium,
+                env_atmosphere=env_atmosphere,
+                provenance=_make_provenance(raw),
+            )
+            dialogue_nodes.append(node)
+
+            # Register dialogue_id on the frame and advance to next dlg frame
+            if assoc_frame is not None:
+                if dialogue_id not in assoc_frame.dialogue_ids:
+                    assoc_frame.dialogue_ids.append(dialogue_id)
+                last_used_dlg_frame = assoc_frame
+                # Advance only once per DLG tag so multiple tags can share a frame
+                # if there's only one dlg frame left
+                next_frame = next(dlg_iter, None)
+                if next_frame is not None:
+                    current_dlg_frame = next_frame
+                # else: current_dlg_frame stays as-is (remaining tags pile onto last frame)
+
+    # Recover inline dialogue blocks that were left untagged even when the
+    # creative output contains some ///DLG tags elsewhere. This keeps spoken
+    # lines from disappearing simply because a frame was not marked dlg.
+    for frame in frames:
+        inline_blocks = _extract_inline_dialogue_blocks(
+            frame.source_text or "",
+            name_map,
+            warnings,
         )
-        dialogue_nodes.append(node)
+        if not inline_blocks:
+            continue
 
-        # Register dialogue_id on the frame and advance to next dlg frame
-        if assoc_frame is not None:
-            if dialogue_id not in assoc_frame.dialogue_ids:
-                assoc_frame.dialogue_ids.append(dialogue_id)
-            last_used_dlg_frame = assoc_frame
-            # Advance only once per DLG tag so multiple tags can share a frame
-            # if there's only one dlg frame left
-            next_frame = next(dlg_iter, None)
-            if next_frame is not None:
-                current_dlg_frame = next_frame
-            # else: current_dlg_frame stays as-is (remaining tags pile onto last frame)
+        existing_signatures = {
+            (
+                (node.cast_id or "").strip().lower(),
+                re.sub(r"\s+", " ", (node.raw_line or node.line or "").strip()).lower(),
+            )
+            for node in dialogue_nodes
+            if node.primary_visual_frame == frame.frame_id
+        }
+        recovered = 0
+        for block in inline_blocks:
+            signature = (
+                (block["cast_id"] or "").strip().lower(),
+                re.sub(r"\s+", " ", block["raw_line"].strip()).lower(),
+            )
+            if signature in existing_signatures:
+                continue
+
+            dlg_counter += 1
+            dialogue_id = f"dlg_{dlg_counter:03d}"
+            node = DialogueNode(
+                dialogue_id=dialogue_id,
+                scene_id=frame.scene_id,
+                order=dlg_counter - 1,
+                speaker=block["speaker"],
+                cast_id=block["cast_id"],
+                start_frame=frame.frame_id,
+                end_frame=frame.frame_id,
+                primary_visual_frame=frame.frame_id,
+                raw_line=block["raw_line"],
+                line=block["raw_line"],
+                performance_direction=block["perf"],
+                provenance=_make_provenance(frame.source_text or "(inline dialogue recovery)"),
+            )
+            dialogue_nodes.append(node)
+            if dialogue_id not in frame.dialogue_ids:
+                frame.dialogue_ids.append(dialogue_id)
+            frame.is_dialogue = True
+            existing_signatures.add(signature)
+            recovered += 1
+
+        if recovered:
+            warnings.append(
+                f"WARN: recovered {recovered} inline dialogue block(s) on frame {frame.frame_id} "
+                "that were not linked by ///DLG tags"
+            )
 
     return dialogue_nodes
 
@@ -15845,6 +17138,97 @@ def parse_creative_output(
         'cast_states':  cast_states,
         'dialogue':     dialogue_nodes,
     }
+
+
+def _reconcile_cast_entities_and_scene_presence(
+    cast_nodes: list[CastNode],
+    scenes: dict[str, SceneNode],
+    frames: list[FrameNode],
+    cast_states: list[CastFrameState],
+    dialogue_nodes: list[DialogueNode],
+    warnings: list[str],
+) -> None:
+    """Normalize parser output against frame-level evidence from creative prose."""
+    known_cast_ids = {node.cast_id for node in cast_nodes}
+    discovered_cast_ids = {
+        cast_id
+        for cast_id in (
+            [state.cast_id for state in cast_states]
+            + [node.cast_id for node in dialogue_nodes]
+        )
+        if cast_id.startswith("cast_")
+    }
+
+    for cast_id in sorted(discovered_cast_ids - known_cast_ids):
+        display_name = _display_name_from_cast_id(cast_id)
+        cast_nodes.append(
+            CastNode(
+                cast_id=cast_id,
+                name=display_name,
+                display_name=display_name,
+                source_name=display_name,
+                role=NarrativeRole.SUPPORTING,
+                provenance=_make_provenance(
+                    f"Auto-created from creative_output usage for {cast_id}"
+                ),
+            )
+        )
+        known_cast_ids.add(cast_id)
+        warnings.append(f"WARN: auto-created cast node '{cast_id}' from creative output")
+
+    states_by_frame: dict[str, list[CastFrameState]] = {}
+    for state in cast_states:
+        states_by_frame.setdefault(state.frame_id, []).append(state)
+
+    frame_lookup = {frame.frame_id: frame for frame in frames}
+    dialogue_by_id = {node.dialogue_id: node for node in dialogue_nodes}
+    cast_name_by_id = {node.cast_id: node.name for node in cast_nodes}
+
+    for frame in frames:
+        if frame.dialogue_ids:
+            speaker_ids = {
+                dialogue_by_id[did].cast_id
+                for did in frame.dialogue_ids
+                if did in dialogue_by_id and dialogue_by_id[did].primary_visual_frame == frame.frame_id
+            }
+            if speaker_ids:
+                context_parts = [frame.source_text or ""]
+                prev_frame = frame_lookup.get(frame.previous_frame_id or "")
+                if prev_frame and prev_frame.scene_id == frame.scene_id:
+                    context_parts.append(prev_frame.source_text or "")
+                call_context = " ".join(context_parts).lower()
+                if any(token in call_context for token in ("phone", "call", "speakerphone", "voicemail", "on speaker")):
+                    for state in states_by_frame.get(frame.frame_id, []):
+                        if state.cast_id in speaker_ids or state.frame_role == CastFrameRole.REFERENCED:
+                            continue
+                        raw_name = cast_name_by_id.get(state.cast_id, _display_name_from_cast_id(state.cast_id))
+                        candidates = {
+                            raw_name.lower(),
+                            _compact_token(raw_name),
+                            raw_name.lower().split()[0],
+                        }
+                        if any(
+                            f"call from {token}" in call_context
+                            or f"from {token}" in call_context and "call" in call_context
+                            or f"{token} on speaker" in call_context
+                            for token in candidates
+                            if token
+                        ):
+                            state.frame_role = CastFrameRole.REFERENCED
+
+        scene = scenes.get(frame.scene_id)
+        if not scene:
+            continue
+        for state in states_by_frame.get(frame.frame_id, []):
+            if state.frame_role == CastFrameRole.REFERENCED:
+                continue
+            if not state.cast_id.startswith("cast_"):
+                continue
+            if state.cast_id not in scene.cast_present:
+                scene.cast_present.append(state.cast_id)
+
+    for scene in scenes.values():
+        scene.cast_present = list(dict.fromkeys(scene.cast_present))
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -16095,6 +17479,43 @@ def parse_cc_output(
     frames:         list[FrameNode]          = co_data['frames']
     cast_states:    list[CastFrameState]     = co_data['cast_states']
     dialogue_nodes: list[DialogueNode]       = co_data['dialogue']
+
+    _reconcile_cast_entities_and_scene_presence(
+        cast_nodes=cast_nodes,
+        scenes=scenes,
+        frames=frames,
+        cast_states=cast_states,
+        dialogue_nodes=dialogue_nodes,
+        warnings=warnings,
+    )
+
+    known_cast_ids = {node.cast_id for node in cast_nodes}
+    cast_states = [state for state in cast_states if state.cast_id in known_cast_ids]
+    scene_cast_usage: dict[str, set[str]] = {
+        scene_id: {cast_id for cast_id in scene.cast_present if cast_id in known_cast_ids}
+        for scene_id, scene in scenes.items()
+    }
+    frame_scene_ids = {frame.frame_id: frame.scene_id for frame in frames}
+    for state in cast_states:
+        scene_id = frame_scene_ids.get(state.frame_id)
+        if not scene_id:
+            continue
+        frame_role = getattr(getattr(state, "frame_role", None), "value", getattr(state, "frame_role", None))
+        if frame_role == CastFrameRole.REFERENCED.value:
+            continue
+        scene_cast_usage.setdefault(scene_id, set()).add(state.cast_id)
+    for dialogue_node in dialogue_nodes:
+        if dialogue_node.cast_id not in known_cast_ids:
+            continue
+        scene_id = frame_scene_ids.get(dialogue_node.primary_visual_frame or dialogue_node.start_frame)
+        if scene_id:
+            scene_cast_usage.setdefault(scene_id, set()).add(dialogue_node.cast_id)
+    for scene_id, scene in scenes.items():
+        scene.cast_present = sorted(scene_cast_usage.get(scene_id, set()))
+    for frame in frames:
+        cast_ids = getattr(frame, "cast_ids", None)
+        if cast_ids:
+            frame.cast_ids = [cast_id for cast_id in cast_ids if cast_id in known_cast_ids]
 
     # ── Refine scene headings now that we have real location names ────────────
     loc_name_map = {n.location_id: n.name for n in location_nodes}
@@ -17117,6 +18538,1447 @@ if __name__ == "__main__":
     main()
 ```
 
+## `graph/dialogue_validator.py`
+
+```python
+"""Deterministic dialogue workflow validation for ScreenWire."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import sys
+from dataclasses import asdict, dataclass
+from difflib import SequenceMatcher
+from pathlib import Path
+from typing import Any
+
+if __package__:
+    from .api import get_frame_context
+    from .store import GraphStore
+else:
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from graph.api import get_frame_context
+    from graph.store import GraphStore
+
+from screenwire_contracts import default_dialogue_workflow
+
+
+@dataclass
+class DialogueIssue:
+    frame_id: str
+    severity: str
+    problem: str
+    suggested_fix: str
+
+
+def _read_onboarding_config(project_dir: Path) -> dict[str, Any]:
+    path = project_dir / "source_files" / "onboarding_config.json"
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _normalize_text(text: str) -> str:
+    return re.sub(r"\s+", " ", (text or "").strip())
+
+
+def _ratio(a: str, b: str) -> float:
+    if not a and not b:
+        return 1.0
+    return SequenceMatcher(None, a, b).ratio()
+
+
+def _balanced_ok(raw_line: str, assigned_line: str) -> bool:
+    raw = _normalize_text(raw_line)
+    assigned = _normalize_text(assigned_line)
+    if raw == assigned:
+        return True
+    if not raw or not assigned:
+        return False
+    raw_tokens = raw.split()
+    assigned_tokens = assigned.split()
+    token_delta = abs(len(raw_tokens) - len(assigned_tokens))
+    return _ratio(raw, assigned) >= 0.92 and token_delta <= 2
+
+
+def _creative_ok(raw_line: str, assigned_line: str) -> bool:
+    raw = _normalize_text(raw_line)
+    assigned = _normalize_text(assigned_line)
+    if raw == assigned:
+        return True
+    if not raw or not assigned:
+        return False
+    return _ratio(raw, assigned) >= 0.72
+
+
+def _tier_compliance(tier: str, raw_line: str, assigned_line: str) -> tuple[str, str | None]:
+    raw = _normalize_text(raw_line)
+    assigned = _normalize_text(assigned_line)
+    if tier == "strict":
+        if raw != assigned:
+            return "fail", "Strict tier requires word-for-word dialogue."
+        return "pass", None
+    if tier == "balanced":
+        if not _balanced_ok(raw, assigned):
+            return "fail", "Balanced tier only permits very light delivery smoothing."
+        return "pass", None
+    if tier == "creative":
+        if not _creative_ok(raw, assigned):
+            return "fail", "Creative tier allows reframing, but the line drifted too far from the source."
+        return "pass", None
+    return "pass", None
+
+
+def validate_dialogue_project(project_dir: Path) -> dict[str, Any]:
+    store = GraphStore(project_dir)
+    graph = store.load()
+    config = _read_onboarding_config(project_dir)
+    creative_freedom = (
+        config.get("creativeFreedom")
+        or getattr(graph.project, "creative_freedom", "")
+        or "balanced"
+    ).strip().lower()
+    workflow = config.get("dialogueWorkflow") or default_dialogue_workflow()
+    enabled = bool(workflow.get("enabled", True))
+
+    video_prompt_dir = project_dir / "video" / "prompts"
+    video_prompts: dict[str, dict[str, Any]] = {}
+    if video_prompt_dir.exists():
+        for path in sorted(video_prompt_dir.glob("*_video.json")):
+            try:
+                video_prompts[path.stem.removesuffix("_video")] = json.loads(
+                    path.read_text(encoding="utf-8")
+                )
+            except (json.JSONDecodeError, OSError):
+                continue
+
+    issues: list[DialogueIssue] = []
+    assignments: list[dict[str, Any]] = []
+    dialogue_frame_count = 0
+
+    if enabled:
+        for frame_id in graph.frame_order:
+            ctx = get_frame_context(graph, frame_id)
+            audible = [node for node in ctx.get("dialogue", []) if _normalize_text(node.get("raw_line") or node.get("line"))]
+            prompt_state = video_prompts.get(frame_id, {})
+
+            if audible:
+                dialogue_frame_count += 1
+                if not prompt_state:
+                    issues.append(
+                        DialogueIssue(
+                            frame_id=frame_id,
+                            severity="ERROR",
+                            problem="Frame has dialogue but no assembled video prompt JSON.",
+                            suggested_fix="Re-run graph_assemble_prompts after dialogue recovery.",
+                        )
+                    )
+                    continue
+
+                if not prompt_state.get("dialogue_present", False):
+                    issues.append(
+                        DialogueIssue(
+                            frame_id=frame_id,
+                            severity="ERROR",
+                            problem="Frame has dialogue but video prompt marks dialogue_present=false.",
+                            suggested_fix="Rebuild the shot packet and video prompt so dialogue metadata is carried through.",
+                        )
+                    )
+
+                prompt_line = _normalize_text(prompt_state.get("dialogue_line", ""))
+                if not prompt_line:
+                    issues.append(
+                        DialogueIssue(
+                            frame_id=frame_id,
+                            severity="ERROR",
+                            problem="Frame has dialogue but video prompt has no dialogue_line.",
+                            suggested_fix="Populate dialogue_line from the audible dialogue chunk for this frame.",
+                        )
+                    )
+
+                allowed_lines = [
+                    _normalize_text(node.get("line") or node.get("raw_line") or "")
+                    for node in audible
+                ]
+                if prompt_line and not any(
+                    prompt_line == candidate
+                    or prompt_line in candidate
+                    or candidate in prompt_line
+                    for candidate in allowed_lines
+                    if candidate
+                ):
+                    issues.append(
+                        DialogueIssue(
+                            frame_id=frame_id,
+                            severity="ERROR" if creative_freedom in {"strict", "balanced"} else "WARNING",
+                            problem="Video prompt dialogue_line does not match the graph-assigned audible dialogue.",
+                            suggested_fix="Reassemble the video prompt from current dialogue nodes before proceeding.",
+                        )
+                    )
+
+                for node in audible:
+                    raw_line = node.get("raw_line") or node.get("line") or ""
+                    assigned_line = node.get("line") or raw_line
+                    compliance, reason = _tier_compliance(creative_freedom, raw_line, assigned_line)
+                    assignments.append(
+                        {
+                            "frame_id": frame_id,
+                            "dialogue_id": node.get("dialogue_id", ""),
+                            "speaker": node.get("speaker", ""),
+                            "raw_line": raw_line,
+                            "assigned_line": assigned_line,
+                            "tier_compliance": compliance,
+                        }
+                    )
+                    if reason:
+                        issues.append(
+                            DialogueIssue(
+                                frame_id=frame_id,
+                                severity="ERROR",
+                                problem=reason,
+                                suggested_fix="Reset the assigned line to the source-aligned version or lower the creative freedom tier.",
+                            )
+                        )
+            elif prompt_state.get("dialogue_present", False):
+                issues.append(
+                    DialogueIssue(
+                        frame_id=frame_id,
+                        severity="WARNING",
+                        problem="Video prompt claims dialogue is present but the graph has no audible dialogue for this frame.",
+                        suggested_fix="Rebuild the shot packet and prompt after checking frame dialogue spans.",
+                    )
+                )
+
+    error_count = sum(1 for issue in issues if issue.severity == "ERROR")
+    report = {
+        "status": "pass" if error_count == 0 else "fail",
+        "creativeFreedom": creative_freedom,
+        "dialogueWorkflowVersion": workflow.get("version", "unknown"),
+        "summary": {
+            "dialogueNodeCount": len(graph.dialogue_order or graph.dialogue),
+            "dialogueFrameCount": dialogue_frame_count,
+            "videoPromptCount": len(video_prompts),
+            "issues": len(issues),
+            "errors": error_count,
+            "warnings": len(issues) - error_count,
+        },
+        "issues": [asdict(issue) for issue in issues],
+        "assignments": assignments,
+    }
+
+    report_path = project_dir / "logs" / "pipeline" / "dialogue_confirmation_report.json"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
+    return report
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Validate dialogue mapping and tier compliance.")
+    parser.add_argument("--project-dir", default=".")
+    args = parser.parse_args()
+
+    report = validate_dialogue_project(Path(args.project_dir))
+    print(json.dumps(report["summary"], indent=2))
+    raise SystemExit(0 if report["status"] == "pass" else 1)
+
+
+if __name__ == "__main__":
+    main()
+```
+
+## `graph/feature_flags.py`
+
+```python
+from __future__ import annotations
+
+import os
+
+
+def _env_flag(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+# Storyboard guidance is currently bypassed so the pipeline can proceed
+# directly from structured prompt assembly to final frame generation.
+ENABLE_STORYBOARD_GUIDANCE = _env_flag(
+    "SCREENWIRE_ENABLE_STORYBOARD_GUIDANCE",
+    False,
+)
+```
+
+## `graph/frame_enricher.py`
+
+```python
+"""
+Frame Enricher — Parallel per-frame enrichment via Grok reasoning
+=================================================================
+
+Step 2b of the CC-First pipeline. Receives the base NarrativeGraph
+(already seeded by cc_parser.py) and dispatches parallel frame-enricher
+API calls to fill in:
+
+  - CastFrameState: screen_position, looking_at, emotion, posture, ...
+  - FrameComposition: shot, angle, movement, focus
+  - FrameEnvironment: lighting, atmosphere, materials
+  - FrameBackground: background_action, depth_layers
+  - FrameDirecting: dramatic_purpose, beat_turn, pov_owner, ...
+  - FrameNode: action_summary, emotional_arc, visual_flow_element
+
+Usage:
+    python3 graph/frame_enricher.py --project-dir ./projects/test
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import os
+import sys
+from functools import lru_cache
+from pathlib import Path
+from typing import Optional
+
+from llm.xai_client import XAIClient, build_prompt_cache_key
+
+from .schema import (
+    CastFrameState,
+    EmotionalArc,
+    FrameAtmosphere,
+    FrameBackground,
+    FrameComposition,
+    FrameDirecting,
+    FrameEnvironment,
+    FrameLighting,
+    NarrativeGraph,
+)
+from .store import GraphStore
+
+logger = logging.getLogger(__name__)
+
+# ─── Constants ───────────────────────────────────────────────────────────────
+
+FRAME_ENRICHER_MODEL = "grok-4-1-fast-reasoning"
+FRAME_ENRICHER_TEMPERATURE = 0.3
+FRAME_ENRICHER_MAX_TOKENS = [REDACTED]
+
+
+def _coerce_text_scalar(value: object) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        cleaned = value.strip()
+        return cleaned or None
+    if isinstance(value, (list, tuple, set)):
+        parts: list[str] = []
+        for item in value:
+            normalized = _coerce_text_scalar(item)
+            if normalized:
+                parts.append(normalized)
+        if not parts:
+            return None
+        return ", ".join(dict.fromkeys(parts))
+    if isinstance(value, (int, float, bool)):
+        return str(value)
+    return None
+
+
+def _coerce_enum_token(value: object) -> Optional[str]:
+    if isinstance(value, (list, tuple, set)):
+        for item in value:
+            normalized = _coerce_enum_token(item)
+            if normalized:
+                return normalized
+        return None
+    return _coerce_text_scalar(value)
+
+
+def _coerce_float_scalar(value: object) -> Optional[float]:
+    if value is None:
+        return None
+    if isinstance(value, (list, tuple, set)):
+        for item in value:
+            normalized = _coerce_float_scalar(item)
+            if normalized is not None:
+                return normalized
+        return None
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value.strip())
+        except ValueError:
+            return None
+    return None
+
+# ─── System Prompt ───────────────────────────────────────────────────────────
+
+FRAME_ENRICHER_SYSTEM_PROMPT = """You are a cinematic enrichment worker for a screenplay-to-visual pipeline.
+
+You receive a single frame's context and must fill out a structured enrichment form. Your output
+drives image generation, video direction, and continuity tracking. Be precise and visual — every
+field must be directly useful to an image/video generation model.
+
+## YOUR TASK
+
+Fill the structured enrichment form for the given frame. Return ONLY valid JSON — no markdown,
+no explanation, no commentary outside the JSON object.
+
+## CAST STATE ENRICHMENT
+
+For each character in `cast_in_frame`, fill their state in `cast_states`:
+
+- `screen_position` (MANDATORY): Where they appear in the frame.
+  Values: frame_left | frame_center | frame_right | frame_left_third | frame_right_third
+  BASE ON: the `staging_anchor` provided for this frame. Use it as your default unless
+  the action explicitly places the character elsewhere. Do not deviate without cause.
+
+- `looking_at` (MANDATORY): What they are looking at.
+  Values: another cast_id, a prop_id, "distance", "camera", or a location feature name.
+  BASE ON: staging_anchor.looking_at. Override only for motivated character action.
+
+- `facing_direction` (MANDATORY): Their body orientation relative to the camera.
+  Values: toward_camera | away | profile_left | profile_right | three_quarter
+  BASE ON: staging_anchor.facing_direction.
+
+- `emotion`: Single compound term (e.g. restrained_anger, quiet_determination, bitter_amusement).
+  Match to the emotional content of the source_text.
+
+- `emotion_intensity`: Float 0.0–1.0. Low = subtle, High = breaking point.
+
+- `posture`: standing | sitting | crouching | kneeling | lying | walking | running | leaning | hunched
+
+- `action`: Verb-first physical action (e.g. crosses_to_window, grips_door_frame, adjusts_dials).
+
+- `frame_role`: subject | object | background | partial | referenced
+  The primary character(s) in the shot = subject. Others = object/background.
+
+- `delta_fields`: list of field names that changed from previous_frame_state.
+  Empty list if this is the first frame or nothing changed.
+
+Optional fields (include only if relevant):
+- `props_held`: list of prop_ids currently in hand
+- `props_interacted`: list of prop_ids touched/used this frame
+- `clothing_state`: base | damaged | wet | changed | removed (only if changed from identity)
+- `hair_state`: disheveled | wet | tied_back (only if changed from identity)
+- `injury`: description (only if new or changed)
+- `eye_direction`: downward | at_other_character | distant
+
+## COMPOSITION
+
+Fill `composition` based on the prose mood and staging:
+- `shot`: medium_shot | close_up | wide | extreme_close_up | medium_close_up | two_shot | over_shoulder
+- `angle`: eye_level | low | high | dutch | birds_eye | worms_eye
+- `movement`: static | push | pull | pan_left | pan_right | tracking | dolly | crane | drift | subtle_drift
+- `focus`: deep | shallow | rack
+- `placement`: Rule of thirds (e.g. "subject_left_third")
+- `grouping`: Multi-character arrangement (e.g. "triangle_composition")
+- `blocking`: Stage direction note
+- `transition`: Transition from previous frame (e.g. "cut", "match_cut")
+- `rule`: Composition rule (e.g. "rule_of_thirds", "leading_lines")
+
+## ENVIRONMENT
+
+Fill `environment` with lighting and atmosphere:
+- `lighting.direction`: front | side_left | side_right | back | overhead | under | ambient
+- `lighting.quality`: hard | soft | harsh | diffused | golden | flat | dappled | silhouette
+- `lighting.color_temp`: warm string (e.g. "cool_blue", "warm_amber", "green_fluorescent")
+- `lighting.motivated_source`: What is producing the light (e.g. "window_left", "candle", "monitor_glow")
+- `lighting.shadow_behavior`: How shadows behave (e.g. "deep_pools", "striped_parallel", "soft_diffused")
+- `atmosphere.particles`: dust_motes | smoke | rain | snow | pollen | fog (if present)
+- `atmosphere.weather`: rain | snow | fog | clear | overcast (exterior only)
+- `atmosphere.ambient_motion`: curtain_sway | candle_flicker | leaves_rustling | screen_flicker
+- `atmosphere.temperature_feel`: humid | cold | stifling | dry | freezing
+- `materials_present`: list of texture-rich materials visible (e.g. ["weathered_wood", "cracked_concrete"])
+- `foreground_objects`: list of objects in the foreground plane
+- `midground_detail`: Description of midground plane
+- `background_depth`: What is visible in the far background
+
+## BACKGROUND
+
+Fill `background`:
+- `background_action`: Activity happening in the background (e.g. "servants clearing dishes in distance")
+- `background_sound`: Ambient sound (e.g. "distant market chatter")
+- `background_music`: Diegetic music only (e.g. "faint erhu melody from radio")
+- `depth_layers`: list of layer descriptions from foreground to background
+
+## DIRECTING
+
+Fill `directing` with narrative intent:
+- `dramatic_purpose` (MANDATORY): reveal | reaction | intimidation | intimacy | concealment | introduction | transition
+- `beat_turn` (MANDATORY): One sentence — what changes by the end of this frame
+- `pov_owner` (MANDATORY): cast_id, or "audience"
+- `camera_motivation` (MANDATORY): Why this framing or movement serves the story beat
+- `viewer_knowledge_delta`: New information the viewer learns
+- `power_dynamic`: Who holds advantage and how
+- `tension_source`: What creates pressure in this moment
+- `movement_motivation`: Why the scene feels active or kinetic
+- `movement_path`: Start-to-end blocking path
+- `reaction_target`: The line or action this frame responds to
+- `background_life`: What supporting life exists behind the subject
+
+## FRAME-LEVEL FIELDS
+
+- `action_summary` (MANDATORY): Concise verb-first physical action for video prompt.
+  E.g. "Watanabe hunches over oscilloscope, fingers adjusting dials"
+  This feeds directly into video generation. Be concrete and visual.
+
+- `video_optimized_prompt_block` (MANDATORY): One dense cinematic sentence under 500
+  characters that preserves action, blocking, and environmental context together.
+  It should read like a compressed final video prompt lead, not a field label dump.
+  This survives downstream Grok prompt compression, so include the most important
+  lighting, atmosphere, and staging context here.
+
+- `emotional_arc` (MANDATORY): Emotional direction relative to previous frame.
+  Values: rising | falling | static | peak | release
+
+- `visual_flow_element` (MANDATORY): The dominant visual driver of this frame.
+  Values: motion | dialogue | reaction | action | weight | establishment
+
+## OUTPUT FORMAT
+
+Return exactly this JSON structure (add only the fields you are populating):
+
+{
+  "frame_id": "<frame_id>",
+  "action_summary": "<verb-first physical action>",
+  "video_optimized_prompt_block": "<dense cinematic sentence under 500 chars>",
+  "emotional_arc": "<rising|falling|static|peak|release>",
+  "visual_flow_element": "<motion|dialogue|reaction|action|weight|establishment>",
+  "composition": {
+    "shot": "<shot type>",
+    "angle": "<angle>",
+    "movement": "<movement>",
+    "focus": "<focus>"
+  },
+  "environment": {
+    "lighting": {
+      "direction": "<direction>",
+      "quality": "<quality>",
+      "color_temp": "<optional>",
+      "motivated_source": "<optional>",
+      "shadow_behavior": "<optional>"
+    },
+    "atmosphere": {
+      "particles": "<optional>",
+      "weather": "<optional>",
+      "ambient_motion": "<optional>",
+      "temperature_feel": "<optional>"
+    },
+    "materials_present": [],
+    "foreground_objects": [],
+    "midground_detail": "<optional>",
+    "background_depth": "<optional>"
+  },
+  "background": {
+    "camera_facing": "<inherited from input>",
+    "background_action": "<optional>",
+    "background_sound": "<optional>",
+    "depth_layers": []
+  },
+  "directing": {
+    "dramatic_purpose": "<mandatory>",
+    "beat_turn": "<mandatory>",
+    "pov_owner": "<mandatory>",
+    "camera_motivation": "<mandatory>",
+    "viewer_knowledge_delta": "<optional>",
+    "power_dynamic": "<optional>",
+    "tension_source": "<optional>",
+    "movement_motivation": "<optional>",
+    "reaction_target": "<optional>",
+    "background_life": "<optional>"
+  },
+  "cast_states": [
+    {
+      "cast_id": "<cast_id>",
+      "screen_position": "<mandatory>",
+      "looking_at": "<mandatory>",
+      "facing_direction": "<mandatory>",
+      "emotion": "<emotion>",
+      "emotion_intensity": 0.5,
+      "posture": "<posture>",
+      "action": "<verb-first action>",
+      "frame_role": "<role>",
+      "props_held": [],
+      "props_interacted": [],
+      "delta_fields": []
+    }
+  ]
+}
+"""
+
+
+def _nullable_string_schema() -> dict:
+    return {"type": ["string", "null"]}
+
+
+def _nullable_number_schema() -> dict:
+    return {"type": ["number", "null"]}
+
+
+_STRING_LIST_SCHEMA = {"type": "array", "items": {"type": "string"}}
+
+FRAME_ENRICHER_RESPONSE_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "frame_id": {"type": "string"},
+        "action_summary": _nullable_string_schema(),
+        "video_optimized_prompt_block": _nullable_string_schema(),
+        "emotional_arc": _nullable_string_schema(),
+        "visual_flow_element": _nullable_string_schema(),
+        "composition": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "shot": _nullable_string_schema(),
+                "angle": _nullable_string_schema(),
+                "movement": _nullable_string_schema(),
+                "focus": _nullable_string_schema(),
+                "placement": _nullable_string_schema(),
+                "grouping": _nullable_string_schema(),
+                "blocking": _nullable_string_schema(),
+                "transition": _nullable_string_schema(),
+                "rule": _nullable_string_schema(),
+            },
+        },
+        "environment": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "lighting": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "direction": _nullable_string_schema(),
+                        "quality": _nullable_string_schema(),
+                        "color_temp": _nullable_string_schema(),
+                        "motivated_source": _nullable_string_schema(),
+                        "shadow_behavior": _nullable_string_schema(),
+                    },
+                },
+                "atmosphere": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "particles": _nullable_string_schema(),
+                        "weather": _nullable_string_schema(),
+                        "ambient_motion": _nullable_string_schema(),
+                        "temperature_feel": _nullable_string_schema(),
+                    },
+                },
+                "materials_present": _STRING_LIST_SCHEMA,
+                "foreground_objects": _STRING_LIST_SCHEMA,
+                "midground_detail": _nullable_string_schema(),
+                "background_depth": _nullable_string_schema(),
+            },
+        },
+        "background": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "camera_facing": _nullable_string_schema(),
+                "background_action": _nullable_string_schema(),
+                "background_sound": _nullable_string_schema(),
+                "background_music": _nullable_string_schema(),
+                "depth_layers": _STRING_LIST_SCHEMA,
+            },
+        },
+        "directing": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "dramatic_purpose": _nullable_string_schema(),
+                "beat_turn": _nullable_string_schema(),
+                "pov_owner": _nullable_string_schema(),
+                "camera_motivation": _nullable_string_schema(),
+                "viewer_knowledge_delta": _nullable_string_schema(),
+                "power_dynamic": _nullable_string_schema(),
+                "tension_source": _nullable_string_schema(),
+                "movement_motivation": _nullable_string_schema(),
+                "movement_path": _nullable_string_schema(),
+                "reaction_target": _nullable_string_schema(),
+                "background_life": _nullable_string_schema(),
+            },
+        },
+        "cast_states": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "cast_id": {"type": "string"},
+                    "screen_position": _nullable_string_schema(),
+                    "looking_at": _nullable_string_schema(),
+                    "facing_direction": _nullable_string_schema(),
+                    "emotion": _nullable_string_schema(),
+                    "emotion_intensity": _nullable_number_schema(),
+                    "posture": _nullable_string_schema(),
+                    "action": _nullable_string_schema(),
+                    "frame_role": _nullable_string_schema(),
+                    "props_held": _STRING_LIST_SCHEMA,
+                    "props_interacted": _STRING_LIST_SCHEMA,
+                    "delta_fields": _STRING_LIST_SCHEMA,
+                    "clothing_state": _nullable_string_schema(),
+                    "hair_state": _nullable_string_schema(),
+                    "injury": _nullable_string_schema(),
+                    "eye_direction": _nullable_string_schema(),
+                },
+                "required": ["cast_id"],
+            },
+        },
+    },
+    "required": ["frame_id"],
+}
+
+FRAME_ENRICHER_CACHE_KEY = [REDACTED]
+    "frame-enricher",
+    FRAME_ENRICHER_SYSTEM_PROMPT,
+)
+
+
+# ─── Input Builder ────────────────────────────────────────────────────────────
+
+
+def _staging_beat_key(frame_ids: list[str], frame_id: str) -> str:
+    """Return 'start', 'mid', or 'end' based on frame position in scene."""
+    if not frame_ids:
+        return "start"
+    try:
+        idx = frame_ids.index(frame_id)
+    except ValueError:
+        return "start"
+    ratio = idx / max(len(frame_ids) - 1, 1)
+    if ratio < 1 / 3:
+        return "start"
+    if ratio >= 2 / 3:
+        return "end"
+    return "mid"
+
+
+def _build_identity_summary(cast_node) -> str:
+    """Compose a compact identity description from CastNode.identity."""
+    identity = cast_node.identity
+    parts = []
+    if identity.age_descriptor:
+        parts.append(identity.age_descriptor)
+    if identity.gender:
+        parts.append(identity.gender)
+    if identity.build:
+        parts.append(f"{identity.build} build")
+    if identity.skin:
+        parts.append(f"{identity.skin} skin")
+    hair_parts = [p for p in [identity.hair_color, identity.hair_length, identity.hair_style] if p]
+    if hair_parts:
+        parts.append(" ".join(hair_parts) + " hair")
+    if identity.physical_description:
+        return identity.physical_description
+    return ", ".join(parts) if parts else cast_node.name
+
+
+def _resolve_staging_anchor(scene, frame_id: str) -> dict:
+    """Resolve staging anchor from scene.staging_plan for the given frame."""
+    beat_key = _staging_beat_key(scene.frame_ids, frame_id)
+    staging_plan = scene.staging_plan or {}
+    beat = staging_plan.get(beat_key)
+    if beat is None:
+        # Try adjacent beats
+        for fallback in ("start", "mid", "end"):
+            beat = staging_plan.get(fallback)
+            if beat is not None:
+                break
+    if beat is None:
+        return {}
+
+    # StagingBeat has per-cast dicts; build a frame-level anchor
+    # by merging all cast positions (first cast's values used as baseline)
+    anchor: dict = {}
+    if beat.cast_positions:
+        # Take the first entry as representative anchor
+        first_cast_id = next(iter(beat.cast_positions))
+        anchor["screen_position"] = beat.cast_positions[first_cast_id]
+    if beat.cast_looking_at:
+        first_cast_id = next(iter(beat.cast_looking_at))
+        anchor["looking_at"] = beat.cast_looking_at[first_cast_id]
+    if beat.cast_facing:
+        first_cast_id = next(iter(beat.cast_facing))
+        anchor["facing_direction"] = beat.cast_facing[first_cast_id]
+    return anchor
+
+
+def _resolve_location_directions(graph: NarrativeGraph, location_id: Optional[str]) -> dict:
+    """Extract cardinal direction descriptions from the location node."""
+    if not location_id or location_id not in graph.locations:
+        return {}
+    loc = graph.locations[location_id]
+    dirs = loc.directions
+    result = {}
+    for compass in ("north", "south", "east", "west", "exterior"):
+        view = getattr(dirs, compass, None)
+        if view and view.description:
+            result[compass] = view.description
+    return result
+
+
+def _previous_frame_context(graph: NarrativeGraph, prev_frame_id: Optional[str]) -> Optional[dict]:
+    """Build a compact previous-frame context dict."""
+    if not prev_frame_id or prev_frame_id not in graph.frames:
+        return None
+    prev = graph.frames[prev_frame_id]
+    # Summarise cast states for previous frame
+    cast_summaries = []
+    for state_key, state in graph.cast_frame_states.items():
+        if state.frame_id == prev_frame_id:
+            parts = [state.cast_id]
+            if state.emotion:
+                parts.append(state.emotion)
+            if state.posture:
+                posture_val = state.posture.value if hasattr(state.posture, "value") else str(state.posture)
+                parts.append(posture_val)
+            cast_summaries.append(", ".join(parts))
+    return {
+        "frame_id": prev_frame_id,
+        "narrative_beat": prev.narrative_beat or "",
+        "cast_states_summary": "; ".join(cast_summaries) if cast_summaries else "",
+    }
+
+
+def build_frame_enricher_inputs(graph: NarrativeGraph) -> list[dict]:
+    """Build one frame-enricher input dict per frame, following Section 3.1 format.
+
+    Returns a list ordered by frame_order.
+    """
+    inputs: list[dict] = []
+
+    for frame_id in graph.frame_order:
+        frame = graph.frames.get(frame_id)
+        if frame is None:
+            logger.warning("frame_order references unknown frame %s — skipping", frame_id)
+            continue
+
+        scene = graph.scenes.get(frame.scene_id) if frame.scene_id else None
+
+        # ── Scene context ──────────────────────────────────────────────────
+        scene_context: dict = {}
+        if scene:
+            location_name = ""
+            location_type = ""
+            if scene.location_id and scene.location_id in graph.locations:
+                loc = graph.locations[scene.location_id]
+                location_name = loc.name
+                location_type = loc.location_type or ""
+            time_val = None
+            if frame.time_of_day:
+                time_val = frame.time_of_day.value if hasattr(frame.time_of_day, "value") else str(frame.time_of_day)
+            elif scene.time_of_day:
+                time_val = scene.time_of_day.value if hasattr(scene.time_of_day, "value") else str(scene.time_of_day)
+            scene_context = {
+                "scene_id": scene.scene_id,
+                "title": scene.title or "",
+                "location": location_name,
+                "location_type": location_type,
+                "time_of_day": time_val or "",
+                "mood_keywords": scene.mood_keywords or [],
+                "pacing": scene.pacing or "",
+            }
+
+        # ── Cast in frame ──────────────────────────────────────────────────
+        cast_in_frame: list[dict] = []
+        # Collect cast_ids visible in this frame from CastFrameState
+        cast_ids_in_frame: list[str] = []
+        for state_key, state in graph.cast_frame_states.items():
+            if state.frame_id == frame_id:
+                cast_ids_in_frame.append(state.cast_id)
+
+        for cast_id in cast_ids_in_frame:
+            cast_node = graph.cast.get(cast_id)
+            if cast_node is None:
+                continue
+            state_key = f"{cast_id}@{frame_id}"
+            current_state = graph.cast_frame_states.get(state_key)
+
+            # Previous frame state for this cast member
+            prev_state_summary = None
+            if frame.previous_frame_id:
+                prev_state_key = f"{cast_id}@{frame.previous_frame_id}"
+                prev_state = graph.cast_frame_states.get(prev_state_key)
+                if prev_state:
+                    prev_state_summary = {
+                        "emotion": prev_state.emotion,
+                        "posture": (
+                            prev_state.posture.value
+                            if prev_state.posture and hasattr(prev_state.posture, "value")
+                            else str(prev_state.posture) if prev_state.posture else None
+                        ),
+                        "screen_position": prev_state.screen_position,
+                        "looking_at": prev_state.looking_at,
+                        "facing_direction": prev_state.facing_direction,
+                        "action": prev_state.action,
+                        "props_held": prev_state.props_held or [],
+                        "clothing_state": prev_state.clothing_state,
+                        "injury": prev_state.injury,
+                    }
+
+            active_tag = current_state.active_state_tag if current_state else "base"
+            cast_in_frame.append(
+                {
+                    "cast_id": cast_id,
+                    "name": cast_node.name,
+                    "identity_summary": _build_identity_summary(cast_node),
+                    "active_state_tag": active_tag,
+                    "previous_frame_state": prev_state_summary,
+                }
+            )
+
+        # ── Staging anchor ─────────────────────────────────────────────────
+        staging_anchor = {}
+        if scene:
+            staging_anchor = _resolve_staging_anchor(scene, frame_id)
+
+        # ── Location directions ────────────────────────────────────────────
+        location_directions = _resolve_location_directions(
+            graph, scene.location_id if scene else None
+        )
+
+        # ── Props in scene ─────────────────────────────────────────────────
+        props_in_scene: list[dict] = []
+        if scene:
+            for prop_id in scene.props_present:
+                prop = graph.props.get(prop_id)
+                if prop:
+                    props_in_scene.append(
+                        {
+                            "prop_id": prop_id,
+                            "name": prop.name,
+                            "description": prop.description or "",
+                        }
+                    )
+
+        # ── Dialogue ──────────────────────────────────────────────────────
+        dialogue_text = None
+        if frame.is_dialogue and frame.dialogue_ids:
+            lines = []
+            for did in frame.dialogue_ids:
+                dnode = graph.dialogue.get(did)
+                if dnode and dnode.raw_line:
+                    lines.append(f"{dnode.speaker}: {dnode.raw_line}")
+            dialogue_text = "\n".join(lines) if lines else None
+
+        # ── Build input dict ───────────────────────────────────────────────
+        frame_input = {
+            "frame_id": frame_id,
+            "sequence_index": frame.sequence_index,
+            "source_text": frame.source_text or frame.narrative_beat or "",
+            "scene_context": scene_context,
+            "cast_in_frame": cast_in_frame,
+            "staging_anchor": staging_anchor,
+            "location_directions": location_directions,
+            "props_in_scene": props_in_scene,
+            "previous_frame": _previous_frame_context(graph, frame.previous_frame_id),
+            "is_dialogue": frame.is_dialogue,
+            "dialogue_text": dialogue_text,
+        }
+        inputs.append(frame_input)
+
+    return inputs
+
+
+# ─── Frame Enricher API Calls ────────────────────────────────────────────────
+
+
+@lru_cache(maxsize=4)
+def _get_xai_client(api_key: str) -> XAIClient:
+    return XAIClient(api_key=api_key)
+
+
+async def enrich_single_frame(input_dict: dict, api_key: str) -> dict:
+    """Send one frame to the frame enricher and parse the JSON response.
+
+    On API failure: logs error and returns a minimal dict with the
+    frame_id and an 'error' field so the caller can continue.
+    """
+    frame_id = input_dict.get("frame_id", "unknown")
+    client = _get_xai_client(api_key or os.environ.get("XAI_API_KEY", ""))
+
+    user_message = json.dumps(input_dict, indent=2, ensure_ascii=False)
+
+    try:
+        result = await client.generate_json(
+            system_prompt=FRAME_ENRICHER_SYSTEM_PROMPT,
+            prompt=user_message,
+            schema=FRAME_ENRICHER_RESPONSE_SCHEMA,
+            model=FRAME_ENRICHER_MODEL,
+            temperature=FRAME_ENRICHER_TEMPERATURE,
+            max_tokens=FRAME_ENRICHER_MAX_TOKENS,
+            cache_key=FRAME_ENRICHER_CACHE_KEY,
+            task_hint="frame_enrichment",
+            schema_name="frame_enrichment",
+        )
+        result["frame_id"] = frame_id  # Ensure frame_id is always present
+        return result
+
+    except json.JSONDecodeError as e:
+        logger.error("Frame %s: frame enricher returned invalid JSON — %s", frame_id, e)
+        return {"frame_id": frame_id, "error": f"json_parse_error: {e}"}
+    except Exception as e:
+        logger.error("Frame %s: frame enricher API error — %s", frame_id, e)
+        return {"frame_id": frame_id, "error": f"api_error: {e}"}
+
+
+async def frame_enricher_batch_enrich(
+    inputs: list[dict],
+    api_key: str,
+    max_concurrent: int = 20,
+) -> list[dict]:
+    """Run all frame enrichment calls with a concurrency semaphore.
+
+    Failures are captured per-frame and do not abort the batch.
+    Returns results in the same order as inputs.
+    """
+    semaphore = asyncio.Semaphore(max_concurrent)
+
+    async def bounded_enrich(inp: dict) -> dict:
+        async with semaphore:
+            return await enrich_single_frame(inp, api_key)
+
+    tasks = [bounded_enrich(inp) for inp in inputs]
+    results = await asyncio.gather(*tasks, return_exceptions=False)
+    return list(results)
+
+
+# ─── Apply Enrichment ─────────────────────────────────────────────────────────
+
+
+def apply_frame_enrichment(graph: NarrativeGraph, result: dict) -> None:
+    """Apply one frame enricher worker result to the graph in-place.
+
+    Updates:
+      - FrameNode: composition, environment, background, directing,
+                   action_summary, emotional_arc, visual_flow_element
+      - CastFrameState: all enriched fields
+    """
+    frame_id = result.get("frame_id")
+    if not frame_id:
+        logger.warning("Frame enricher result missing frame_id — skipping")
+        return
+
+    if "error" in result:
+        logger.warning("Skipping frame %s due to enrichment error: %s", frame_id, result["error"])
+        return
+
+    frame = graph.frames.get(frame_id)
+    if frame is None:
+        logger.warning("Frame enricher result references unknown frame %s — skipping", frame_id)
+        return
+
+    # ── Frame-level fields ─────────────────────────────────────────────────
+    action_summary = _coerce_text_scalar(result.get("action_summary"))
+    if action_summary:
+        frame.action_summary = action_summary
+    prompt_block = _coerce_text_scalar(result.get("video_optimized_prompt_block"))
+    if prompt_block:
+        frame.video_optimized_prompt_block = prompt_block
+
+    emotional_arc = _coerce_enum_token(result.get("emotional_arc"))
+    if emotional_arc:
+        try:
+            frame.emotional_arc = EmotionalArc(emotional_arc)
+        except ValueError:
+            logger.warning("Frame %s: invalid emotional_arc value '%s'", frame_id, emotional_arc)
+
+    visual_flow_element = _coerce_text_scalar(result.get("visual_flow_element"))
+    if visual_flow_element:
+        frame.visual_flow_element = visual_flow_element
+
+    # ── Composition ────────────────────────────────────────────────────────
+    comp_data = result.get("composition")
+    if comp_data and isinstance(comp_data, dict):
+        comp = frame.composition
+        for field in ("shot", "angle", "movement", "focus", "placement",
+                      "grouping", "blocking", "transition", "rule"):
+            val = _coerce_text_scalar(comp_data.get(field))
+            if val:
+                setattr(comp, field, val)
+
+    # ── Environment ────────────────────────────────────────────────────────
+    env_data = result.get("environment")
+    if env_data and isinstance(env_data, dict):
+        env = frame.environment
+
+        lighting_data = env_data.get("lighting")
+        if lighting_data and isinstance(lighting_data, dict):
+            from .schema import LightingDirection, LightingQuality
+            lt = env.lighting
+            direction = _coerce_enum_token(lighting_data.get("direction"))
+            if direction:
+                try:
+                    lt.direction = LightingDirection(direction)
+                except ValueError:
+                    logger.debug("Frame %s: unknown lighting direction '%s'", frame_id, direction)
+            quality = _coerce_enum_token(lighting_data.get("quality"))
+            if quality:
+                try:
+                    lt.quality = LightingQuality(quality)
+                except ValueError:
+                    logger.debug("Frame %s: unknown lighting quality '%s'", frame_id, quality)
+            for field in ("color_temp", "motivated_source", "shadow_behavior"):
+                val = _coerce_text_scalar(lighting_data.get(field))
+                if val:
+                    setattr(lt, field, val)
+
+        atmo_data = env_data.get("atmosphere")
+        if atmo_data and isinstance(atmo_data, dict):
+            atmo = env.atmosphere
+            for field in ("particles", "weather", "ambient_motion", "temperature_feel"):
+                val = _coerce_text_scalar(atmo_data.get(field))
+                if val:
+                    setattr(atmo, field, val)
+
+        materials = env_data.get("materials_present")
+        if materials and isinstance(materials, list):
+            env.materials_present = materials
+
+        fg_objects = env_data.get("foreground_objects")
+        if fg_objects and isinstance(fg_objects, list):
+            env.foreground_objects = fg_objects
+
+        midground_detail = _coerce_text_scalar(env_data.get("midground_detail"))
+        if midground_detail:
+            env.midground_detail = midground_detail
+
+        background_depth = _coerce_text_scalar(env_data.get("background_depth"))
+        if background_depth:
+            env.background_depth = background_depth
+
+    # ── Background ─────────────────────────────────────────────────────────
+    bg_data = result.get("background")
+    if bg_data and isinstance(bg_data, dict):
+        bg = frame.background
+        for field in ("background_action", "background_sound", "background_music"):
+            val = _coerce_text_scalar(bg_data.get(field))
+            if val:
+                setattr(bg, field, val)
+        depth_layers = bg_data.get("depth_layers")
+        if depth_layers and isinstance(depth_layers, list):
+            bg.depth_layers = depth_layers
+
+    # ── Directing ──────────────────────────────────────────────────────────
+    dir_data = result.get("directing")
+    if dir_data and isinstance(dir_data, dict):
+        dr = frame.directing
+        for field in (
+            "dramatic_purpose", "beat_turn", "pov_owner", "camera_motivation",
+            "viewer_knowledge_delta", "power_dynamic", "tension_source",
+            "movement_motivation", "movement_path", "reaction_target", "background_life",
+        ):
+            val = _coerce_text_scalar(dir_data.get(field))
+            if val:
+                setattr(dr, field, val)
+
+    # ── Cast states ────────────────────────────────────────────────────────
+    cast_states_data = result.get("cast_states", [])
+    for cs_data in cast_states_data:
+        if not isinstance(cs_data, dict):
+            continue
+        cast_id = cs_data.get("cast_id")
+        if not cast_id:
+            continue
+        state_key = f"{cast_id}@{frame_id}"
+        state = graph.cast_frame_states.get(state_key)
+        if state is None:
+            logger.debug("Frame %s: no CastFrameState for %s — skipping cast enrichment", frame_id, cast_id)
+            continue
+
+        # Scalar fields
+        for field in (
+            "screen_position", "looking_at", "emotion",
+            "facing_direction", "action", "eye_direction",
+            "clothing_state", "hair_state", "injury",
+        ):
+            val = _coerce_text_scalar(cs_data.get(field))
+            if val is not None:
+                setattr(state, field, val)
+
+        emotion_intensity = _coerce_float_scalar(cs_data.get("emotion_intensity"))
+        if emotion_intensity is not None:
+            state.emotion_intensity = emotion_intensity
+
+        # Posture (enum)
+        posture = _coerce_enum_token(cs_data.get("posture"))
+        if posture:
+            from .schema import Posture
+            try:
+                state.posture = Posture(posture)
+            except ValueError:
+                logger.debug("Frame %s / %s: unknown posture '%s'", frame_id, cast_id, posture)
+
+        # CastFrameRole (enum)
+        frame_role = _coerce_enum_token(cs_data.get("frame_role"))
+        if frame_role:
+            from .schema import CastFrameRole
+            try:
+                state.frame_role = CastFrameRole(frame_role)
+            except ValueError:
+                logger.debug("Frame %s / %s: unknown frame_role '%s'", frame_id, cast_id, frame_role)
+
+        # List fields
+        if isinstance(cs_data.get("props_held"), list):
+            state.props_held = cs_data["props_held"]
+        if isinstance(cs_data.get("props_interacted"), list):
+            state.props_interacted = cs_data["props_interacted"]
+        if isinstance(cs_data.get("delta_fields"), list):
+            state.delta_fields = cs_data["delta_fields"]
+
+
+# ─── Correction Re-Enrichment ────────────────────────────────────────────────
+
+_CORRECTION_SYSTEM_PROMPT_SUFFIX = """
+
+## CORRECTION MODE
+
+The following correction(s) MUST be applied for this frame. Previous enrichment
+produced values that violate continuity constraints. Fix ONLY the fields listed
+below — do not change anything else.
+
+{corrections}
+
+Return the same JSON structure as normal, but with the corrected values applied.
+"""
+
+
+def _build_correction_block(frame_issues: list[dict]) -> str:
+    """Format a list of per-frame issues into a correction instruction block."""
+    lines = []
+    for issue in frame_issues:
+        what = issue.get("what") or issue.get("message", issue.get("check_name", "unknown"))
+        lines.append(f"- CORRECTION REQUIRED: {what}")
+    return "\n".join(lines)
+
+
+async def re_enrich_single_frame(
+    input_dict: dict,
+    corrections: list[dict],
+    api_key: str,
+) -> dict:
+    """Send one frame to the frame enricher with correction context injected into the system prompt."""
+    frame_id = input_dict.get("frame_id", "unknown")
+    client = _get_xai_client(api_key or os.environ.get("XAI_API_KEY", ""))
+
+    correction_block = _build_correction_block(corrections)
+    correction_system = FRAME_ENRICHER_SYSTEM_PROMPT + _CORRECTION_SYSTEM_PROMPT_SUFFIX.format(
+        corrections=correction_block
+    )
+    correction_cache_key = build_prompt_cache_key(
+        "frame-enricher-correction",
+        correction_system,
+    )
+
+    user_message = json.dumps(input_dict, indent=2, ensure_ascii=False)
+
+    try:
+        result = await client.generate_json(
+            system_prompt=correction_system,
+            prompt=user_message,
+            schema=FRAME_ENRICHER_RESPONSE_SCHEMA,
+            model=FRAME_ENRICHER_MODEL,
+            temperature=FRAME_ENRICHER_TEMPERATURE,
+            max_tokens=FRAME_ENRICHER_MAX_TOKENS,
+            cache_key=correction_cache_key,
+            task_hint="frame_enricher_correction",
+            schema_name="frame_enrichment_correction",
+        )
+        result["frame_id"] = frame_id
+        return result
+    except json.JSONDecodeError as e:
+        logger.error("Re-enrich frame %s: frame enricher returned invalid JSON — %s", frame_id, e)
+        return {"frame_id": frame_id, "error": f"json_parse_error: {e}"}
+    except Exception as e:
+        logger.error("Re-enrich frame %s: frame enricher API error — %s", frame_id, e)
+        return {"frame_id": frame_id, "error": f"api_error: {e}"}
+
+
+async def re_enrich_frames(
+    graph: NarrativeGraph,
+    frame_issues: list[dict],
+    api_key: str = "",
+    max_concurrent: int = 10,
+) -> list[dict]:
+    """Re-enrich specific frames with correction context.
+
+    For each frame_issue, builds a frame-enricher input that INCLUDES the issue
+    description so the enricher knows what to correct:
+
+        'CORRECTION REQUIRED: Previous enrichment placed cast_rafe at
+         frame_right but staging anchor requires frame_left. Fix
+         screen_position to match staging plan.'
+
+    Args:
+        graph:        The NarrativeGraph (used to build per-frame inputs).
+        frame_issues: List of issue dicts from validate_continuity() that have
+                      needs_re_enrichment=True. Each dict must have at minimum:
+                      {frame_id, check_name, what} (or 'message' as fallback).
+        api_key:      XAI API key. Falls back to XAI_API_KEY env var.
+        max_concurrent: Max parallel frame enricher calls.
+
+    Returns:
+        List of enrichment result dicts (same format as frame_enricher_batch_enrich).
+    """
+    if not api_key:
+        api_key = os.environ.get("XAI_API_KEY", "")
+
+    # Group issues by frame_id
+    issues_by_frame: dict[str, list[dict]] = {}
+    for issue in frame_issues:
+        fid = issue.get("frame_id")
+        if fid:
+            issues_by_frame.setdefault(fid, []).append(issue)
+
+    if not issues_by_frame:
+        return []
+
+    # Build full inputs for all frames, then filter to only frames needing correction
+    all_inputs = build_frame_enricher_inputs(graph)
+    inputs_by_frame = {inp["frame_id"]: inp for inp in all_inputs}
+
+    semaphore = asyncio.Semaphore(max_concurrent)
+
+    async def bounded_re_enrich(frame_id: str, corrections: list[dict]) -> dict:
+        inp = inputs_by_frame.get(frame_id)
+        if inp is None:
+            logger.warning("re_enrich_frames: no input found for frame %s — skipping", frame_id)
+            return {"frame_id": frame_id, "error": "frame_not_in_graph"}
+        async with semaphore:
+            return await re_enrich_single_frame(inp, corrections, api_key)
+
+    tasks = [
+        bounded_re_enrich(fid, corrections)
+        for fid, corrections in issues_by_frame.items()
+    ]
+    results = await asyncio.gather(*tasks, return_exceptions=False)
+    return list(results)
+
+
+# ─── Phase Runner ─────────────────────────────────────────────────────────────
+
+
+def run_phase_2b(graph: NarrativeGraph, project_dir: Path, api_key: str) -> NarrativeGraph:
+    """Dispatch parallel frame enricher workers for per-frame enrichment and save."""
+    inputs = build_frame_enricher_inputs(graph)
+    logger.info("Dispatching %d frame enricher workers (max_concurrent=20)...", len(inputs))
+
+    results = asyncio.run(frame_enricher_batch_enrich(inputs, api_key, max_concurrent=20))
+
+    successes = 0
+    failures = 0
+    for result in results:
+        if "error" in result:
+            failures += 1
+        else:
+            apply_frame_enrichment(graph, result)
+            successes += 1
+
+    logger.info("Frame enrichment complete: %d succeeded, %d failed", successes, failures)
+
+    store = GraphStore(project_dir)
+    store.save(graph)
+    return graph
+
+
+# ─── CLI Entrypoint ───────────────────────────────────────────────────────────
+
+
+def main() -> None:
+    import argparse
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s  %(levelname)-8s  %(message)s",
+        datefmt="%H:%M:%S",
+    )
+
+    parser = argparse.ArgumentParser(
+        description="Run frame-enricher per-frame enrichment (Step 2b) on an existing NarrativeGraph."
+    )
+    parser.add_argument(
+        "--project-dir",
+        required=True,
+        help="Path to the project directory (must contain graph/narrative_graph.json)",
+    )
+    parser.add_argument(
+        "--api-key",
+        default=None,
+        help="xAI API key. Defaults to XAI_API_KEY env var.",
+    )
+    parser.add_argument(
+        "--max-concurrent",
+        type=int,
+        default=20,
+        help="Max concurrent frame enricher API calls (default: 20)",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Build inputs and print them without calling the API",
+    )
+    args = parser.parse_args()
+
+    project_dir = Path(args.project_dir).resolve()
+    api_key = args.api_key or os.environ.get("XAI_API_KEY", "")
+
+    if not api_key and not args.dry_run:
+        logger.error("No API key provided. Set XAI_API_KEY or pass --api-key")
+        sys.exit(1)
+
+    store = GraphStore(project_dir)
+    if not store.exists():
+        logger.error("No graph found at %s", store.graph_path)
+        sys.exit(1)
+
+    graph = store.load()
+    logger.info("Loaded graph: %d frames, %d cast members", len(graph.frames), len(graph.cast))
+
+    inputs = build_frame_enricher_inputs(graph)
+    logger.info("Built %d frame inputs", len(inputs))
+
+    if args.dry_run:
+        print(json.dumps(inputs, indent=2, ensure_ascii=False))
+        return
+
+    results = asyncio.run(
+        frame_enricher_batch_enrich(inputs, api_key, max_concurrent=args.max_concurrent)
+    )
+
+    successes = 0
+    failures = 0
+    for result in results:
+        if "error" in result:
+            logger.warning("Frame %s failed: %s", result.get("frame_id"), result["error"])
+            failures += 1
+        else:
+            apply_frame_enrichment(graph, result)
+            successes += 1
+
+    logger.info("Enrichment complete: %d/%d frames succeeded", successes, len(inputs))
+
+    saved_path = store.save(graph)
+    logger.info("Graph saved → %s", saved_path)
+
+    if failures:
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
+```
+
 ## `graph/frame_prompt_refiner.py`
 
 ```python
@@ -17152,19 +20014,16 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
-import httpx
-
-from .prompt_assembler import MAX_VIDEO_PROMPT_CHARS
+from llm.xai_client import XAIClient, build_prompt_cache_key
 
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
 
 XAI_API_KEY = [REDACTED]
-XAI_BASE_URL = "https://api.x.ai/v1"
-GROK_VISION_MODEL = "grok-4-1-fast-non-reasoning"
+GROK_VISION_MODEL = "grok-4-1-fast-reasoning"
 
-# Max tokens for the refined prompt — keeps it within grok-video's 4096 char limit
+# Max tokens for the refined prompt response body.
 MAX_REFINE_TOKENS = [REDACTED]
 
 
@@ -17246,6 +20105,8 @@ Rules:
   direction language.
 """
 
+REFINER_CACHE_KEY = [REDACTED]
+
 
 # ---------------------------------------------------------------------------
 # Core API call
@@ -17296,27 +20157,18 @@ async def _call_grok_vision(
     ]
 
     payload = {
-        "model": GROK_VISION_MODEL,
         "messages": messages,
-        "max_tokens": MAX_REFINE_TOKENS,
-        "temperature": 0.3,
     }
 
-    headers = {
-        "Authorization": f"Bearer {key}",
-        "Content-Type": "application/json",
-    }
-
-    async with httpx.AsyncClient(timeout=None) as client:
-        resp = await client.post(
-            f"{XAI_BASE_URL}/chat/completions",
-            json=payload,
-            headers=headers,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-
-    return data["choices"][0]["message"]["content"].strip()
+    client = XAIClient(api_key=key)
+    return await client.generate_text(
+        messages=payload["messages"],
+        model=GROK_VISION_MODEL,
+        task_hint="vision_prompt_refinement",
+        temperature=0.3,
+        max_tokens=MAX_REFINE_TOKENS,
+        cache_key=REFINER_CACHE_KEY,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -17374,14 +20226,6 @@ async def refine_video_prompt(
         return video_prompt
 
     elapsed = round(time.monotonic() - t0, 1)
-
-    if len(refined) > MAX_VIDEO_PROMPT_CHARS:
-        _log(
-            frame_id,
-            f"Refined prompt exceeded {MAX_VIDEO_PROMPT_CHARS} chars ({len(refined)}), keeping graph prompt",
-        )
-        video_prompt["refined_by"] = "failed:PromptOverflow"
-        return video_prompt
 
     video_prompt["original_graph_prompt"] = graph_prompt
     video_prompt["prompt"] = refined
@@ -17626,6 +20470,7 @@ async def generate(grid: str, output_dir: Path,
                    scene: str = "",
                    frame_ids: list[str] | None = None,
                    style_prefix: str = "",
+                   grid_id: str = "",
                    run_id: str = "",
                    phase: str = "") -> dict:
     """Generate a grid storyboard image and extract individual cells.
@@ -17701,7 +20546,7 @@ async def generate(grid: str, output_dir: Path,
     handler = get_handler("storyboard", replicate_token=REPLICATE_API_TOKEN)
     try:
         handler_result = await handler.generate(StoryboardInput(
-            grid_id=grid,
+            grid_id=grid_id or grid,
             prompt=prompt,
             reference_images=ref_paths,
             layout=grid,
@@ -17785,7 +20630,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-import httpx
+from llm.xai_client import XAIClient, build_prompt_cache_key
 
 from .api import get_frame_cast_state_models
 from .schema import CinematicTag, NarrativeGraph
@@ -17796,8 +20641,7 @@ from .store import GraphStore
 # ---------------------------------------------------------------------------
 
 XAI_API_KEY = [REDACTED]
-XAI_BASE_URL = "https://api.x.ai/v1"
-GROK_TAGGER_MODEL = "grok-4-1-fast-non-reasoning"
+GROK_TAGGER_MODEL = "grok-4-1-fast-reasoning"
 TAGGER_MAX_TOKENS = [REDACTED]
 
 
@@ -17826,6 +20670,7 @@ def _load_taxonomy_text() -> str:
 
 
 TAXONOMY_TEXT: str = _load_taxonomy_text()
+TAGGER_CACHE_KEY = [REDACTED]
 
 
 # ---------------------------------------------------------------------------
@@ -18876,7 +21721,7 @@ async def tag_single_frame(
     frame_context: str,
     *,
     api_key: str = "",
-    client: Optional[httpx.AsyncClient] = None,
+    client: Optional[XAIClient] = None,
 ) -> CinematicTag:
     """Send one frame's context to Grok and return a populated CinematicTag."""
     key = api_key or XAI_API_KEY
@@ -18885,48 +21730,23 @@ async def tag_single_frame(
             "XAI_API_KEY not set — required for Grok cinematic frame tagging"
         )
 
-    messages = [
-        {"role": "system", "content": TAXONOMY_TEXT},
-        {
-            "role": "user",
-            "content": (
-                "Assign the single best cinematic tag for this frame.\n"
-                "Reply with ONLY the tag string (e.g. 'D01.a +push'). "
-                "Nothing else — no explanation, no punctuation, no markdown.\n\n"
-                f"{frame_context}"
-            ),
-        },
-    ]
+    if client is None:
+        client = XAIClient(api_key=key)
 
-    payload = {
-        "model": GROK_TAGGER_MODEL,
-        "messages": messages,
-        "max_tokens": TAGGER_MAX_TOKENS,
-        "temperature": 0.1,
-    }
-
-    headers = {
-        "Authorization": f"Bearer {key}",
-        "Content-Type": "application/json",
-    }
-
-    own_client = client is None
-    if own_client:
-        client = httpx.AsyncClient(timeout=30.0)
-
-    try:
-        resp = await client.post(
-            f"{XAI_BASE_URL}/chat/completions",
-            json=payload,
-            headers=headers,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-    finally:
-        if own_client:
-            await client.aclose()
-
-    raw = data["choices"][0]["message"]["content"].strip()
+    raw = await client.generate_text(
+        system_prompt=TAXONOMY_TEXT,
+        prompt=(
+            "Assign the single best cinematic tag for this frame.\n"
+            "Reply with ONLY the tag string (e.g. 'D01.a +push'). "
+            "Nothing else — no explanation, no punctuation, no markdown.\n\n"
+            f"{frame_context}"
+        ),
+        model=GROK_TAGGER_MODEL,
+        task_hint="cinematic_tagger",
+        temperature=0.1,
+        max_tokens=TAGGER_MAX_TOKENS,
+        cache_key=TAGGER_CACHE_KEY,
+    )
     tag, modifier, full_tag = _parse_tag_response(raw)
 
     if tag not in TAG_DEFINITIONS:
@@ -18979,39 +21799,39 @@ async def tag_all_frames(
 
     key = api_key or XAI_API_KEY
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    client = XAIClient(api_key=key)
 
-        async def _tag_one(frame_id: str) -> None:
-            frame = graph.frames[frame_id]
+    async def _tag_one(frame_id: str) -> None:
+        frame = graph.frames[frame_id]
 
-            # Skip already-tagged frames (tag is non-empty)
-            if frame.cinematic_tag.tag:
-                results["skipped"] += 1
-                return
+        # Skip already-tagged frames (tag is non-empty)
+        if frame.cinematic_tag.tag:
+            results["skipped"] += 1
+            return
 
-            async with sem:
-                t0 = time.monotonic()
-                try:
-                    context = _build_frame_context(graph, frame_id)
-                    cinematic_tag = await tag_single_frame(
-                        frame_id, context, api_key=key, client=client
-                    )
-                    frame.cinematic_tag = cinematic_tag
-                    results["tagged"] += 1
+        async with sem:
+            t0 = time.monotonic()
+            try:
+                context = _build_frame_context(graph, frame_id)
+                cinematic_tag = await tag_single_frame(
+                    frame_id, context, api_key=key, client=client
+                )
+                frame.cinematic_tag = cinematic_tag
+                results["tagged"] += 1
 
-                    family = cinematic_tag.family or "?"
-                    results["tag_distribution"][family] = (
-                        results["tag_distribution"].get(family, 0) + 1
-                    )
+                family = cinematic_tag.family or "?"
+                results["tag_distribution"][family] = (
+                    results["tag_distribution"].get(family, 0) + 1
+                )
 
-                    elapsed = round(time.monotonic() - t0, 2)
-                    _log(frame_id, f"→ {cinematic_tag.full_tag} ({elapsed}s)")
+                elapsed = round(time.monotonic() - t0, 2)
+                _log(frame_id, f"→ {cinematic_tag.full_tag} ({elapsed}s)")
 
-                except Exception as exc:
-                    results["failed"] += 1
-                    _log(frame_id, f"Failed: {exc}")
+            except Exception as exc:
+                results["failed"] += 1
+                _log(frame_id, f"Failed: {exc}")
 
-        await asyncio.gather(*[_tag_one(fid) for fid in frame_ids])
+    await asyncio.gather(*[_tag_one(fid) for fid in frame_ids])
 
     store.save(graph)
 
@@ -19089,986 +21909,6 @@ if __name__ == "__main__":
     main()
 ```
 
-## `graph/haiku_enricher.py`
-
-```python
-"""
-Haiku Enricher — Parallel per-frame enrichment via Claude Haiku
-===============================================================
-
-Step 2b of the CC-First pipeline. Receives the base NarrativeGraph
-(already seeded by cc_parser.py) and dispatches parallel Haiku API
-calls to fill in:
-
-  - CastFrameState: screen_position, looking_at, emotion, posture, ...
-  - FrameComposition: shot, angle, movement, focus
-  - FrameEnvironment: lighting, atmosphere, materials
-  - FrameBackground: background_action, depth_layers
-  - FrameDirecting: dramatic_purpose, beat_turn, pov_owner, ...
-  - FrameNode: action_summary, emotional_arc, visual_flow_element
-
-Usage:
-    python3 graph/haiku_enricher.py --project-dir ./projects/test
-"""
-
-from __future__ import annotations
-
-import asyncio
-import json
-import logging
-import os
-import sys
-from pathlib import Path
-from typing import Optional
-
-import anthropic
-
-from .schema import (
-    CastFrameState,
-    EmotionalArc,
-    FrameAtmosphere,
-    FrameBackground,
-    FrameComposition,
-    FrameDirecting,
-    FrameEnvironment,
-    FrameLighting,
-    NarrativeGraph,
-)
-from .store import GraphStore
-
-logger = logging.getLogger(__name__)
-
-# ─── Constants ───────────────────────────────────────────────────────────────
-
-HAIKU_MODEL = "claude-haiku-4-5-20251001"
-HAIKU_TEMPERATURE = 0.3
-HAIKU_MAX_TOKENS = [REDACTED]
-
-# ─── System Prompt ───────────────────────────────────────────────────────────
-
-HAIKU_SYSTEM_PROMPT = """You are a cinematic enrichment worker for a screenplay-to-visual pipeline.
-
-You receive a single frame's context and must fill out a structured enrichment form. Your output
-drives image generation, video direction, and continuity tracking. Be precise and visual — every
-field must be directly useful to an image/video generation model.
-
-## YOUR TASK
-
-Fill the structured enrichment form for the given frame. Return ONLY valid JSON — no markdown,
-no explanation, no commentary outside the JSON object.
-
-## CAST STATE ENRICHMENT
-
-For each character in `cast_in_frame`, fill their state in `cast_states`:
-
-- `screen_position` (MANDATORY): Where they appear in the frame.
-  Values: frame_left | frame_center | frame_right | frame_left_third | frame_right_third
-  BASE ON: the `staging_anchor` provided for this frame. Use it as your default unless
-  the action explicitly places the character elsewhere. Do not deviate without cause.
-
-- `looking_at` (MANDATORY): What they are looking at.
-  Values: another cast_id, a prop_id, "distance", "camera", or a location feature name.
-  BASE ON: staging_anchor.looking_at. Override only for motivated character action.
-
-- `facing_direction` (MANDATORY): Their body orientation relative to the camera.
-  Values: toward_camera | away | profile_left | profile_right | three_quarter
-  BASE ON: staging_anchor.facing_direction.
-
-- `emotion`: Single compound term (e.g. restrained_anger, quiet_determination, bitter_amusement).
-  Match to the emotional content of the source_text.
-
-- `emotion_intensity`: Float 0.0–1.0. Low = subtle, High = breaking point.
-
-- `posture`: standing | sitting | crouching | kneeling | lying | walking | running | leaning | hunched
-
-- `action`: Verb-first physical action (e.g. crosses_to_window, grips_door_frame, adjusts_dials).
-
-- `frame_role`: subject | object | background | partial | referenced
-  The primary character(s) in the shot = subject. Others = object/background.
-
-- `delta_fields`: list of field names that changed from previous_frame_state.
-  Empty list if this is the first frame or nothing changed.
-
-Optional fields (include only if relevant):
-- `props_held`: list of prop_ids currently in hand
-- `props_interacted`: list of prop_ids touched/used this frame
-- `clothing_state`: base | damaged | wet | changed | removed (only if changed from identity)
-- `hair_state`: disheveled | wet | tied_back (only if changed from identity)
-- `injury`: description (only if new or changed)
-- `eye_direction`: downward | at_other_character | distant
-
-## COMPOSITION
-
-Fill `composition` based on the prose mood and staging:
-- `shot`: medium_shot | close_up | wide | extreme_close_up | medium_close_up | two_shot | over_shoulder
-- `angle`: eye_level | low | high | dutch | birds_eye | worms_eye
-- `movement`: static | push | pull | pan_left | pan_right | tracking | dolly | crane | drift | subtle_drift
-- `focus`: deep | shallow | rack
-- `placement`: Rule of thirds (e.g. "subject_left_third")
-- `grouping`: Multi-character arrangement (e.g. "triangle_composition")
-- `blocking`: Stage direction note
-- `transition`: Transition from previous frame (e.g. "cut", "match_cut")
-- `rule`: Composition rule (e.g. "rule_of_thirds", "leading_lines")
-
-## ENVIRONMENT
-
-Fill `environment` with lighting and atmosphere:
-- `lighting.direction`: front | side_left | side_right | back | overhead | under | ambient
-- `lighting.quality`: hard | soft | harsh | diffused | golden | flat | dappled | silhouette
-- `lighting.color_temp`: warm string (e.g. "cool_blue", "warm_amber", "green_fluorescent")
-- `lighting.motivated_source`: What is producing the light (e.g. "window_left", "candle", "monitor_glow")
-- `lighting.shadow_behavior`: How shadows behave (e.g. "deep_pools", "striped_parallel", "soft_diffused")
-- `atmosphere.particles`: dust_motes | smoke | rain | snow | pollen | fog (if present)
-- `atmosphere.weather`: rain | snow | fog | clear | overcast (exterior only)
-- `atmosphere.ambient_motion`: curtain_sway | candle_flicker | leaves_rustling | screen_flicker
-- `atmosphere.temperature_feel`: humid | cold | stifling | dry | freezing
-- `materials_present`: list of texture-rich materials visible (e.g. ["weathered_wood", "cracked_concrete"])
-- `foreground_objects`: list of objects in the foreground plane
-- `midground_detail`: Description of midground plane
-- `background_depth`: What is visible in the far background
-
-## BACKGROUND
-
-Fill `background`:
-- `background_action`: Activity happening in the background (e.g. "servants clearing dishes in distance")
-- `background_sound`: Ambient sound (e.g. "distant market chatter")
-- `background_music`: Diegetic music only (e.g. "faint erhu melody from radio")
-- `depth_layers`: list of layer descriptions from foreground to background
-
-## DIRECTING
-
-Fill `directing` with narrative intent:
-- `dramatic_purpose` (MANDATORY): reveal | reaction | intimidation | intimacy | concealment | introduction | transition
-- `beat_turn` (MANDATORY): One sentence — what changes by the end of this frame
-- `pov_owner` (MANDATORY): cast_id, or "audience"
-- `camera_motivation` (MANDATORY): Why this framing or movement serves the story beat
-- `viewer_knowledge_delta`: New information the viewer learns
-- `power_dynamic`: Who holds advantage and how
-- `tension_source`: What creates pressure in this moment
-- `movement_motivation`: Why the scene feels active or kinetic
-- `movement_path`: Start-to-end blocking path
-- `reaction_target`: The line or action this frame responds to
-- `background_life`: What supporting life exists behind the subject
-
-## FRAME-LEVEL FIELDS
-
-- `action_summary` (MANDATORY): Concise verb-first physical action for video prompt.
-  E.g. "Watanabe hunches over oscilloscope, fingers adjusting dials"
-  This feeds directly into video generation. Be concrete and visual.
-
-- `video_optimized_prompt_block` (MANDATORY): One dense cinematic sentence under 500
-  characters that preserves action, blocking, and environmental context together.
-  It should read like a compressed final video prompt lead, not a field label dump.
-  This survives downstream Grok prompt compression, so include the most important
-  lighting, atmosphere, and staging context here.
-
-- `emotional_arc` (MANDATORY): Emotional direction relative to previous frame.
-  Values: rising | falling | static | peak | release
-
-- `visual_flow_element` (MANDATORY): The dominant visual driver of this frame.
-  Values: motion | dialogue | reaction | action | weight | establishment
-
-## OUTPUT FORMAT
-
-Return exactly this JSON structure (add only the fields you are populating):
-
-{
-  "frame_id": "<frame_id>",
-  "action_summary": "<verb-first physical action>",
-  "video_optimized_prompt_block": "<dense cinematic sentence under 500 chars>",
-  "emotional_arc": "<rising|falling|static|peak|release>",
-  "visual_flow_element": "<motion|dialogue|reaction|action|weight|establishment>",
-  "composition": {
-    "shot": "<shot type>",
-    "angle": "<angle>",
-    "movement": "<movement>",
-    "focus": "<focus>"
-  },
-  "environment": {
-    "lighting": {
-      "direction": "<direction>",
-      "quality": "<quality>",
-      "color_temp": "<optional>",
-      "motivated_source": "<optional>",
-      "shadow_behavior": "<optional>"
-    },
-    "atmosphere": {
-      "particles": "<optional>",
-      "weather": "<optional>",
-      "ambient_motion": "<optional>",
-      "temperature_feel": "<optional>"
-    },
-    "materials_present": [],
-    "foreground_objects": [],
-    "midground_detail": "<optional>",
-    "background_depth": "<optional>"
-  },
-  "background": {
-    "camera_facing": "<inherited from input>",
-    "background_action": "<optional>",
-    "background_sound": "<optional>",
-    "depth_layers": []
-  },
-  "directing": {
-    "dramatic_purpose": "<mandatory>",
-    "beat_turn": "<mandatory>",
-    "pov_owner": "<mandatory>",
-    "camera_motivation": "<mandatory>",
-    "viewer_knowledge_delta": "<optional>",
-    "power_dynamic": "<optional>",
-    "tension_source": "<optional>",
-    "movement_motivation": "<optional>",
-    "reaction_target": "<optional>",
-    "background_life": "<optional>"
-  },
-  "cast_states": [
-    {
-      "cast_id": "<cast_id>",
-      "screen_position": "<mandatory>",
-      "looking_at": "<mandatory>",
-      "facing_direction": "<mandatory>",
-      "emotion": "<emotion>",
-      "emotion_intensity": 0.5,
-      "posture": "<posture>",
-      "action": "<verb-first action>",
-      "frame_role": "<role>",
-      "props_held": [],
-      "props_interacted": [],
-      "delta_fields": []
-    }
-  ]
-}
-"""
-
-
-# ─── Input Builder ────────────────────────────────────────────────────────────
-
-
-def _staging_beat_key(frame_ids: list[str], frame_id: str) -> str:
-    """Return 'start', 'mid', or 'end' based on frame position in scene."""
-    if not frame_ids:
-        return "start"
-    try:
-        idx = frame_ids.index(frame_id)
-    except ValueError:
-        return "start"
-    ratio = idx / max(len(frame_ids) - 1, 1)
-    if ratio < 1 / 3:
-        return "start"
-    if ratio >= 2 / 3:
-        return "end"
-    return "mid"
-
-
-def _build_identity_summary(cast_node) -> str:
-    """Compose a compact identity description from CastNode.identity."""
-    identity = cast_node.identity
-    parts = []
-    if identity.age_descriptor:
-        parts.append(identity.age_descriptor)
-    if identity.gender:
-        parts.append(identity.gender)
-    if identity.build:
-        parts.append(f"{identity.build} build")
-    if identity.skin:
-        parts.append(f"{identity.skin} skin")
-    hair_parts = [p for p in [identity.hair_color, identity.hair_length, identity.hair_style] if p]
-    if hair_parts:
-        parts.append(" ".join(hair_parts) + " hair")
-    if identity.physical_description:
-        return identity.physical_description
-    return ", ".join(parts) if parts else cast_node.name
-
-
-def _resolve_staging_anchor(scene, frame_id: str) -> dict:
-    """Resolve staging anchor from scene.staging_plan for the given frame."""
-    beat_key = _staging_beat_key(scene.frame_ids, frame_id)
-    staging_plan = scene.staging_plan or {}
-    beat = staging_plan.get(beat_key)
-    if beat is None:
-        # Try adjacent beats
-        for fallback in ("start", "mid", "end"):
-            beat = staging_plan.get(fallback)
-            if beat is not None:
-                break
-    if beat is None:
-        return {}
-
-    # StagingBeat has per-cast dicts; build a frame-level anchor
-    # by merging all cast positions (first cast's values used as baseline)
-    anchor: dict = {}
-    if beat.cast_positions:
-        # Take the first entry as representative anchor
-        first_cast_id = next(iter(beat.cast_positions))
-        anchor["screen_position"] = beat.cast_positions[first_cast_id]
-    if beat.cast_looking_at:
-        first_cast_id = next(iter(beat.cast_looking_at))
-        anchor["looking_at"] = beat.cast_looking_at[first_cast_id]
-    if beat.cast_facing:
-        first_cast_id = next(iter(beat.cast_facing))
-        anchor["facing_direction"] = beat.cast_facing[first_cast_id]
-    return anchor
-
-
-def _resolve_location_directions(graph: NarrativeGraph, location_id: Optional[str]) -> dict:
-    """Extract cardinal direction descriptions from the location node."""
-    if not location_id or location_id not in graph.locations:
-        return {}
-    loc = graph.locations[location_id]
-    dirs = loc.directions
-    result = {}
-    for compass in ("north", "south", "east", "west", "exterior"):
-        view = getattr(dirs, compass, None)
-        if view and view.description:
-            result[compass] = view.description
-    return result
-
-
-def _previous_frame_context(graph: NarrativeGraph, prev_frame_id: Optional[str]) -> Optional[dict]:
-    """Build a compact previous-frame context dict."""
-    if not prev_frame_id or prev_frame_id not in graph.frames:
-        return None
-    prev = graph.frames[prev_frame_id]
-    # Summarise cast states for previous frame
-    cast_summaries = []
-    for state_key, state in graph.cast_frame_states.items():
-        if state.frame_id == prev_frame_id:
-            parts = [state.cast_id]
-            if state.emotion:
-                parts.append(state.emotion)
-            if state.posture:
-                posture_val = state.posture.value if hasattr(state.posture, "value") else str(state.posture)
-                parts.append(posture_val)
-            cast_summaries.append(", ".join(parts))
-    return {
-        "frame_id": prev_frame_id,
-        "narrative_beat": prev.narrative_beat or "",
-        "cast_states_summary": "; ".join(cast_summaries) if cast_summaries else "",
-    }
-
-
-def build_haiku_inputs(graph: NarrativeGraph) -> list[dict]:
-    """Build one Haiku input dict per frame, following Section 3.1 format.
-
-    Returns a list ordered by frame_order.
-    """
-    inputs: list[dict] = []
-
-    for frame_id in graph.frame_order:
-        frame = graph.frames.get(frame_id)
-        if frame is None:
-            logger.warning("frame_order references unknown frame %s — skipping", frame_id)
-            continue
-
-        scene = graph.scenes.get(frame.scene_id) if frame.scene_id else None
-
-        # ── Scene context ──────────────────────────────────────────────────
-        scene_context: dict = {}
-        if scene:
-            location_name = ""
-            location_type = ""
-            if scene.location_id and scene.location_id in graph.locations:
-                loc = graph.locations[scene.location_id]
-                location_name = loc.name
-                location_type = loc.location_type or ""
-            time_val = None
-            if frame.time_of_day:
-                time_val = frame.time_of_day.value if hasattr(frame.time_of_day, "value") else str(frame.time_of_day)
-            elif scene.time_of_day:
-                time_val = scene.time_of_day.value if hasattr(scene.time_of_day, "value") else str(scene.time_of_day)
-            scene_context = {
-                "scene_id": scene.scene_id,
-                "title": scene.title or "",
-                "location": location_name,
-                "location_type": location_type,
-                "time_of_day": time_val or "",
-                "mood_keywords": scene.mood_keywords or [],
-                "pacing": scene.pacing or "",
-            }
-
-        # ── Cast in frame ──────────────────────────────────────────────────
-        cast_in_frame: list[dict] = []
-        # Collect cast_ids visible in this frame from CastFrameState
-        cast_ids_in_frame: list[str] = []
-        for state_key, state in graph.cast_frame_states.items():
-            if state.frame_id == frame_id:
-                cast_ids_in_frame.append(state.cast_id)
-
-        for cast_id in cast_ids_in_frame:
-            cast_node = graph.cast.get(cast_id)
-            if cast_node is None:
-                continue
-            state_key = f"{cast_id}@{frame_id}"
-            current_state = graph.cast_frame_states.get(state_key)
-
-            # Previous frame state for this cast member
-            prev_state_summary = None
-            if frame.previous_frame_id:
-                prev_state_key = f"{cast_id}@{frame.previous_frame_id}"
-                prev_state = graph.cast_frame_states.get(prev_state_key)
-                if prev_state:
-                    prev_state_summary = {
-                        "emotion": prev_state.emotion,
-                        "posture": (
-                            prev_state.posture.value
-                            if prev_state.posture and hasattr(prev_state.posture, "value")
-                            else str(prev_state.posture) if prev_state.posture else None
-                        ),
-                        "screen_position": prev_state.screen_position,
-                        "looking_at": prev_state.looking_at,
-                        "facing_direction": prev_state.facing_direction,
-                        "action": prev_state.action,
-                        "props_held": prev_state.props_held or [],
-                        "clothing_state": prev_state.clothing_state,
-                        "injury": prev_state.injury,
-                    }
-
-            active_tag = current_state.active_state_tag if current_state else "base"
-            cast_in_frame.append(
-                {
-                    "cast_id": cast_id,
-                    "name": cast_node.name,
-                    "identity_summary": _build_identity_summary(cast_node),
-                    "active_state_tag": active_tag,
-                    "previous_frame_state": prev_state_summary,
-                }
-            )
-
-        # ── Staging anchor ─────────────────────────────────────────────────
-        staging_anchor = {}
-        if scene:
-            staging_anchor = _resolve_staging_anchor(scene, frame_id)
-
-        # ── Location directions ────────────────────────────────────────────
-        location_directions = _resolve_location_directions(
-            graph, scene.location_id if scene else None
-        )
-
-        # ── Props in scene ─────────────────────────────────────────────────
-        props_in_scene: list[dict] = []
-        if scene:
-            for prop_id in scene.props_present:
-                prop = graph.props.get(prop_id)
-                if prop:
-                    props_in_scene.append(
-                        {
-                            "prop_id": prop_id,
-                            "name": prop.name,
-                            "description": prop.description or "",
-                        }
-                    )
-
-        # ── Dialogue ──────────────────────────────────────────────────────
-        dialogue_text = None
-        if frame.is_dialogue and frame.dialogue_ids:
-            lines = []
-            for did in frame.dialogue_ids:
-                dnode = graph.dialogue.get(did)
-                if dnode and dnode.raw_line:
-                    lines.append(f"{dnode.speaker}: {dnode.raw_line}")
-            dialogue_text = "\n".join(lines) if lines else None
-
-        # ── Build input dict ───────────────────────────────────────────────
-        frame_input = {
-            "frame_id": frame_id,
-            "sequence_index": frame.sequence_index,
-            "source_text": frame.source_text or frame.narrative_beat or "",
-            "scene_context": scene_context,
-            "cast_in_frame": cast_in_frame,
-            "staging_anchor": staging_anchor,
-            "location_directions": location_directions,
-            "props_in_scene": props_in_scene,
-            "previous_frame": _previous_frame_context(graph, frame.previous_frame_id),
-            "is_dialogue": frame.is_dialogue,
-            "dialogue_text": dialogue_text,
-        }
-        inputs.append(frame_input)
-
-    return inputs
-
-
-# ─── Haiku API Calls ──────────────────────────────────────────────────────────
-
-
-async def enrich_single_frame(input_dict: dict, api_key: str) -> dict:
-    """Send one frame to Haiku and parse the JSON response.
-
-    On API failure: logs error and returns a minimal dict with the
-    frame_id and an 'error' field so the caller can continue.
-    """
-    frame_id = input_dict.get("frame_id", "unknown")
-    client = anthropic.AsyncAnthropic(api_key=api_key)
-
-    user_message = json.dumps(input_dict, indent=2, ensure_ascii=False)
-
-    try:
-        response = await client.messages.create(
-            model=HAIKU_MODEL,
-            max_tokens=HAIKU_MAX_TOKENS,
-            temperature=HAIKU_TEMPERATURE,
-            system=HAIKU_SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": user_message}],
-        )
-        raw_text = response.content[0].text.strip()
-
-        # Strip markdown code fences if present
-        if raw_text.startswith("```"):
-            lines = raw_text.splitlines()
-            # Remove first and last fence lines
-            raw_text = "\n".join(
-                line for line in lines
-                if not line.strip().startswith("```")
-            ).strip()
-
-        result = json.loads(raw_text)
-        result["frame_id"] = frame_id  # Ensure frame_id is always present
-        return result
-
-    except json.JSONDecodeError as e:
-        logger.error("Frame %s: Haiku returned invalid JSON — %s", frame_id, e)
-        return {"frame_id": frame_id, "error": f"json_parse_error: {e}"}
-    except anthropic.APIError as e:
-        logger.error("Frame %s: Haiku API error — %s", frame_id, e)
-        return {"frame_id": frame_id, "error": f"api_error: {e}"}
-    except Exception as e:
-        logger.error("Frame %s: Unexpected error — %s", frame_id, e)
-        return {"frame_id": frame_id, "error": f"unexpected: {e}"}
-
-
-async def haiku_batch_enrich(
-    inputs: list[dict],
-    api_key: str,
-    max_concurrent: int = 20,
-) -> list[dict]:
-    """Run all frame enrichment calls with a concurrency semaphore.
-
-    Failures are captured per-frame and do not abort the batch.
-    Returns results in the same order as inputs.
-    """
-    semaphore = asyncio.Semaphore(max_concurrent)
-
-    async def bounded_enrich(inp: dict) -> dict:
-        async with semaphore:
-            return await enrich_single_frame(inp, api_key)
-
-    tasks = [bounded_enrich(inp) for inp in inputs]
-    results = await asyncio.gather(*tasks, return_exceptions=False)
-    return list(results)
-
-
-# ─── Apply Enrichment ─────────────────────────────────────────────────────────
-
-
-def apply_haiku_enrichment(graph: NarrativeGraph, result: dict) -> None:
-    """Apply one Haiku worker result to the graph in-place.
-
-    Updates:
-      - FrameNode: composition, environment, background, directing,
-                   action_summary, emotional_arc, visual_flow_element
-      - CastFrameState: all enriched fields
-    """
-    frame_id = result.get("frame_id")
-    if not frame_id:
-        logger.warning("Haiku result missing frame_id — skipping")
-        return
-
-    if "error" in result:
-        logger.warning("Skipping frame %s due to enrichment error: %s", frame_id, result["error"])
-        return
-
-    frame = graph.frames.get(frame_id)
-    if frame is None:
-        logger.warning("Haiku result references unknown frame %s — skipping", frame_id)
-        return
-
-    # ── Frame-level fields ─────────────────────────────────────────────────
-    if result.get("action_summary"):
-        frame.action_summary = result["action_summary"]
-    if result.get("video_optimized_prompt_block"):
-        frame.video_optimized_prompt_block = result["video_optimized_prompt_block"]
-
-    if result.get("emotional_arc"):
-        try:
-            frame.emotional_arc = EmotionalArc(result["emotional_arc"])
-        except ValueError:
-            logger.warning("Frame %s: invalid emotional_arc value '%s'", frame_id, result["emotional_arc"])
-
-    if result.get("visual_flow_element"):
-        frame.visual_flow_element = result["visual_flow_element"]
-
-    # ── Composition ────────────────────────────────────────────────────────
-    comp_data = result.get("composition")
-    if comp_data and isinstance(comp_data, dict):
-        comp = frame.composition
-        for field in ("shot", "angle", "movement", "focus", "placement",
-                      "grouping", "blocking", "transition", "rule"):
-            val = comp_data.get(field)
-            if val:
-                setattr(comp, field, val)
-
-    # ── Environment ────────────────────────────────────────────────────────
-    env_data = result.get("environment")
-    if env_data and isinstance(env_data, dict):
-        env = frame.environment
-
-        lighting_data = env_data.get("lighting")
-        if lighting_data and isinstance(lighting_data, dict):
-            from .schema import LightingDirection, LightingQuality
-            lt = env.lighting
-            if lighting_data.get("direction"):
-                try:
-                    lt.direction = LightingDirection(lighting_data["direction"])
-                except ValueError:
-                    logger.debug("Frame %s: unknown lighting direction '%s'", frame_id, lighting_data["direction"])
-            if lighting_data.get("quality"):
-                try:
-                    lt.quality = LightingQuality(lighting_data["quality"])
-                except ValueError:
-                    logger.debug("Frame %s: unknown lighting quality '%s'", frame_id, lighting_data["quality"])
-            for field in ("color_temp", "motivated_source", "shadow_behavior"):
-                val = lighting_data.get(field)
-                if val:
-                    setattr(lt, field, val)
-
-        atmo_data = env_data.get("atmosphere")
-        if atmo_data and isinstance(atmo_data, dict):
-            atmo = env.atmosphere
-            for field in ("particles", "weather", "ambient_motion", "temperature_feel"):
-                val = atmo_data.get(field)
-                if val:
-                    setattr(atmo, field, val)
-
-        materials = env_data.get("materials_present")
-        if materials and isinstance(materials, list):
-            env.materials_present = materials
-
-        fg_objects = env_data.get("foreground_objects")
-        if fg_objects and isinstance(fg_objects, list):
-            env.foreground_objects = fg_objects
-
-        if env_data.get("midground_detail"):
-            env.midground_detail = env_data["midground_detail"]
-
-        if env_data.get("background_depth"):
-            env.background_depth = env_data["background_depth"]
-
-    # ── Background ─────────────────────────────────────────────────────────
-    bg_data = result.get("background")
-    if bg_data and isinstance(bg_data, dict):
-        bg = frame.background
-        for field in ("background_action", "background_sound", "background_music"):
-            val = bg_data.get(field)
-            if val:
-                setattr(bg, field, val)
-        depth_layers = bg_data.get("depth_layers")
-        if depth_layers and isinstance(depth_layers, list):
-            bg.depth_layers = depth_layers
-
-    # ── Directing ──────────────────────────────────────────────────────────
-    dir_data = result.get("directing")
-    if dir_data and isinstance(dir_data, dict):
-        dr = frame.directing
-        for field in (
-            "dramatic_purpose", "beat_turn", "pov_owner", "camera_motivation",
-            "viewer_knowledge_delta", "power_dynamic", "tension_source",
-            "movement_motivation", "movement_path", "reaction_target", "background_life",
-        ):
-            val = dir_data.get(field)
-            if val:
-                setattr(dr, field, val)
-
-    # ── Cast states ────────────────────────────────────────────────────────
-    cast_states_data = result.get("cast_states", [])
-    for cs_data in cast_states_data:
-        if not isinstance(cs_data, dict):
-            continue
-        cast_id = cs_data.get("cast_id")
-        if not cast_id:
-            continue
-        state_key = f"{cast_id}@{frame_id}"
-        state = graph.cast_frame_states.get(state_key)
-        if state is None:
-            logger.debug("Frame %s: no CastFrameState for %s — skipping cast enrichment", frame_id, cast_id)
-            continue
-
-        # Scalar fields
-        for field in (
-            "screen_position", "looking_at", "emotion", "emotion_intensity",
-            "facing_direction", "action", "eye_direction",
-            "clothing_state", "hair_state", "injury",
-        ):
-            val = cs_data.get(field)
-            if val is not None:
-                setattr(state, field, val)
-
-        # Posture (enum)
-        if cs_data.get("posture"):
-            from .schema import Posture
-            try:
-                state.posture = Posture(cs_data["posture"])
-            except ValueError:
-                logger.debug("Frame %s / %s: unknown posture '%s'", frame_id, cast_id, cs_data["posture"])
-
-        # CastFrameRole (enum)
-        if cs_data.get("frame_role"):
-            from .schema import CastFrameRole
-            try:
-                state.frame_role = CastFrameRole(cs_data["frame_role"])
-            except ValueError:
-                logger.debug("Frame %s / %s: unknown frame_role '%s'", frame_id, cast_id, cs_data["frame_role"])
-
-        # List fields
-        if isinstance(cs_data.get("props_held"), list):
-            state.props_held = cs_data["props_held"]
-        if isinstance(cs_data.get("props_interacted"), list):
-            state.props_interacted = cs_data["props_interacted"]
-        if isinstance(cs_data.get("delta_fields"), list):
-            state.delta_fields = cs_data["delta_fields"]
-
-
-# ─── Correction Re-Enrichment ────────────────────────────────────────────────
-
-_CORRECTION_SYSTEM_PROMPT_SUFFIX = """
-
-## CORRECTION MODE
-
-The following correction(s) MUST be applied for this frame. Previous enrichment
-produced values that violate continuity constraints. Fix ONLY the fields listed
-below — do not change anything else.
-
-{corrections}
-
-Return the same JSON structure as normal, but with the corrected values applied.
-"""
-
-
-def _build_correction_block(frame_issues: list[dict]) -> str:
-    """Format a list of per-frame issues into a correction instruction block."""
-    lines = []
-    for issue in frame_issues:
-        what = issue.get("what") or issue.get("message", issue.get("check_name", "unknown"))
-        lines.append(f"- CORRECTION REQUIRED: {what}")
-    return "\n".join(lines)
-
-
-async def re_enrich_single_frame(
-    input_dict: dict,
-    corrections: list[dict],
-    api_key: str,
-) -> dict:
-    """Send one frame to Haiku with correction context injected into the system prompt."""
-    frame_id = input_dict.get("frame_id", "unknown")
-    client = anthropic.AsyncAnthropic(api_key=api_key)
-
-    correction_block = _build_correction_block(corrections)
-    correction_system = HAIKU_SYSTEM_PROMPT + _CORRECTION_SYSTEM_PROMPT_SUFFIX.format(
-        corrections=correction_block
-    )
-
-    user_message = json.dumps(input_dict, indent=2, ensure_ascii=False)
-
-    try:
-        response = await client.messages.create(
-            model=HAIKU_MODEL,
-            max_tokens=HAIKU_MAX_TOKENS,
-            temperature=HAIKU_TEMPERATURE,
-            system=correction_system,
-            messages=[{"role": "user", "content": user_message}],
-        )
-        raw_text = response.content[0].text.strip()
-        if raw_text.startswith("```"):
-            lines = raw_text.splitlines()
-            raw_text = "\n".join(
-                line for line in lines if not line.strip().startswith("```")
-            ).strip()
-        result = json.loads(raw_text)
-        result["frame_id"] = frame_id
-        return result
-    except json.JSONDecodeError as e:
-        logger.error("Re-enrich frame %s: Haiku returned invalid JSON — %s", frame_id, e)
-        return {"frame_id": frame_id, "error": f"json_parse_error: {e}"}
-    except anthropic.APIError as e:
-        logger.error("Re-enrich frame %s: Haiku API error — %s", frame_id, e)
-        return {"frame_id": frame_id, "error": f"api_error: {e}"}
-    except Exception as e:
-        logger.error("Re-enrich frame %s: Unexpected error — %s", frame_id, e)
-        return {"frame_id": frame_id, "error": f"unexpected: {e}"}
-
-
-async def re_enrich_frames(
-    graph: NarrativeGraph,
-    frame_issues: list[dict],
-    api_key: str = "",
-    max_concurrent: int = 10,
-) -> list[dict]:
-    """Re-enrich specific frames with correction context.
-
-    For each frame_issue, builds a Haiku input that INCLUDES the issue
-    description so Haiku knows what to correct:
-
-        'CORRECTION REQUIRED: Previous enrichment placed cast_rafe at
-         frame_right but staging anchor requires frame_left. Fix
-         screen_position to match staging plan.'
-
-    Args:
-        graph:        The NarrativeGraph (used to build per-frame inputs).
-        frame_issues: List of issue dicts from validate_continuity() that have
-                      needs_re_enrichment=True. Each dict must have at minimum:
-                      {frame_id, check_name, what} (or 'message' as fallback).
-        api_key:      Anthropic API key. Falls back to ANTHROPIC_API_KEY env var.
-        max_concurrent: Max parallel Haiku calls.
-
-    Returns:
-        List of enrichment result dicts (same format as haiku_batch_enrich).
-    """
-    if not api_key:
-        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-
-    # Group issues by frame_id
-    issues_by_frame: dict[str, list[dict]] = {}
-    for issue in frame_issues:
-        fid = issue.get("frame_id")
-        if fid:
-            issues_by_frame.setdefault(fid, []).append(issue)
-
-    if not issues_by_frame:
-        return []
-
-    # Build full inputs for all frames, then filter to only frames needing correction
-    all_inputs = build_haiku_inputs(graph)
-    inputs_by_frame = {inp["frame_id"]: inp for inp in all_inputs}
-
-    semaphore = asyncio.Semaphore(max_concurrent)
-
-    async def bounded_re_enrich(frame_id: str, corrections: list[dict]) -> dict:
-        inp = inputs_by_frame.get(frame_id)
-        if inp is None:
-            logger.warning("re_enrich_frames: no input found for frame %s — skipping", frame_id)
-            return {"frame_id": frame_id, "error": "frame_not_in_graph"}
-        async with semaphore:
-            return await re_enrich_single_frame(inp, corrections, api_key)
-
-    tasks = [
-        bounded_re_enrich(fid, corrections)
-        for fid, corrections in issues_by_frame.items()
-    ]
-    results = await asyncio.gather(*tasks, return_exceptions=False)
-    return list(results)
-
-
-# ─── Phase Runner ─────────────────────────────────────────────────────────────
-
-
-def run_phase_2b(graph: NarrativeGraph, project_dir: Path, api_key: str) -> NarrativeGraph:
-    """Dispatch parallel Haiku workers for per-frame enrichment and save."""
-    inputs = build_haiku_inputs(graph)
-    logger.info("Dispatching %d Haiku workers (max_concurrent=20)...", len(inputs))
-
-    results = asyncio.run(haiku_batch_enrich(inputs, api_key, max_concurrent=20))
-
-    successes = 0
-    failures = 0
-    for result in results:
-        if "error" in result:
-            failures += 1
-        else:
-            apply_haiku_enrichment(graph, result)
-            successes += 1
-
-    logger.info("Haiku enrichment complete: %d succeeded, %d failed", successes, failures)
-
-    store = GraphStore(project_dir)
-    store.save(graph)
-    return graph
-
-
-# ─── CLI Entrypoint ───────────────────────────────────────────────────────────
-
-
-def main() -> None:
-    import argparse
-
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s  %(levelname)-8s  %(message)s",
-        datefmt="%H:%M:%S",
-    )
-
-    parser = argparse.ArgumentParser(
-        description="Run Haiku per-frame enrichment (Step 2b) on an existing NarrativeGraph."
-    )
-    parser.add_argument(
-        "--project-dir",
-        required=True,
-        help="Path to the project directory (must contain graph/narrative_graph.json)",
-    )
-    parser.add_argument(
-        "--api-key",
-        default=None,
-        help="Anthropic API key. Defaults to ANTHROPIC_API_KEY env var.",
-    )
-    parser.add_argument(
-        "--max-concurrent",
-        type=int,
-        default=20,
-        help="Max concurrent Haiku API calls (default: 20)",
-    )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Build inputs and print them without calling the API",
-    )
-    args = parser.parse_args()
-
-    project_dir = Path(args.project_dir).resolve()
-    api_key = args.api_key or os.environ.get("ANTHROPIC_API_KEY", "")
-
-    if not api_key and not args.dry_run:
-        logger.error("No API key provided. Set ANTHROPIC_API_KEY or pass --api-key")
-        sys.exit(1)
-
-    store = GraphStore(project_dir)
-    if not store.exists():
-        logger.error("No graph found at %s", store.graph_path)
-        sys.exit(1)
-
-    graph = store.load()
-    logger.info("Loaded graph: %d frames, %d cast members", len(graph.frames), len(graph.cast))
-
-    inputs = build_haiku_inputs(graph)
-    logger.info("Built %d frame inputs", len(inputs))
-
-    if args.dry_run:
-        print(json.dumps(inputs, indent=2, ensure_ascii=False))
-        return
-
-    results = asyncio.run(
-        haiku_batch_enrich(inputs, api_key, max_concurrent=args.max_concurrent)
-    )
-
-    successes = 0
-    failures = 0
-    for result in results:
-        if "error" in result:
-            logger.warning("Frame %s failed: %s", result.get("frame_id"), result["error"])
-            failures += 1
-        else:
-            apply_haiku_enrichment(graph, result)
-            successes += 1
-
-    logger.info("Enrichment complete: %d/%d frames succeeded", successes, len(inputs))
-
-    saved_path = store.save(graph)
-    logger.info("Graph saved → %s", saved_path)
-
-    if failures:
-        sys.exit(1)
-
-
-if __name__ == "__main__":
-    main()
-```
-
 ## `graph/materializer.py`
 
 ```python
@@ -20091,7 +21931,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from .api import get_frame_cast_state_models, get_frame_prop_state_models
+from .api import build_shot_packet, get_frame_cast_state_models, get_frame_prop_state_models
 from .schema import NarrativeGraph
 from .reference_collector import ReferenceImageCollector, cast_bible_snapshot_for_frame
 from .store import GraphStore
@@ -20349,8 +22189,12 @@ def materialize_manifest(graph: NarrativeGraph, manifest_path: Path) -> int:
     # Project metadata from onboarding
     manifest["mediaStyle"] = graph.project.media_style
     manifest["mediaStylePrefix"] = graph.project.media_style_prefix
+    manifest["frameBudget"] = graph.project.frame_budget if graph.project.frame_budget is not None else "auto"
     manifest["outputSize"] = graph.project.output_size
-    manifest["stickinessLevel"] = graph.project.stickiness_level
+    manifest["creativeFreedom"] = graph.project.creative_freedom
+    manifest["creativeFreedomPermission"] = graph.project.creative_freedom_permission
+    manifest["creativeFreedomFailureModes"] = graph.project.creative_freedom_failure_modes
+    manifest["dialoguePolicy"] = graph.project.dialogue_policy
 
     # Cast array
     manifest["cast"] = [
@@ -20436,6 +22280,12 @@ def materialize_manifest(graph: NarrativeGraph, manifest_path: Path) -> int:
 
         cast_ids = [cs.cast_id for cs in cast_states
                     if cs.frame_role not in ("referenced",)]
+        try:
+            shot_packet = build_shot_packet(graph, fid)
+            if shot_packet.visible_cast_ids:
+                cast_ids = list(shot_packet.visible_cast_ids)
+        except Exception:
+            pass
         prop_ids = [ps.prop_id for ps in prop_states]
 
         existing_frame = existing_frames_by_id.get(frame.frame_id, {})
@@ -20555,10 +22405,9 @@ Shared core sections (SHOT INTENT, CONTINUITY, VISUAL ANCHORS, AUDIO CONTEXT)
 are built once by _build_core_sections() and consumed by both
 assemble_image_prompt() and assemble_video_prompt().
 
-Video compression note: The BACKGROUND section is the first to be dropped
-during 4096-char video prompt compression. action_summary should therefore
-bake in critical environmental context (lighting, atmosphere, key location
-detail) so that context survives BACKGROUND section amputation.
+Video prompt note: prompts are preserved in full. action_summary should still
+carry the most important environmental context because it leads the prompt and
+helps downstream refiners/generators prioritize the right beat.
 """
 
 from __future__ import annotations
@@ -20579,6 +22428,7 @@ from .reference_collector import (
     ReferenceImageCollector,
     cast_bible_snapshot_for_frame,
 )
+from .feature_flags import ENABLE_STORYBOARD_GUIDANCE
 from .store import GraphStore
 from .api import (
     get_frame_context,
@@ -20628,8 +22478,6 @@ KINETIC_STYLE_HINT: dict[str, str] = {
 # Native runtime floor/ceiling enforced by server.py for grok-video clips.
 MIN_VIDEO_DURATION_SECONDS = 2
 MAX_VIDEO_DURATION_SECONDS = 15
-MAX_VIDEO_PROMPT_CHARS = 4096
-
 # Cinematic tag family → default duration (seconds)
 # D=dialogue, E=establishment, R=revealer, A=action, C=cast/portrait,
 # T=transitional, S=stylistic, M=music
@@ -20688,7 +22536,7 @@ DIALOGUE_SHOT_COMPOSITION_LIBRARY = {
     "speaker_sync": {
         "label": "speaker sync",
         "image_rule": "Keep the active speaker dominant and fully readable; the listener can stay secondary or partial, but eyelines and geography must stay locked.",
-        "video_rule": "Let expression, breath, and small hand behavior carry the line. Preserve staging and vary only crop, angle, or a gentle push.",
+        "video_rule": "Let expression, breath, and small hand behavior carry the line. Do not restage the room. Preserve staging and vary only crop, angle, or a gentle push.",
         "duration_weight": 1.35,
         "padding_weight": 0.75,
     },
@@ -20716,7 +22564,7 @@ DIALOGUE_SHOT_COMPOSITION_LIBRARY = {
     "bridge_coverage": {
         "label": "bridge coverage",
         "image_rule": "Bridge between adjacent dialogue angles while holding the same cast positions, prop placement, and room geography.",
-        "video_rule": "This clip should stitch the exchange together with minimal variation: one visual axis may change, but not the whole blocking plan.",
+        "video_rule": "Do not restage the room. This clip should stitch the exchange together with minimal variation: one visual axis may change, but not the whole blocking plan.",
         "duration_weight": 1.05,
         "padding_weight": 0.5,
     },
@@ -21014,21 +22862,456 @@ def _shot_intent_lines(packet) -> list[str]:
     ]
 
 
-def _continuity_lines(packet) -> list[str]:
+_PURE_BLACK_TOKENS = [REDACTED]
+    "pure black",
+    "black screen",
+    "cuts abruptly to pure black",
+    "fade to black",
+    "fades to black",
+    "fades fully to black",
+    "image fades to black",
+)
+_LOADING_WHEEL_TOKENS = [REDACTED]
+    "loading wheel",
+    "loading spinner",
+    "spinner on black",
+)
+_SCREEN_MEDIATED_TOKENS = [REDACTED]
+    "screen within screen",
+    "laptop screen",
+    "video feed",
+    "virtual window",
+    "camera on",
+    "camera off",
+    "chat explodes",
+    "inset video",
+)
+_HAND_ACTION_TOKENS = [REDACTED]
+    "hand",
+    "hands",
+    "finger",
+    "fingers",
+    "thumb",
+    "forefinger",
+)
+_HAND_MANIPULATION_TOKENS = [REDACTED]
+    "driven",
+    "grinding",
+    "crushing",
+    "probe",
+    "probing",
+    "extract",
+    "lifted",
+    "dropped",
+)
+_OBJECT_MACRO_TOKENS = [REDACTED]
+    "cutting board",
+    "bowl",
+    "cherries",
+    "cherry",
+    "mortar",
+    "pestle",
+    "splatter",
+    "powder",
+    "pit",
+    "pulp",
+)
+_LANDSCAPE_TRANSITION_TOKENS = [REDACTED]
+    "sunset",
+    "horizon",
+    "canyon",
+    "sky",
+    "landscape",
+)
+_TITLE_CARD_TOKENS = [REDACTED]
+    "title card",
+    "burns brightly",
+    "screen suddenly flashes",
+    "flashes with a bold title card",
+)
+_SINGLE_SUBJECT_DIRECTIVE_TOKENS = [REDACTED]
+    "single person",
+    "single speaker",
+    "isolated framing",
+    "clean single",
+    "single_subject",
+)
+_PROFILE_TWO_SHOT_TOKENS = [REDACTED]
+    "profile 50/50",
+    "profile view",
+    "facing each other",
+    "frame split evenly",
+)
+
+
+def _frame_text(frame) -> str:
+    parts = [
+        frame.get("narrative_beat", "") if isinstance(frame, dict) else getattr(frame, "narrative_beat", ""),
+        frame.get("action_summary", "") if isinstance(frame, dict) else getattr(frame, "action_summary", ""),
+        frame.get("source_text", "") if isinstance(frame, dict) else getattr(frame, "source_text", ""),
+    ]
+    return " ".join(_compact_text(str(part)) for part in parts if _compact_text(str(part))).lower()
+
+
+def _classify_prompt_mode(packet, frame) -> str:
+    text = _frame_text(frame)
+    if any(token in text for token in _PURE_BLACK_TOKENS):
+        return "pure_black"
+    if any(token in text for token in _LOADING_WHEEL_TOKENS):
+        return "loading_wheel"
+    if any(token in text for token in _TITLE_CARD_TOKENS):
+        return "title_card"
+    if any(token in text for token in _SCREEN_MEDIATED_TOKENS):
+        return "screen_presence"
+    if not packet.visible_cast_ids and any(token in text for token in _HAND_ACTION_TOKENS):
+        return "hand_object_action"
+    if packet.subject_count == 0 and any(token in text for token in _OBJECT_MACRO_TOKENS):
+        if any(token in text for token in _HAND_MANIPULATION_TOKENS):
+            return "hand_object_action"
+        return "object_macro"
+    if packet.subject_count == 0 and any(token in text for token in _LANDSCAPE_TRANSITION_TOKENS):
+        return "environment_transition"
+    return "standard"
+
+
+def _effective_subject_count(packet, mode: str) -> int:
+    if packet.subject_count:
+        return packet.subject_count
+    if mode in {"screen_presence", "hand_object_action"}:
+        return 1
+    return 0
+
+
+def _special_handling_lines(mode: str) -> list[str]:
+    if mode == "pure_black":
+        return [
+            "This beat is an intentional authored blackout transition.",
+            "Render a clean full-frame black screen only.",
+            "No visible objects, no silhouettes, no gradients, no light leaks, and no film grain texture.",
+        ]
+    if mode == "loading_wheel":
+        return [
+            "This beat is a minimal UI-like transition card, not a cinematic scene.",
+            "Render a single white loading spinner centered on pure black.",
+            "No browser chrome, no window frame, no text, no logos, and no extra icons.",
+        ]
+    if mode == "screen_presence":
+        return [
+            "The visible person is mediated through the laptop or video-call screen.",
+            "Keep the on-screen caller or listener visibly present rather than replacing the beat with a UI-only insert.",
+        ]
+    if mode == "title_card":
+        return [
+            "This beat is an authored graphic title-card insert, not a photographed room scene.",
+            "Render only the intended slogan or title treatment from the beat description with clean bold typography.",
+        ]
+    if mode == "hand_object_action":
+        return [
+            "This beat is carried by anonymous hands and object interaction, not a full human portrait.",
+            "If hands are visible, keep them anonymous and tightly framed; do not invent a face, torso, or extra people.",
+        ]
+    if mode == "object_macro":
+        return [
+            "This beat is carried by tightly framed objects, surfaces, and material detail rather than a human portrait.",
+            "Keep the frame macro and tactile; do not introduce faces, bodies, or unrelated environment expansion.",
+        ]
+    if mode == "environment_transition":
+        return [
+            "This beat is a landscape or environmental transition with no visible human subject.",
+            "Keep the frame focused on atmosphere, horizon, and place rather than introducing people or close-up objects.",
+        ]
+    return []
+
+
+def _is_single_subject_dialogue_coverage(packet, mode: str) -> bool:
+    if mode != "standard":
+        return False
+    if _effective_subject_count(packet, mode) != 1:
+        return False
+    if not packet.audio.dialogue_present:
+        return False
+    shot = _compact_text(packet.shot_intent.shot).lower()
+    return shot in {"close_up", "medium_shot", "medium_close_up", "closeup"}
+
+
+def _is_group_cast_frame(packet, mode: str) -> bool:
+    return mode == "standard" and _effective_subject_count(packet, mode) >= 3
+
+
+def _cast_name_tokens(graph: NarrativeGraph) -> set[str]:
+    names: set[str] = set()
+    for cast in graph.cast.values():
+        name = _compact_text(getattr(cast, "name", "") or "")
+        if name:
+            names.add(name.lower())
+    return names
+
+
+def _line_name(line: str) -> str:
+    return _compact_text((line or "").split("|", 1)[0].strip("- ").strip())
+
+
+def _screen_position_rank(value: str) -> int:
+    token = (value or "").strip().lower()
+    order = {
+        "frame_left_edge": 0,
+        "frame_left": 1,
+        "frame_left_third": 2,
+        "frame_center_left": 3,
+        "frame_center": 4,
+        "frame_center_right": 5,
+        "frame_right_third": 6,
+        "frame_right": 7,
+        "frame_right_edge": 8,
+    }
+    if token in order:
+        return order[token]
+    if "left" in token:
+        return 1
+    if "right" in token:
+        return 7
+    if "center" in token:
+        return 4
+    return 4
+
+
+def _line_screen_position_rank(line: str) -> int:
+    match = re.search(r"\|\s*at\s+([^|]+)", line or "", flags=re.IGNORECASE)
+    if match:
+        return _screen_position_rank(match.group(1))
+    return 4
+
+
+def _image_background_lines(
+    graph: NarrativeGraph,
+    packet,
+    *,
+    mode: str,
+    single_subject_dialogue: bool,
+) -> list[str]:
+    lines = [
+        line for line in packet.background
+        if not _compact_text(line).lower().startswith("sound cue ")
+    ]
+    if single_subject_dialogue:
+        cast_names = _cast_name_tokens(graph)
+        lines = [
+            line for line in lines
+            if not any(name in _compact_text(line).lower() for name in cast_names)
+        ]
+        return lines[:4]
+    if _is_large_group_cast_frame(packet, mode):
+        visual_lines = [line for line in lines if "sound cue " not in _compact_text(line).lower()]
+        return visual_lines[:3]
+    if _is_group_cast_frame(packet, mode):
+        visual_lines = [line for line in lines if "sound cue " not in _compact_text(line).lower()]
+        return visual_lines[:4]
+    return lines
+
+
+def _image_location_lines(packet, *, mode: str, single_subject_dialogue: bool) -> list[str]:
+    lines = list(packet.location_invariants)
+    if _is_large_group_cast_frame(packet, mode):
+        return lines[:4]
+    if _is_group_cast_frame(packet, mode):
+        return lines[:5]
+    if single_subject_dialogue:
+        return lines[:5]
+    return lines
+
+
+def _is_large_group_cast_frame(packet, mode: str) -> bool:
+    return _is_group_cast_frame(packet, mode) and _effective_subject_count(packet, mode) >= 6
+
+
+def _image_cast_lines(packet, *, mode: str) -> list[str]:
+    lines = list(packet.cast_invariants)
+    if not _is_group_cast_frame(packet, mode):
+        return lines
+
+    ordered_names = [
+        _line_name(line)
+        for line in sorted(packet.blocking, key=_line_screen_position_rank)
+        if _line_name(line)
+    ]
+    if not ordered_names:
+        ordered_names = [_line_name(line) for line in lines if _line_name(line)]
+    if _is_large_group_cast_frame(packet, mode):
+        anchors = ordered_names[:5]
+        summary = [
+            "Use the stitched group cast reference as the authority for each visible character's identity, wardrobe, and relative placement.",
+            f"Preserve the full visible ensemble as one coherent group tableau with {_effective_subject_count(packet, mode)} people.",
+        ]
+        if anchors:
+            summary.append("Primary left-to-right anchors: " + ", ".join(anchors) + ".")
+        summary.append("Keep any remaining visible cast in stitched-sheet order without inventing extras.")
+        return summary
+    visible_names = ", ".join(ordered_names) if ordered_names else "the visible group"
+    return [
+        "Use the stitched group cast reference as the authority for each visible character's identity, wardrobe, and relative placement.",
+        f"Visible cast left-to-right in the frame: {visible_names}.",
+    ]
+
+
+def _line_action(line: str) -> str:
+    parts = [_compact_text(part) for part in (line or "").split("|")]
+    if len(parts) >= 4 and parts[3]:
+        return parts[3]
+    return "holds position"
+
+
+def _blocking_names(lines: list[str]) -> list[str]:
+    names: list[str] = []
+    seen: set[str] = set()
+    for line in lines:
+        name = _line_name(line)
+        key = name.lower()
+        if name and key not in seen:
+            names.append(name)
+            seen.add(key)
+    return names
+
+
+def _shot_descriptor_text(packet, frame) -> str:
+    parts = [
+        _resolve_shot_description(frame),
+        _compact_text(packet.shot_intent.shot),
+        _compact_text(packet.shot_intent.dramatic_purpose),
+        _compact_text(packet.current_beat),
+    ]
+    return " ".join(part for part in parts if part).lower()
+
+
+def _is_single_subject_focus(packet, mode: str, frame, blocking_lines: list[str]) -> bool:
+    if mode != "standard":
+        return False
+    if len(_blocking_names(blocking_lines)) != 1:
+        return False
+    shot_text = _shot_descriptor_text(packet, frame)
+    return any(token in shot_text for token in _SINGLE_SUBJECT_DIRECTIVE_TOKENS)
+
+
+def _is_profile_two_shot(packet, mode: str, frame, blocking_lines: list[str]) -> bool:
+    if mode != "standard":
+        return False
+    if len(_blocking_names(blocking_lines)) != 2:
+        return False
+    shot_text = _shot_descriptor_text(packet, frame)
+    return any(token in shot_text for token in _PROFILE_TWO_SHOT_TOKENS)
+
+
+def _filter_pose_snapshot(snapshot: dict | None, allowed_names: list[str]) -> dict | None:
+    if not snapshot or not allowed_names:
+        return snapshot
+    allowed = {name.lower() for name in allowed_names}
+    characters = [
+        character
+        for character in snapshot.get("characters", [])
+        if _compact_text(str(character.get("name") or character.get("character_id") or "")).lower() in allowed
+    ]
+    if not characters:
+        return None
+    filtered = dict(snapshot)
+    filtered["characters"] = characters
+    return filtered
+
+
+def _image_blocking_lines(packet, *, mode: str, profile_two_shot: bool = False) -> list[str]:
+    lines = list(packet.blocking)
+    if profile_two_shot:
+        names = _blocking_names(lines)
+        if len(names) == 2:
+            left_action = _line_action(lines[0])
+            right_action = _line_action(lines[1]) if len(lines) > 1 else "holds position"
+            return [
+                f"{names[0]} | at frame_left | facing profile_right | {left_action} | looking at {names[1]}",
+                f"{names[1]} | at frame_right | facing profile_left | {right_action} | looking at {names[0]}",
+            ]
+    if not _is_group_cast_frame(packet, mode):
+        return lines
+
+    ordered = sorted(lines, key=_line_screen_position_rank)
+    anchors = ordered[:3] if _is_large_group_cast_frame(packet, mode) else ordered[:4]
+    remaining = [_line_name(line) for line in ordered[4:] if _line_name(line)]
+    summary = [
+        "Use the stitched group cast reference as the authoritative left-to-right blocking map. Preserve relative spacing and screen positions."
+    ]
+    summary.extend(anchors)
+    if remaining:
+        summary.append(
+            "Additional visible group members remain established in the stitched reference: "
+            + ", ".join(remaining)
+            + "."
+        )
+    if _is_large_group_cast_frame(packet, mode):
+        summary.append("Treat the remaining visible cast as one coherent moving cluster rather than isolated hero poses.")
+    return summary
+
+
+def _subject_count_lines(packet, mode: str, override: int | None = None) -> list[str]:
+    effective_count = override if override is not None else _effective_subject_count(packet, mode)
+    if mode == "screen_presence":
+        return [f"Exactly {effective_count} visible subject(s), counted within the laptop or video-call screen."]
+    if mode == "hand_object_action":
+        return [f"Exactly {effective_count} visible human subject(s), expressed only as anonymous hands if present."]
+    if mode in {"pure_black", "loading_wheel", "title_card", "environment_transition", "object_macro"}:
+        return ["Exactly 0 visible human subject(s)."]
+    return [f"Exactly {effective_count} visible subject(s)."]
+
+
+def _continuity_lines(packet, *, mode: str = "standard") -> list[str]:
     lines = []
     if packet.previous_beat:
         lines.append(f"Previous beat: {packet.previous_beat.narrative_beat or packet.previous_beat.action_summary or packet.previous_beat.frame_id}")
     lines.append(f"Current beat: {packet.current_beat}")
     if packet.next_beat:
         lines.append(f"Next beat: {packet.next_beat.narrative_beat or packet.next_beat.action_summary or packet.next_beat.frame_id}")
-    lines.extend(packet.continuity_deltas)
+    continuity_deltas = list(packet.continuity_deltas)
+    if mode == "screen_presence":
+        continuity_deltas = [
+            line for line in continuity_deltas
+            if not line.startswith("Cast leaving frame:")
+        ]
+    elif mode == "title_card":
+        continuity_deltas = [
+            line for line in continuity_deltas
+            if not (line.startswith("Cast leaving frame:") or line.startswith("Cast entering frame:"))
+        ]
+    lines.extend(continuity_deltas)
     return lines
 
 
-def _negative_constraints(packet, *, dialogue_present: bool, guidance_only: bool = False) -> list[str]:
+def _image_continuity_lines(
+    packet,
+    *,
+    mode: str,
+    single_subject_focus: bool = False,
+    large_group_frame: bool = False,
+) -> list[str]:
+    lines = _continuity_lines(packet, mode=mode)
+    if single_subject_focus:
+        lines = [line for line in lines if not line.startswith("Cast leaving frame:")]
+    if large_group_frame:
+        lines = [
+            line for line in lines
+            if not (line.startswith("Cast entering frame:") or line.startswith("Cast leaving frame:"))
+        ]
+    return lines
+
+
+def _negative_constraints(
+    packet,
+    *,
+    dialogue_present: bool,
+    guidance_only: bool = False,
+    mode: str = "standard",
+    subject_count_override: int | None = None,
+) -> list[str]:
     lines = [
         "Do not add or remove cast, props, wardrobe, architecture, or light sources.",
-        "No subtitles, captions, speech bubbles, lyric text, labels, watermarks, or UI overlays.",
+        "No subtitles, captions, speech bubbles, lyric text, labels, watermarks, or UI overlays."
+        if mode != "title_card"
+        else "Do not add captions, subtitles, browser chrome, logos, or any extra UI beyond the authored title text.",
         "Keep anatomy, hands, faces, prop scale, and object physics coherent.",
     ]
     if guidance_only:
@@ -21037,8 +23320,25 @@ def _negative_constraints(packet, *, dialogue_present: bool, guidance_only: bool
         lines.append("Dialogue is conveyed through performance and native audio only; do not render spoken words visually.")
     else:
         lines.append("No spoken dialogue should be implied visually through text.")
-    if packet.subject_count:
-        lines.append(f"Do not exceed {packet.subject_count} visible subject(s).")
+    effective_subject_count = subject_count_override if subject_count_override is not None else _effective_subject_count(packet, mode)
+    if mode == "pure_black":
+        lines.append("Render pure black only. No imagery, no silhouettes, no texture, and no visible subject.")
+    elif mode == "loading_wheel":
+        lines.append("Render only a minimal white loading spinner on black. No extra UI, no browser chrome, and no additional symbols.")
+    elif mode == "screen_presence":
+        lines.append("Treat the on-screen caller or listener as the visible subject; do not reduce the frame to a faceless interface.")
+    elif mode == "title_card":
+        lines.append("Render only the intended title-card wording from the beat. Do not add extra copy, slogans, labels, or logos.")
+    elif mode == "hand_object_action":
+        lines.append("Do not invent a face, torso, or additional people around the hand-driven action.")
+    elif mode == "object_macro":
+        lines.append("Do not introduce people, faces, or extra room geography into this macro object beat.")
+    elif mode == "environment_transition":
+        lines.append("Do not introduce people, faces, or hands into this transition beat.")
+    if effective_subject_count:
+        lines.append(f"Do not exceed {effective_subject_count} visible subject(s).")
+    else:
+        lines.append("Keep visible human subject count at zero.")
     return lines
 
 
@@ -21259,7 +23559,7 @@ def _load_cast_bible_snapshot(
     return cast_bible_snapshot_for_frame(cast_bible, graph, frame_id, cast_ids=cast_ids)
 
 
-def _pose_lock_lines(snapshot: dict | None) -> list[str]:
+def _pose_lock_lines(snapshot: dict | None, *, include_history: bool = True) -> list[str]:
     if not snapshot:
         return []
 
@@ -21281,7 +23581,7 @@ def _pose_lock_lines(snapshot: dict | None) -> list[str]:
             line += " Locked modifiers: " + ", ".join(modifiers) + "."
 
         recent_history = character.get("recent_pose_history") or []
-        if recent_history:
+        if include_history and recent_history:
             trail = [
                 _compact_text(str(item.get("pose") or ""))
                 for item in recent_history
@@ -21302,6 +23602,7 @@ def _build_core_sections(
     graph: "NarrativeGraph",
     refs: dict | None = None,
     pose_snapshot: dict | None = None,
+    include_pose_history: bool = True,
 ) -> dict[str, str]:
     """Build the shared prompt sections consumed by both image and video assembly.
 
@@ -21328,7 +23629,7 @@ def _build_core_sections(
     # built by each caller so their section keys are preserved for video compression)
     continuity = _format_section("CONTINUITY", _continuity_lines(packet))
 
-    pose_lock = _format_section("POSE LOCK", _pose_lock_lines(pose_snapshot))
+    pose_lock = _format_section("POSE LOCK", _pose_lock_lines(pose_snapshot, include_history=include_pose_history))
 
     # VISUAL ANCHORS — reference images listed with their role labels
     visual_anchors = ""
@@ -21443,46 +23744,8 @@ def _shrink_section(section_infos: list[dict[str, object]], key: str) -> bool:
 
 
 def _serialize_video_prompt_sections(sections: list[str]) -> str:
-    """Fit the assembled video prompt without damaging Tier 1 continuity blocks."""
-    prompt = "\n\n".join(section for section in sections if section).strip()
-    if len(prompt) <= MAX_VIDEO_PROMPT_CHARS:
-        return prompt
-
-    section_infos = [_parse_prompt_section(section) for section in sections if section]
-
-    for key in _VIDEO_PROMPT_TIER3_DROP_ORDER:
-        if _drop_section(section_infos, key):
-            prompt = _serialize_prompt_sections(section_infos)
-            if len(prompt) <= MAX_VIDEO_PROMPT_CHARS:
-                return prompt
-
-    changed = True
-    while len(prompt) > MAX_VIDEO_PROMPT_CHARS and changed:
-        changed = False
-        for key in _VIDEO_PROMPT_TIER2_SHRINK_ORDER:
-            if _shrink_section(section_infos, key):
-                prompt = _serialize_prompt_sections(section_infos)
-                changed = True
-                if len(prompt) <= MAX_VIDEO_PROMPT_CHARS:
-                    return prompt
-                break
-
-    for key in _VIDEO_PROMPT_TIER2_DROP_ORDER:
-        if _drop_section(section_infos, key):
-            prompt = _serialize_prompt_sections(section_infos)
-            if len(prompt) <= MAX_VIDEO_PROMPT_CHARS:
-                return prompt
-
-    tier1_sizes = {
-        str(info["key"]).rstrip(":").lower().replace(" ", "_"): len(_render_prompt_section(info))
-        for info in section_infos
-        if info.get("key") in _VIDEO_PROMPT_TIER1_KEYS
-    }
-    raise ValueError(
-        "Video prompt exceeds "
-        f"{MAX_VIDEO_PROMPT_CHARS} chars after dropping Tier 3 blocks and shrinking Tier 2 blocks; "
-        f"tier1_block_sizes={tier1_sizes}"
-    )
+    """Serialize the assembled video prompt sections without length capping."""
+    return "\n\n".join(section for section in sections if section).strip()
 
 
 def _tempo_units_per_second(tempo: str = "", env_intensity: str = "") -> float:
@@ -21716,51 +23979,120 @@ def assemble_image_prompt(graph: NarrativeGraph, frame_id: str,
     )
     size = SIZE_PRESET_MAP.get(graph.project.aspect_ratio, "landscape_16_9")
     dialogue_coverage = _build_dialogue_coverage(graph, frame_id, ctx, packet)
+    prompt_mode = _classify_prompt_mode(packet, frame)
+    group_cast_frame = _is_group_cast_frame(packet, prompt_mode)
+    large_group_frame = _is_large_group_cast_frame(packet, prompt_mode)
+    special_handling = _format_section("SPECIAL HANDLING", _special_handling_lines(prompt_mode))
 
-    lead_lines = [
-        f"{style_prefix}Generate one final cinematic frame.",
-        "This is a single finished image, not a storyboard grid or contact sheet.",
-        (frame.get("action_summary") if isinstance(frame, dict) else getattr(frame, "action_summary", None)) or packet.current_beat,
-    ]
+    if prompt_mode == "pure_black":
+        lead_lines = [
+            "Generate one final finished frame.",
+            "Output clean pure black only.",
+        ]
+    elif prompt_mode == "loading_wheel":
+        lead_lines = [
+            "Generate one final finished frame.",
+            "Output a simple white loading spinner centered on pure black.",
+        ]
+    elif prompt_mode == "title_card":
+        lead_lines = [
+            "Generate one final finished frame.",
+            "Render a bold authored title-card insert using only the wording described in this beat.",
+            (frame.get("action_summary") if isinstance(frame, dict) else getattr(frame, "action_summary", None)) or packet.current_beat,
+        ]
+    else:
+        lead_lines = [
+            f"{style_prefix}Generate one final cinematic frame.",
+            "This is a single finished image, not a storyboard grid or contact sheet.",
+            (frame.get("action_summary") if isinstance(frame, dict) else getattr(frame, "action_summary", None)) or packet.current_beat,
+        ]
     if scene.get("mood_keywords"):
         lead_lines.append("Mood: " + ", ".join(scene["mood_keywords"]))
 
     # Cinematic tag composition directive — inject before audio section
     shot_desc = _resolve_shot_description(frame)
-    if shot_desc:
+    if shot_desc and prompt_mode not in {"pure_black", "loading_wheel", "title_card"}:
         lead_lines.append(shot_desc)
     _ct_img = frame.get("cinematic_tag") if isinstance(frame, dict) else getattr(frame, "cinematic_tag", {})
     _ct_img = _ct_img or {}
     _ct_img_definition = _ct_field(_ct_img, "definition")
-    if _ct_img_definition:
+    if _ct_img_definition and prompt_mode not in {"pure_black", "loading_wheel", "title_card"}:
         lead_lines.append(_ct_img_definition)
     _ct_img_dof = _ct_field(_ct_img, "dof_guidance")
-    if _ct_img_dof:
+    if _ct_img_dof and prompt_mode not in {"pure_black", "loading_wheel", "title_card"}:
         lead_lines.append(_ct_img_dof)
     _ct_img_lens = _ct_field(_ct_img, "lens_guidance")
-    if _ct_img_lens:
+    if _ct_img_lens and prompt_mode not in {"pure_black", "loading_wheel", "title_card"}:
         lead_lines.append(_ct_img_lens)
 
+    raw_blocking_lines = list(packet.blocking)
+    profile_two_shot = _is_profile_two_shot(packet, prompt_mode, frame, raw_blocking_lines)
+    image_blocking_lines = _image_blocking_lines(
+        packet,
+        mode=prompt_mode,
+        profile_two_shot=profile_two_shot,
+    )
+    single_subject_focus = _is_single_subject_focus(packet, prompt_mode, frame, image_blocking_lines)
+    single_subject_dialogue = single_subject_focus or _is_single_subject_dialogue_coverage(packet, prompt_mode)
+    subject_count_override = 1 if single_subject_focus else None
+    pose_snapshot = cast_bible_snapshot
+    if single_subject_focus:
+        pose_snapshot = _filter_pose_snapshot(cast_bible_snapshot, _blocking_names(image_blocking_lines))
+
     # Shared core: SHOT INTENT, CONTINUITY, VISUAL ANCHORS, AUDIO CONTEXT
-    core = _build_core_sections(packet, frame, graph, refs=refs, pose_snapshot=cast_bible_snapshot)
+    core = _build_core_sections(
+        packet,
+        frame,
+        graph,
+        refs=refs,
+        pose_snapshot=pose_snapshot,
+        include_pose_history=False,
+    )
+
+    image_location_lines = _image_location_lines(
+        packet,
+        mode=prompt_mode,
+        single_subject_dialogue=single_subject_dialogue,
+    )
+    image_background_lines = _image_background_lines(
+        graph,
+        packet,
+        mode=prompt_mode,
+        single_subject_dialogue=single_subject_dialogue,
+    )
+    image_cast_lines = _image_cast_lines(packet, mode=prompt_mode)
 
     sections = [
         "\n".join(_compact_text(line) for line in lead_lines if _compact_text(line)),
+        special_handling,
         core["shot_intent"],
-        core["continuity"],
-        core["pose_lock"],
-        core["visual_anchors"],
-        _format_section("SUBJECT COUNT", [f"Exactly {packet.subject_count} visible subject(s)."]),
-        _format_section("CAST INVARIANTS", packet.cast_invariants),
-        _format_section("PROP INVARIANTS", packet.prop_invariants),
-        _format_section("LOCATION INVARIANTS", packet.location_invariants),
-        _format_section("DIALOGUE COVERAGE", _dialogue_coverage_lines(dialogue_coverage, for_video=False)),
-        _format_section("BLOCKING", packet.blocking),
-        _format_section("BACKGROUND", packet.background),
+        _format_section(
+            "CONTINUITY",
+            _image_continuity_lines(
+                packet,
+                mode=prompt_mode,
+                single_subject_focus=single_subject_focus,
+                large_group_frame=large_group_frame,
+            ),
+        ),
+        core["pose_lock"] if prompt_mode not in {"pure_black", "loading_wheel", "screen_presence", "environment_transition", "title_card", "hand_object_action"} and not group_cast_frame and not profile_two_shot else "",
+        core["visual_anchors"] if prompt_mode not in {"pure_black", "loading_wheel", "title_card"} else "",
+        _format_section("SUBJECT COUNT", _subject_count_lines(packet, prompt_mode, override=subject_count_override)),
+        _format_section("CAST INVARIANTS", image_cast_lines) if prompt_mode not in {"pure_black", "loading_wheel", "title_card"} else "",
+        _format_section("PROP INVARIANTS", packet.prop_invariants) if prompt_mode not in {"pure_black", "loading_wheel", "screen_presence", "object_macro", "environment_transition", "title_card"} else "",
+        _format_section("LOCATION INVARIANTS", image_location_lines) if prompt_mode not in {"pure_black", "loading_wheel", "screen_presence", "object_macro", "environment_transition", "title_card", "hand_object_action"} else "",
+        _format_section("DIALOGUE COVERAGE", _dialogue_coverage_lines(dialogue_coverage, for_video=False)) if prompt_mode not in {"screen_presence", "title_card"} else "",
+        _format_section("BLOCKING", image_blocking_lines) if prompt_mode not in {"pure_black", "loading_wheel", "screen_presence", "object_macro", "environment_transition", "title_card", "hand_object_action"} else "",
+        _format_section("BACKGROUND", image_background_lines) if prompt_mode not in {"pure_black", "loading_wheel", "screen_presence", "object_macro", "hand_object_action"} else "",
         core["audio_context"],
         _format_section(
             "NEGATIVE CONSTRAINTS",
-            _negative_constraints(packet, dialogue_present=packet.audio.dialogue_present),
+            _negative_constraints(
+                packet,
+                dialogue_present=packet.audio.dialogue_present,
+                mode=prompt_mode,
+                subject_count_override=subject_count_override,
+            ),
         ),
     ]
     full_prompt = "\n\n".join(section for section in sections if section).strip()
@@ -21804,9 +24136,9 @@ def assemble_video_prompt(graph: NarrativeGraph, frame_id: str,
               mapping role label strings to image paths. When provided, a VISUAL
               ANCHORS section is injected listing each reference by role.
 
-    Note on action_summary: The BACKGROUND section is the first dropped during
-    4096-char compression. Bake critical environmental context (lighting,
-    atmosphere, location atmosphere) into action_summary so it survives.
+    Note on action_summary: it should still carry the most important
+    environmental context (lighting, atmosphere, location atmosphere) because
+    it leads the prompt and anchors downstream refinement.
     """
     ctx = get_frame_context(graph, frame_id)
     frame = ctx["frame"]
@@ -21847,19 +24179,39 @@ def assemble_video_prompt(graph: NarrativeGraph, frame_id: str,
         else getattr(frame, "action_summary", "")
     )
     compressed_lead = packet.video_optimized_prompt_block or frame_video_block or frame_action_summary
+    prompt_mode = _classify_prompt_mode(packet, frame)
+    special_handling = _format_section("SPECIAL HANDLING", _special_handling_lines(prompt_mode))
 
-    lead_lines = ["Generate a cinematic motion clip with native audio."]
-    if kinetic_hint:
+    if prompt_mode == "pure_black":
+        lead_lines = [
+            "Generate a cinematic motion clip with native audio.",
+            "Hold on full-frame pure black with no visible imagery.",
+        ]
+    elif prompt_mode == "loading_wheel":
+        lead_lines = [
+            "Generate a cinematic motion clip with native audio.",
+            "Hold on a simple white loading spinner centered on pure black.",
+        ]
+    elif prompt_mode == "title_card":
+        lead_lines = [
+            "Generate a cinematic motion clip with native audio.",
+            "Render a bold authored title-card insert using only the wording described in this beat.",
+            compressed_lead or packet.current_beat,
+        ]
+    else:
+        lead_lines = ["Generate a cinematic motion clip with native audio."]
+    if kinetic_hint and prompt_mode not in {"pure_black", "loading_wheel", "title_card"}:
         lead_lines.append(kinetic_hint)
-    lead_lines.extend([
-        compressed_lead or packet.current_beat,
-        f"Shot type: {packet.shot_intent.shot or shot_type}.",
-        f"Camera motion: {camera_movement}.",
-    ])
+    if prompt_mode not in {"pure_black", "loading_wheel", "title_card"}:
+        lead_lines.extend([
+            compressed_lead or packet.current_beat,
+            f"Shot type: {packet.shot_intent.shot or shot_type}.",
+            f"Camera motion: {camera_movement}.",
+        ])
     if scene.get("mood_keywords"):
         lead_lines.append("Mood: " + ", ".join(scene["mood_keywords"]))
     _ct_vid_dof = _ct_field(_ct_vid, "dof_guidance")
-    if _ct_vid_dof:
+    if _ct_vid_dof and prompt_mode not in {"pure_black", "loading_wheel", "title_card"}:
         lead_lines.append(_ct_vid_dof)
 
     dialogue_turn_lines: list[str] = []
@@ -21935,22 +24287,23 @@ def assemble_video_prompt(graph: NarrativeGraph, frame_id: str,
 
     sections = [
         "\n".join(_compact_text(line) for line in lead_lines if _compact_text(line)),
+        special_handling,
         core["shot_intent"],
-        core["continuity"],
-        core["pose_lock"],
-        core["visual_anchors"],
-        _format_section("SUBJECT COUNT", [f"Exactly {packet.subject_count} visible subject(s)."]),
-        _format_section("CAST INVARIANTS", packet.cast_invariants),
-        _format_section("PROP INVARIANTS", packet.prop_invariants),
-        _format_section("LOCATION INVARIANTS", packet.location_invariants),
-        _format_section("DIALOGUE COVERAGE", _dialogue_coverage_lines(dialogue_coverage, for_video=True)),
-        _format_section("BLOCKING", packet.blocking),
-        _format_section("BACKGROUND", packet.background),
+        _format_section("CONTINUITY", _continuity_lines(packet, mode=prompt_mode)),
+        core["pose_lock"] if prompt_mode not in {"pure_black", "loading_wheel", "screen_presence", "environment_transition", "title_card", "hand_object_action"} else "",
+        core["visual_anchors"] if prompt_mode not in {"pure_black", "loading_wheel", "title_card"} else "",
+        _format_section("SUBJECT COUNT", _subject_count_lines(packet, prompt_mode)),
+        _format_section("CAST INVARIANTS", packet.cast_invariants) if prompt_mode not in {"pure_black", "loading_wheel", "title_card"} else "",
+        _format_section("PROP INVARIANTS", packet.prop_invariants) if prompt_mode not in {"pure_black", "loading_wheel", "screen_presence", "object_macro", "environment_transition", "title_card"} else "",
+        _format_section("LOCATION INVARIANTS", packet.location_invariants) if prompt_mode not in {"pure_black", "loading_wheel", "screen_presence", "object_macro", "environment_transition", "title_card", "hand_object_action"} else "",
+        _format_section("DIALOGUE COVERAGE", _dialogue_coverage_lines(dialogue_coverage, for_video=True)) if prompt_mode != "title_card" else "",
+        _format_section("BLOCKING", packet.blocking) if prompt_mode not in {"pure_black", "loading_wheel", "screen_presence", "object_macro", "environment_transition", "title_card", "hand_object_action"} else "",
+        _format_section("BACKGROUND", packet.background) if prompt_mode not in {"pure_black", "loading_wheel", "screen_presence", "object_macro", "hand_object_action"} else "",
         _format_section("MOTION CONTINUITY", _motion_continuity_lines(frame, packet)),
         _format_section("AUDIO", audio_lines),
         _format_section(
             "NEGATIVE CONSTRAINTS",
-            _negative_constraints(packet, dialogue_present=packet.audio.dialogue_present),
+            _negative_constraints(packet, dialogue_present=packet.audio.dialogue_present, mode=prompt_mode),
         ),
     ]
     sections = [s for s in sections if s]
@@ -22161,7 +24514,7 @@ def resolve_ref_images(graph: NarrativeGraph, frame_id: str,
     collector = ReferenceImageCollector(graph, base)
     frame_refs = collector.get_frame_references(frame_id)
     refs: list[str] = []
-    if frame_refs.storyboard_cell and frame_refs.storyboard_cell.exists():
+    if ENABLE_STORYBOARD_GUIDANCE and frame_refs.storyboard_cell and frame_refs.storyboard_cell.exists():
         refs.append(frame_refs.storyboard_cell.relative_to(base).as_posix())
     refs.extend(
         path.relative_to(base).as_posix()
@@ -22368,6 +24721,19 @@ def assemble_all_prompts(graph: NarrativeGraph, project_dir: str | Path) -> dict
     for d in [frame_prompt_dir, shot_packet_dir, video_prompt_dir, cast_prompt_dir, loc_prompt_dir, prop_prompt_dir, storyboard_prompt_dir]:
         d.mkdir(parents=True, exist_ok=True)
 
+    stale_prompt_patterns = {
+        frame_prompt_dir: "*_image.json",
+        shot_packet_dir: "*.json",
+        video_prompt_dir: "*_video.json",
+        cast_prompt_dir: "*_composite.json",
+        loc_prompt_dir: "*_location.json",
+        prop_prompt_dir: "*_prop.json",
+        storyboard_prompt_dir: "*_grid.json",
+    }
+    for directory, pattern in stale_prompt_patterns.items():
+        for existing in directory.glob(pattern):
+            existing.unlink()
+
     counts = {"image_prompts": 0, "shot_packets": 0, "video_prompts": 0, "composite_prompts": 0,
               "location_prompts": 0, "prop_prompts": 0, "storyboard_prompts": 0}
 
@@ -22435,18 +24801,19 @@ def assemble_all_prompts(graph: NarrativeGraph, project_dir: str | Path) -> dict
         except Exception as e:
             print(f"WARNING: Failed to assemble prop for {prop_id}: {e}")
 
-    # Grid storyboard prompts — one per StoryboardGrid
-    for grid_id, grid in graph.storyboard_grids.items():
-        try:
-            sb = assemble_grid_storyboard_prompt(graph, grid_id, project_dir=project_dir)
-            (storyboard_prompt_dir / f"{grid_id}_grid.json").write_text(
-                json.dumps(sb, indent=2, ensure_ascii=False), encoding="utf-8"
-            )
-            # Update the grid's prompt path on the graph
-            grid.storyboard_prompt_path = f"frames/storyboard_prompts/{grid_id}_grid.json"
-            counts["storyboard_prompts"] += 1
-        except Exception as e:
-            print(f"WARNING: Failed to assemble storyboard for {grid_id}: {e}")
+    # Grid storyboard prompts — optional guidance layer
+    if ENABLE_STORYBOARD_GUIDANCE:
+        for grid_id, grid in graph.storyboard_grids.items():
+            try:
+                sb = assemble_grid_storyboard_prompt(graph, grid_id, project_dir=project_dir)
+                (storyboard_prompt_dir / f"{grid_id}_grid.json").write_text(
+                    json.dumps(sb, indent=2, ensure_ascii=False), encoding="utf-8"
+                )
+                # Update the grid's prompt path on the graph
+                grid.storyboard_prompt_path = f"frames/storyboard_prompts/{grid_id}_grid.json"
+                counts["storyboard_prompts"] += 1
+            except Exception as e:
+                print(f"WARNING: Failed to assemble storyboard for {grid_id}: {e}")
 
     return counts
 
@@ -22719,7 +25086,7 @@ for each frame, produced by prompt_assembler.
 
 Catches drift that can arise from:
   - separate assembly paths (image vs video prompts built independently)
-  - video 4096-char compression dropping entities from the narrative
+  - video prompt assembly omitting entities from the narrative
   - dialogue sync metadata diverging between prompt types
   - missing restaging guards in video direction
 
@@ -22733,6 +25100,7 @@ Checks:
     c. DIALOGUE_FIT_CONSISTENCY — dialogue span coverage coherent between both
     d. REFERENCE_LIST_PARITY   — ref image list coherent with shot packet data
     e. RESTAGING_GUARD         — "Do not restage" present for guarded dialogue roles
+    f. SUBJECT_COUNT_CONSISTENCY — declared visible-subject count matches described action
 
 CLI:
     python3 graph/prompt_pair_validator.py --project-dir ./projects/test [--json] [--strict]
@@ -22772,7 +25140,13 @@ _RESTAGING_GUARD_ROLES: frozenset[str] = frozenset({
 _MAX_REF_IMAGES: int = 14
 
 # Known valid values for video prompt's dialogue_fit_status
-_VALID_FIT_STATUSES: frozenset[str] = frozenset({"fits", "overflows", "no_dialogue"})
+_VALID_FIT_STATUSES: frozenset[str] = frozenset({
+    "fits",
+    "overflows",
+    "no_dialogue",
+    "span_allocated",
+    "capped_to_model_max",
+})
 
 # Subtitle/caption markers that must not appear in image prompts
 _SUBTITLE_MARKERS: tuple[str, ...] = (
@@ -22780,6 +25154,55 @@ _SUBTITLE_MARKERS: tuple[str, ...] = (
     "caption",
     "burned-in text",
     "text overlay",
+)
+_NUMBER_WORDS: dict[str, int] = {
+    "zero": 0,
+    "one": 1,
+    "two": 2,
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+    "seven": 7,
+    "eight": 8,
+    "nine": 9,
+    "ten": 10,
+    "eleven": 11,
+    "twelve": 12,
+}
+_NUMBER_PATTERN = r"(?:\d+|" + "|".join(_NUMBER_WORDS.keys()) + r")"
+_DECLARED_SUBJECT_RE = re.compile(
+    rf"\b(?:exactly|do not exceed)\s+({_NUMBER_PATTERN})\s+visible subject",
+    re.IGNORECASE,
+)
+_GROUP_COUNT_RE = re.compile(
+    rf"\b(?:group|ensemble|cluster|crowd)\s+of\s+({_NUMBER_PATTERN})\b",
+    re.IGNORECASE,
+)
+_PEOPLE_COUNT_RE = re.compile(
+    rf"\b({_NUMBER_PATTERN})[-\s]?(?:person|people|subject|subjects|faces)\b",
+    re.IGNORECASE,
+)
+_COLLECTIVE_VISIBLE_TOKENS: tuple[str, ...] = (
+    "entire group",
+    "gathered group",
+    "surrounding group",
+    "tight gathering",
+    "forms a cluster",
+    "crowds around",
+    "in unison",
+    "all together",
+    "tightens into intimate cluster",
+)
+_EMPTY_TRANSITION_TOKENS: tuple[str, ...] = (
+    "empty room",
+    "empty hallway",
+    "empty frame",
+    "pure transition",
+    "pure black",
+    "loading wheel",
+    "title card",
+    "no one visible",
 )
 
 
@@ -22792,6 +25215,7 @@ class PromptPairCategory(str, Enum):
     DIALOGUE_FIT_CONSISTENCY = "DIALOGUE_FIT_CONSISTENCY"
     REFERENCE_LIST_PARITY = "REFERENCE_LIST_PARITY"
     RESTAGING_GUARD = "RESTAGING_GUARD"
+    SUBJECT_COUNT_CONSISTENCY = "SUBJECT_COUNT_CONSISTENCY"
 
 
 class IssueSeverity(str, Enum):
@@ -22883,6 +25307,77 @@ def _frame_id_from_prompts(image_prompt: dict, video_prompt: dict) -> str:
     )
 
 
+def _parse_number_token(token: str) -> Optional[int]:
+    value = (token or "").strip().lower()
+    if not value:
+        return None
+    if value.isdigit():
+        return int(value)
+    return _NUMBER_WORDS.get(value)
+
+
+def _extract_declared_subject_limit(prompt_text: str) -> Optional[int]:
+    limits = [
+        value
+        for match in _DECLARED_SUBJECT_RE.finditer(prompt_text or "")
+        for value in [_parse_number_token(match.group(1))]
+        if value is not None
+    ]
+    return min(limits) if limits else None
+
+
+def _implied_subject_floor_from_text(text: str) -> int:
+    lowered = (text or "").lower()
+    if any(token in lowered for token in _EMPTY_TRANSITION_TOKENS):
+        return 0
+
+    counts: list[int] = []
+    for regex in (_GROUP_COUNT_RE, _PEOPLE_COUNT_RE):
+        for match in regex.finditer(lowered):
+            value = _parse_number_token(match.group(1))
+            if value is not None:
+                counts.append(value)
+
+    if counts:
+        return max(counts)
+    if any(token in lowered for token in _COLLECTIVE_VISIBLE_TOKENS):
+        return 2
+    return 0
+
+
+def _extract_entering_cast_count(continuity_deltas: list[str]) -> int:
+    count = 0
+    for delta in continuity_deltas or []:
+        lower = (delta or "").lower()
+        if not lower.startswith("cast entering frame:"):
+            continue
+        members = [part.strip() for part in delta.split(":", 1)[1].split(",") if part.strip()]
+        count = max(count, len(members))
+    return count
+
+
+def _subject_visibility_evidence(shot_packet: ShotPacket) -> str:
+    """Return only current-frame text that can legitimately imply visible subjects.
+
+    We intentionally exclude previous/next beat prose and generic continuity
+    deltas because they often mention off-screen or adjacent-frame cast, which
+    produces false positives on otherwise-correct single-subject prompts.
+    """
+    parts: list[str] = []
+    for part in (
+        shot_packet.current_beat,
+        shot_packet.video_optimized_prompt_block,
+        shot_packet.shot_intent.beat_turn,
+    ):
+        if part:
+            parts.append(part)
+
+    entering_count = _extract_entering_cast_count(shot_packet.continuity_deltas)
+    if entering_count > 0:
+        parts.append(f"Cast entering frame count: {entering_count}")
+    return "\n".join(parts)
+
+
 # ─── PromptPairValidator ──────────────────────────────────────────────────────
 
 class PromptPairValidator:
@@ -22890,7 +25385,7 @@ class PromptPairValidator:
 
     Both dicts are produced by prompt_assembler for the same FrameNode and must
     be internally consistent. This validator detects drift introduced by separate
-    assembly paths, 4096-char compression, or assembly order bugs.
+    assembly paths or assembly order bugs.
 
     Usage::
 
@@ -22921,6 +25416,7 @@ class PromptPairValidator:
         issues.extend(self._check_dialogue_fit_consistency(image_prompt, video_prompt, shot_packet))
         issues.extend(self._check_reference_list_parity(image_prompt, video_prompt, shot_packet))
         issues.extend(self._check_restaging_guard(image_prompt, video_prompt))
+        issues.extend(self._check_subject_count_consistency(image_prompt, video_prompt, shot_packet))
         return issues
 
     # ── a. CINEMATIC_TAG_MATCH ─────────────────────────────────────────────
@@ -23080,7 +25576,7 @@ class PromptPairValidator:
             ))
 
         # Focal cast (first subject_count entries from cast_invariants) must
-        # survive 4096-char video compression and appear in the video prompt text.
+        # survive final video prompt assembly and appear in the video prompt text.
         vid_text = video_prompt.get("prompt", "")
         cast_labels = _labels_from_invariants(shot_packet.cast_invariants)
         focal_count = min(shot_packet.subject_count, len(cast_labels))
@@ -23092,12 +25588,11 @@ class PromptPairValidator:
                     severity=IssueSeverity.WARNING,
                     description=(
                         f"Focal cast '{label}' is missing from video prompt text "
-                        "(likely dropped by 4096-char compression)"
+                        "(likely omitted during video prompt assembly)"
                     ),
                     suggested_fix=(
-                        f"Preserve the cast invariant for '{label}' during video "
-                        "prompt compression — focal subjects must survive. "
-                        "Reduce BACKGROUND or LOCATION sections before CAST INVARIANTS."
+                        f"Preserve the cast invariant for '{label}' in the final video "
+                        "prompt. Focal subjects must survive prompt assembly."
                     ),
                 ))
 
@@ -23180,7 +25675,7 @@ class PromptPairValidator:
                     ),
                 ))
 
-            # fit_status must be "fits" or "overflows"
+            # fit_status must reflect spoken dialogue, not silence
             if fit_status == "no_dialogue":
                 issues.append(PromptPairIssue(
                     category=PromptPairCategory.DIALOGUE_FIT_CONSISTENCY,
@@ -23190,7 +25685,7 @@ class PromptPairValidator:
                         f"dialogue_present=True but video dialogue_fit_status={fit_status!r}"
                     ),
                     suggested_fix=(
-                        "dialogue_fit_status must be 'fits' or 'overflows' when dialogue "
+                        "dialogue_fit_status must reflect spoken dialogue when dialogue "
                         "is present. 'no_dialogue' is only valid for silent frames."
                     ),
                 ))
@@ -23223,26 +25718,6 @@ class PromptPairValidator:
                         "shot packet."
                     ),
                 ))
-
-            # Image prompt must not carry subtitle rendering instructions
-            img_text = image_prompt.get("prompt", "")
-            for marker in _SUBTITLE_MARKERS:
-                if img_text and marker.lower() in img_text.lower():
-                    issues.append(PromptPairIssue(
-                        category=PromptPairCategory.DIALOGUE_FIT_CONSISTENCY,
-                        frame_id=frame_id,
-                        severity=IssueSeverity.WARNING,
-                        description=(
-                            f"Image prompt contains subtitle/caption marker {marker!r} "
-                            "— image generation does not render subtitles"
-                        ),
-                        suggested_fix=(
-                            "Remove subtitle/caption language from the image prompt. "
-                            "Image dialogue sections carry only sync cues and mood context, "
-                            "not rendering instructions."
-                        ),
-                    ))
-
         else:
             # Silent frame: fit_status must be "no_dialogue"
             if fit_status and fit_status != "no_dialogue":
@@ -23430,6 +25905,60 @@ class PromptPairValidator:
                 ),
             ))
 
+        return issues
+
+    def _check_subject_count_consistency(
+        self,
+        image_prompt: dict,
+        video_prompt: dict,
+        shot_packet: ShotPacket,
+    ) -> list[PromptPairIssue]:
+        """f. Visible-subject declarations must agree with described visible activity.
+
+        Catches cases where the prompt text describes a visible group or character
+        action but the shot packet / prompt sections still declare zero subjects.
+        """
+        issues: list[PromptPairIssue] = []
+        frame_id = shot_packet.frame_id
+        image_text = image_prompt.get("prompt", "")
+        video_text = video_prompt.get("prompt", "")
+        joined_prompt_text = _subject_visibility_evidence(shot_packet)
+
+        implied_floor = max(
+            len(shot_packet.visible_cast_ids or []),
+            _implied_subject_floor_from_text(joined_prompt_text),
+            _extract_entering_cast_count(shot_packet.continuity_deltas),
+        )
+        if implied_floor <= 0:
+            return issues
+
+        declared_limits = [
+            limit
+            for limit in (
+                shot_packet.subject_count,
+                _extract_declared_subject_limit(image_text),
+                _extract_declared_subject_limit(video_text),
+            )
+            if limit is not None
+        ]
+        declared_limit = min(declared_limits) if declared_limits else None
+        if declared_limit is None or declared_limit >= implied_floor:
+            return issues
+
+        issues.append(PromptPairIssue(
+            category=PromptPairCategory.SUBJECT_COUNT_CONSISTENCY,
+            frame_id=frame_id,
+            severity=IssueSeverity.ERROR,
+            description=(
+                f"Visible-subject contradiction: prompt text implies at least {implied_floor} visible "
+                f"subject(s) but declared limit is {declared_limit}"
+            ),
+            suggested_fix=(
+                "Rebuild the shot packet / prompt sections so SUBJECT COUNT and NEGATIVE CONSTRAINTS "
+                "match the described visible cast activity. Empty-room and pure-transition beats must "
+                "say so explicitly."
+            ),
+        ))
         return issues
 
 
@@ -23621,16 +26150,22 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import math
 from dataclasses import dataclass, field
+from itertools import chain
 from pathlib import Path
 from typing import Optional
 
+from PIL import Image, ImageOps
+
 from .api import (
+    build_shot_packet,
     get_frame_cast_state_models,
     get_frame_cell_image,
     get_frame_prop_state_models,
 )
-from .schema import CastBible, CastFrameState, CharacterSheet, NarrativeGraph, PoseState
+from .feature_flags import ENABLE_STORYBOARD_GUIDANCE
+from .schema import CastBible, CastFrameRole, CastFrameState, CharacterSheet, NarrativeGraph, PoseState
 from .store import GraphStore
 from telemetry import current_run_id
 
@@ -23638,6 +26173,9 @@ logger = logging.getLogger("graph.reference_collector")
 
 _CAST_MAX = 5
 _PROP_MAX = 3
+_CAST_STITCH_MIN = 3
+_CAST_STITCH_CELL = (512, 768)
+_CAST_STITCH_GAP = 24
 
 
 def _normalize_pose_token(value: str) -> str:
@@ -23655,6 +26193,30 @@ def _sequence_number(frame_id: str) -> Optional[int]:
         return int(str(frame_id).split("_")[-1])
     except (TypeError, ValueError):
         return None
+
+
+def _screen_position_rank(value: str) -> int:
+    token = (value or "").strip().lower()
+    order = {
+        "frame_left_edge": 0,
+        "frame_left": 1,
+        "frame_left_third": 2,
+        "frame_center_left": 3,
+        "frame_center": 4,
+        "frame_center_right": 5,
+        "frame_right_third": 6,
+        "frame_right": 7,
+        "frame_right_edge": 8,
+    }
+    if token in order:
+        return order[token]
+    if "left" in token:
+        return 1
+    if "right" in token:
+        return 7
+    if "center" in token:
+        return 4
+    return 4
 
 
 def pose_state_from_cast_state(
@@ -23769,9 +26331,23 @@ def cast_bible_snapshot_for_frame(
         pose = sheet.pose_for_frame(frame_id)
         if pose is None:
             continue
+        target_sequence = _sequence_number(frame_id) or -1
+        recent_candidates = [
+            state
+            for state in chain(sheet.pose_history, sheet.frame_poses.values())
+            if (
+                state.frame_id
+                and (seq := _sequence_number(state.frame_id)) is not None
+                and seq <= target_sequence
+                and state.frame_id != frame_id
+            )
+        ]
+        recent_candidates.sort(
+            key=lambda state: _sequence_number(state.frame_id) or -1
+        )
         recent_history = [
             state.model_dump()
-            for state in sheet.pose_history[-3:]
+            for state in recent_candidates[-3:]
         ]
         characters.append(
             {
@@ -23872,7 +26448,10 @@ class ReferenceImageCollector:
             return FrameReferences()
 
         return FrameReferences(
-            storyboard_cell=self._resolve_storyboard_cell(frame_id),
+            storyboard_cell=(
+                self._resolve_storyboard_cell(frame_id)
+                if ENABLE_STORYBOARD_GUIDANCE else None
+            ),
             previous_frame=self._resolve_previous_frame(frame_id),
             cast_composites=self._resolve_cast_composites(frame_id),
             location_primary=self._resolve_location(frame_id),
@@ -23899,9 +26478,13 @@ class ReferenceImageCollector:
         if refs.previous_frame and refs.previous_frame.exists():
             flat.append(refs.previous_frame)
 
-        for p in refs.cast_composites:
-            if p.exists():
-                flat.append(p)
+        stitched_cast = self._resolve_stitched_cast_reference(frame_id)
+        if stitched_cast is not None and stitched_cast.exists():
+            flat.append(stitched_cast)
+        else:
+            for p in refs.cast_composites:
+                if p.exists():
+                    flat.append(p)
 
         if refs.location_primary and refs.location_primary.exists():
             flat.append(refs.location_primary)
@@ -24144,12 +26727,17 @@ class ReferenceImageCollector:
         cell_rel = get_frame_cell_image(self.graph, frame_id)
         if cell_rel:
             p = self._to_absolute(cell_rel)
-            if not p.exists():
-                logger.warning(
-                    "Storyboard cell for '%s' expected at %s — not found on disk",
-                    frame_id, p,
-                )
-            return p
+            if p.exists():
+                return p
+
+            legacy_name = p.with_name(f"{frame_id}_cell.png")
+            if legacy_name.exists():
+                return legacy_name
+
+            logger.warning(
+                "Storyboard cell for '%s' expected at %s — not found on disk",
+                frame_id, p,
+            )
 
         # Fallback: scan grids and try known conventions
         for grid in self.graph.storyboard_grids.values():
@@ -24222,8 +26810,8 @@ class ReferenceImageCollector:
 
         return None
 
-    def _resolve_cast_composites(self, frame_id: str) -> list[Path]:
-        """Resolve cast reference images for visible cast in this frame.
+    def _resolve_cast_reference_entries(self, frame_id: str) -> list[tuple[CastFrameState, Path]]:
+        """Resolve visible cast states paired with their reference images.
 
         Respects active_state_tag — a non-base state tag uses the variant image
         (e.g. wounded, formal) if available. Falls back to base composite, then
@@ -24234,8 +26822,23 @@ class ReferenceImageCollector:
         """
         cast_states = get_frame_cast_state_models(self.graph, frame_id)
         visible = [cs for cs in cast_states if cs.frame_role != "referenced"]
+        if not visible:
+            try:
+                packet = build_shot_packet(self.graph, frame_id)
+            except Exception:
+                packet = None
+            inferred_cast_ids = list(getattr(packet, "visible_cast_ids", []) or [])
+            visible = [
+                CastFrameState(
+                    cast_id=cast_id,
+                    frame_id=frame_id,
+                    frame_role=CastFrameRole.SUBJECT,
+                    active_state_tag="base",
+                )
+                for cast_id in inferred_cast_ids[:_CAST_MAX]
+            ]
 
-        paths: list[Path] = []
+        entries: list[tuple[CastFrameState, Path]] = []
         for cs in visible[:_CAST_MAX]:
             cast = self.graph.cast.get(cs.cast_id)
             if not cast:
@@ -24250,20 +26853,79 @@ class ReferenceImageCollector:
             if cs.active_state_tag and cs.active_state_tag != "base":
                 variant = cast.state_variants.get(cs.active_state_tag)
                 if variant and variant.image_path:
-                    paths.append(self._to_absolute(variant.image_path))
+                    entries.append((cs, self._to_absolute(variant.image_path)))
                     continue
 
             # Base composite from graph
             if cast.composite_path:
-                paths.append(self._to_absolute(cast.composite_path))
+                entries.append((cs, self._to_absolute(cast.composite_path)))
                 continue
 
             # Convention fallback
-            paths.append(
-                self.project_dir / "cast" / "composites" / f"{cs.cast_id}_ref.png"
-            )
+            entries.append((
+                cs,
+                self.project_dir / "cast" / "composites" / f"{cs.cast_id}_ref.png",
+            ))
 
-        return paths
+        return entries
+
+    def _resolve_cast_composites(self, frame_id: str) -> list[Path]:
+        """Resolve cast reference images for visible cast in this frame."""
+        return [path for _cast_state, path in self._resolve_cast_reference_entries(frame_id)]
+
+    def _resolve_stitched_cast_reference(self, frame_id: str) -> Optional[Path]:
+        """Build a temporary stitched cast sheet for 3+ visible cast references.
+
+        The stitched image collapses multiple cast refs into one landscape sheet,
+        ordered left-to-right using each cast state's screen position so group
+        frames arrive at the image model with clearer relative placement.
+        """
+        entries = [
+            (cast_state, path)
+            for cast_state, path in self._resolve_cast_reference_entries(frame_id)
+            if path.exists()
+        ]
+        if len(entries) < _CAST_STITCH_MIN:
+            return None
+
+        ordered = sorted(
+            entries,
+            key=lambda item: (
+                _screen_position_rank(item[0].screen_position or ""),
+                item[0].cast_id,
+            ),
+        )
+        digest = hashlib.sha1(
+            "|".join(
+                f"{cast_state.cast_id}:{cast_state.screen_position}:{cast_state.spatial_position}:{path}"
+                for cast_state, path in ordered
+            ).encode("utf-8")
+        ).hexdigest()[:10]
+        out_dir = self.project_dir / "cast" / "composites" / "group_refs"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = out_dir / f"{frame_id}_group_{digest}.png"
+        if out_path.exists():
+            return out_path
+
+        cols = min(3, len(ordered))
+        rows = math.ceil(len(ordered) / cols)
+        cell_w, cell_h = _CAST_STITCH_CELL
+        gap = _CAST_STITCH_GAP
+        canvas_w = cols * cell_w + (cols + 1) * gap
+        canvas_h = rows * cell_h + (rows + 1) * gap
+        canvas = Image.new("RGBA", (canvas_w, canvas_h), (245, 242, 236, 255))
+
+        for index, (_cast_state, path) in enumerate(ordered):
+            row = index // cols
+            col = index % cols
+            with Image.open(path) as src:
+                tile = ImageOps.contain(src.convert("RGBA"), (cell_w, cell_h), Image.Resampling.LANCZOS)
+            x = gap + col * (cell_w + gap) + max((cell_w - tile.width) // 2, 0)
+            y = gap + row * (cell_h + gap) + max((cell_h - tile.height) // 2, 0)
+            canvas.alpha_composite(tile, (x, y))
+
+        canvas.save(out_path)
+        return out_path
 
     def _resolve_location(self, frame_id: str) -> Optional[Path]:
         """Resolve the primary location reference image for this frame."""
@@ -24280,12 +26942,38 @@ class ReferenceImageCollector:
             )
             return None
 
-        # Graph-tracked path
+        background = getattr(frame, "background", None)
+        camera_facing = ""
+        if background is not None:
+            camera_facing = (
+                getattr(background, "camera_facing", None)
+                or (background.get("camera_facing") if isinstance(background, dict) else "")
+                or ""
+            )
+        primary_path: Optional[Path] = None
         if loc.primary_image_path:
-            return self._to_absolute(loc.primary_image_path)
+            primary_path = self._to_absolute(loc.primary_image_path)
+        else:
+            primary_path = self.project_dir / "locations" / "primary" / f"{frame.location_id}.png"
 
-        # Convention fallback: locations/primary/{location_id}.png
-        return self.project_dir / "locations" / "primary" / f"{frame.location_id}.png"
+        if camera_facing:
+            facing = camera_facing.strip().lower().replace("camera_facing_", "")
+            variant = self.project_dir / "locations" / "variants" / f"{frame.location_id}_{facing}.png"
+            if not variant.exists() and primary_path is not None and primary_path.exists():
+                try:
+                    from handlers.location_grid import extract_directional_location_variants
+
+                    extract_directional_location_variants(primary_path, frame.location_id)
+                except Exception:
+                    logger.exception(
+                        "Failed to extract directional location variants for %s from %s",
+                        frame.location_id,
+                        primary_path,
+                    )
+            if variant.exists():
+                return variant
+
+        return primary_path
 
     def _resolve_props(self, frame_id: str) -> list[Path]:
         """Resolve prop reference images for props active in this frame.
@@ -24630,7 +27318,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Optional
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -24807,6 +27495,27 @@ def _default_pose_state() -> "PoseState":
     return PoseState(pose="standing_neutral")
 
 
+def _coerce_optional_text(value: Any) -> Any:
+    """Collapse list-like textual values into a single optional string."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        cleaned = value.strip()
+        return cleaned or None
+    if isinstance(value, (list, tuple, set)):
+        parts: list[str] = []
+        for item in value:
+            normalized = _coerce_optional_text(item)
+            if isinstance(normalized, str) and normalized:
+                parts.append(normalized)
+        if not parts:
+            return None
+        return ", ".join(dict.fromkeys(parts))
+    if isinstance(value, (int, float, bool)):
+        return str(value)
+    return value
+
+
 class PoseState(BaseModel):
     """Canonical pose lock for a character at a specific frame boundary."""
 
@@ -24840,8 +27549,36 @@ class CharacterSheet(BaseModel):
     frame_poses: dict[str, PoseState] = Field(default_factory=dict)
     appearance_notes: dict[str, str] = Field(default_factory=dict)
 
+    @staticmethod
+    def _frame_sequence(frame_id: str | None) -> int:
+        try:
+            return int(str(frame_id or "").split("_")[-1])
+        except (TypeError, ValueError):
+            return -1
+
     def pose_for_frame(self, frame_id: str) -> Optional[PoseState]:
-        return self.frame_poses.get(frame_id) or self.current_pose
+        exact = self.frame_poses.get(frame_id)
+        if exact is not None:
+            return exact
+
+        target_seq = self._frame_sequence(frame_id)
+        if target_seq < 0:
+            return self.current_pose
+
+        candidates: list[PoseState] = []
+        for pose in self.frame_poses.values():
+            if self._frame_sequence(pose.frame_id) <= target_seq:
+                candidates.append(pose)
+        for pose in self.pose_history:
+            if self._frame_sequence(pose.frame_id) <= target_seq:
+                candidates.append(pose)
+        current_seq = self._frame_sequence(self.current_pose.frame_id)
+        if current_seq >= 0 and current_seq <= target_seq:
+            candidates.append(self.current_pose)
+
+        if not candidates:
+            return None
+        return max(candidates, key=lambda pose: self._frame_sequence(pose.frame_id))
 
 
 class CastBible(BaseModel):
@@ -24946,12 +27683,15 @@ class ProjectNode(BaseModel):
     project_id: str
     title: str = ""
     pipeline: str = "story_upload"  # story_upload | pitch_idea | music_video
-    stickiness_level: int = 3
-    stickiness_permission: str = ""
-    output_size: str = "short"
-    output_size_label: str = ""
-    frame_range: list[int] = Field(default_factory=lambda: [10, 20])
-    scene_range: list[int] = Field(default_factory=lambda: [1, 3])
+    creative_freedom: str = "balanced"
+    creative_freedom_permission: str = ""
+    creative_freedom_failure_modes: str = ""
+    dialogue_policy: str = ""
+    frame_budget: Optional[int] = None
+    output_size: str = "auto"
+    output_size_label: str = "Auto"
+    frame_range: list[int] = Field(default_factory=list)
+    scene_range: list[int] = Field(default_factory=list)
     media_style: str = "live_clear"
     media_style_prefix: str = ""
     aspect_ratio: str = "16:9"
@@ -25012,6 +27752,8 @@ class CastNode(BaseModel):
 
     cast_id: str
     name: str
+    display_name: str = ""
+    source_name: str = ""
     entity_type: EntityType = EntityType.CAST
 
     identity: CastIdentity = Field(default_factory=CastIdentity)
@@ -25039,6 +27781,16 @@ class CastNode(BaseModel):
     state_variants: dict[str, CastStateVariant] = Field(default_factory=dict)
 
     provenance: Provenance = Field(default_factory=Provenance)
+
+    @model_validator(mode="after")
+    def _sync_names(self) -> "CastNode":
+        if not self.display_name:
+            self.display_name = self.name or self.source_name
+        if not self.source_name:
+            self.source_name = self.name or self.display_name
+        if not self.name:
+            self.name = self.display_name or self.source_name
+        return self
 
 
 # ─── Cast State (per-frame ABSOLUTE SNAPSHOT) ────────────────────────────────
@@ -25333,6 +28085,11 @@ class FrameAtmosphere(BaseModel):
     weather: Optional[str] = None           # "rain", "snow", "fog", "clear"
     ambient_motion: Optional[str] = None    # "curtain_sway", "candle_flicker", "leaves_rustling"
     temperature_feel: Optional[str] = None  # "humid", "cold", "stifling"
+
+    @field_validator("particles", "weather", "ambient_motion", "temperature_feel", mode="before")
+    @classmethod
+    def _normalize_text_fields(cls, value: Any) -> Any:
+        return _coerce_optional_text(value)
 
 
 class FrameEnvironment(BaseModel):
@@ -25902,6 +28659,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from pydantic import BaseModel
+
 from .schema import CastBible, CharacterSheet, NarrativeGraph, PoseState, ProjectNode
 
 
@@ -25911,6 +28670,20 @@ def _now_iso() -> str:
 
 def _now_slug() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+
+
+def _raw_model_data(value):
+    """Recursively unwrap Pydantic models without invoking serializers."""
+    if isinstance(value, BaseModel):
+        return {
+            field_name: _raw_model_data(getattr(value, field_name))
+            for field_name in value.__class__.model_fields
+        }
+    if isinstance(value, dict):
+        return {key: _raw_model_data(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_raw_model_data(item) for item in value]
+    return value
 
 
 class GraphStore:
@@ -25964,7 +28737,7 @@ class GraphStore:
 
         # Re-validate before writing so direct in-memory mutations cannot bypass
         # the canonical graph contract.
-        g = NarrativeGraph.model_validate(g.model_dump())
+        g = NarrativeGraph.model_validate(_raw_model_data(g))
 
         self.ensure_dirs()
 
@@ -26450,12 +29223,14 @@ import asyncio
 import base64
 import logging
 import mimetypes
+import os
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any
 
 import httpx
+import xai_sdk
 from tenacity import (
     RetryError,
     retry,
@@ -26464,9 +29239,11 @@ from tenacity import (
     wait_exponential,
 )
 
+from llm.xai_client import XAI_BASE_URL
 from telemetry import build_request_headers
 
 from .models import MODEL_ROUTES, ModelRoute
+from .reference_pack import build_xai_rescue_sheet
 
 logger = logging.getLogger("handlers")
 
@@ -26475,6 +29252,8 @@ logger = logging.getLogger("handlers")
 REPLICATE_API_BASE = "https://api.replicate.com/v1"
 POLL_INTERVAL_S = 5
 POLL_MAX_ATTEMPTS = 120  # 10 minutes max
+XAI_IMAGE_RESCUE_MODEL = "grok-imagine-image-pro"
+XAI_IMAGE_MAX_INPUTS = 1
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -26483,9 +29262,9 @@ POLL_MAX_ATTEMPTS = 120  # 10 minutes max
 
 
 def _is_retryable_http_error(exc: BaseException) -> bool:
-    """Retry on 429 (rate-limit), 500 (server error), 503 (unavailable)."""
+    """Retry on 429/500/502/503 upstream HTTP failures."""
     if isinstance(exc, httpx.HTTPStatusError):
-        return exc.response.status_code in (429, 500, 503)
+        return exc.response.status_code in (429, 500, 502, 503)
     return False
 
 
@@ -26530,7 +29309,19 @@ def classify_replicate_error(error_msg: str, logs: str = "") -> dict[str, Any]:
         }
     if any(
         kw in combined
-        for kw in ("capacity", "unavailable", "503", "e003", "overloaded")
+        for kw in (
+            "capacity",
+            "unavailable",
+            "overloaded",
+            "503",
+            "502",
+            "bad gateway",
+            "please retry",
+            "interrupted",
+            "retries exhausted",
+            "code: pa",
+            "e003",
+        )
     ):
         return {
             "failure_type": "UPSTREAM_TRANSIENT",
@@ -26643,9 +29434,10 @@ class BaseHandler(ABC):
         http_client: httpx.AsyncClient | None = None,
     ):
         self.replicate_token = replicate_token
-        self.xai_key = xai_key
+        self.xai_key = xai_key or os.getenv("XAI_API_KEY", "")
         self._client = http_client
         self._owns_client = http_client is None
+        self._xai_sdk_client: xai_sdk.AsyncClient | None = None
 
     # ── Lifecycle ──────────────────────────────────────────────
 
@@ -26659,11 +29451,21 @@ class BaseHandler(ABC):
             self._owns_client = True
         return self._client
 
+    @property
+    def xai_sdk_client(self) -> xai_sdk.AsyncClient:
+        """Lazy async xAI SDK client for image rescue."""
+        if self._xai_sdk_client is None:
+            self._xai_sdk_client = xai_sdk.AsyncClient(api_key=self.xai_key)
+        return self._xai_sdk_client
+
     async def close(self) -> None:
         """Close the HTTP client if we own it."""
         if self._owns_client and self._client is not None:
             await self._client.aclose()
             self._client = None
+        if self._xai_sdk_client is not None:
+            await self._xai_sdk_client.close()
+            self._xai_sdk_client = None
 
     async def __aenter__(self) -> "BaseHandler":
         return self
@@ -26688,6 +29490,18 @@ class BaseHandler(ABC):
             "Authorization": f"Bearer {self.replicate_token}",
             "Content-Type": "application/json",
             "Prefer": "wait",  # Synchronous mode
+        }
+        if extra_headers:
+            headers.update(extra_headers)
+        return headers
+
+    def _xai_headers(
+        self,
+        extra_headers: dict[str, str] | None = None,
+    ) -> dict[str, str]:
+        headers = {
+            "Authorization": f"Bearer {self.xai_key}",
+            "Content-Type": "application/json",
         }
         if extra_headers:
             headers.update(extra_headers)
@@ -26858,7 +29672,7 @@ class BaseHandler(ABC):
                 continue
 
             except httpx.HTTPStatusError as exc:
-                if exc.response.status_code in (429, 503):
+                if exc.response.status_code in (429, 502, 503):
                     logger.warning(
                         "Model %s HTTP %d after retries, trying next",
                         model,
@@ -26910,6 +29724,133 @@ class BaseHandler(ABC):
                 return prediction, model
         except Exception:
             logger.warning("4K capacity rescue also failed for nano-banana-pro")
+
+        return None
+
+    @staticmethod
+    def _xai_resolution_for_resolution(resolution: str | None) -> str:
+        resolution = (resolution or "").upper()
+        return "2k" if resolution in {"2K", "4K"} else "1k"
+
+    @staticmethod
+    def _xai_image_files(reference_paths: list[Path]) -> list[Path]:
+        """Prepare a single compact local ref for xAI image-edit requests."""
+        return reference_paths[:XAI_IMAGE_MAX_INPUTS]
+
+    async def _write_xai_image_response(self, response: Any, output_path: Path) -> bool:
+        """Persist the first xAI image response item to *output_path*."""
+        if isinstance(response, dict):
+            data = response.get("data") or []
+        else:
+            data = getattr(response, "data", None) or []
+        if not data:
+            return False
+        item = data[0]
+        if isinstance(item, dict):
+            b64_json = item.get("b64_json")
+            url = item.get("url")
+        else:
+            b64_json = getattr(item, "b64_json", None)
+            url = getattr(item, "url", None)
+        if b64_json:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_bytes(base64.b64decode(b64_json))
+            return True
+        if isinstance(url, str) and url:
+            await self.download_output(url, output_path)
+            return True
+        return False
+
+    async def _xai_image_request(
+        self,
+        *,
+        endpoint: str,
+        payload: dict[str, Any],
+        extra_headers: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        if not self.xai_key:
+            raise ValueError("XAI_API_KEY environment variable is required for xAI image rescue")
+        resp = await self.client.post(
+            f"{XAI_BASE_URL}{endpoint}",
+            json=payload,
+            headers=self._xai_headers(extra_headers),
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return data if isinstance(data, dict) else {}
+
+    async def _try_xai_image_rescue(
+        self,
+        pred_input: dict,
+        *,
+        reference_paths: list[Path],
+        output_path: Path,
+        error_detail: dict[str, Any],
+        sensitive_context: bool = False,
+        extra_headers: dict[str, str] | None = None,
+    ) -> tuple[dict, str] | None:
+        """Last-resort direct xAI image rescue after Banana-family failures."""
+        if error_detail.get("failure_type") not in {
+            "UPSTREAM_TRANSIENT",
+            "SAFETY_FILTER",
+            "MODEL_ERROR",
+            "TIMEOUT",
+        } and not sensitive_context:
+            return None
+
+        try:
+            request: dict[str, Any] = {
+                "model": XAI_IMAGE_RESCUE_MODEL,
+                "prompt": pred_input.get("prompt", ""),
+                "response_format": "b64_json",
+                "output_format": pred_input.get("output_format", "png"),
+                "n": 1,
+                "aspect_ratio": pred_input.get("aspect_ratio", "16:9"),
+                "resolution": self._xai_resolution_for_resolution(
+                    pred_input.get("resolution")
+                ),
+            }
+
+            existing_refs = [path for path in reference_paths if path.exists()]
+            if existing_refs:
+                rescue_sheet = build_xai_rescue_sheet(
+                    pack_dir=output_path.parent / f"{output_path.stem}_xai_rescue_pack",
+                    reference_images=existing_refs,
+                )
+                if rescue_sheet is None or not rescue_sheet.exists():
+                    return None
+                image_uri = (await self.upload_many([rescue_sheet]))[0]
+                aspect_ratio = pred_input.get("aspect_ratio") or None
+                resolution = self._xai_resolution_for_resolution(pred_input.get("resolution"))
+                response = await self.xai_sdk_client.image.sample(
+                    prompt=pred_input.get("prompt", ""),
+                    model=XAI_IMAGE_RESCUE_MODEL,
+                    image_url=image_uri,
+                    image_format="base64",
+                    aspect_ratio=aspect_ratio,
+                    resolution=resolution,
+                )
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                output_path.write_bytes(await response.image)
+                return {
+                    "status": "succeeded",
+                    "local_output_path": str(output_path),
+                }, XAI_IMAGE_RESCUE_MODEL
+            else:
+                response = await self._xai_image_request(
+                    endpoint="/images/generations",
+                    payload=request,
+                    extra_headers=extra_headers,
+                )
+
+            wrote_output = await self._write_xai_image_response(response, output_path)
+            if wrote_output:
+                return {
+                    "status": "succeeded",
+                    "local_output_path": str(output_path),
+                }, XAI_IMAGE_RESCUE_MODEL
+        except Exception:
+            logger.warning("Grok Imagine image rescue failed", exc_info=True)
 
         return None
 
@@ -27191,8 +30132,11 @@ Output: frames/composed/{frame_id}_gen.png
 from __future__ import annotations
 
 import logging
+import re
 import time
 from pathlib import Path
+
+from PIL import Image, ImageDraw, ImageFont
 
 from .base import BaseHandler, classify_replicate_error
 from .models import (
@@ -27200,8 +30144,94 @@ from .models import (
     FrameInput,
     FrameOutput,
 )
+from .reference_pack import build_reference_pack, prompt_image_retry_threshold
 
 logger = logging.getLogger("handlers.frame")
+
+
+LOCAL_FRAME_RENDER_SIZES = {
+    ("16:9", "4K"): (3840, 2160),
+    ("16:9", "2K"): (2048, 1152),
+}
+
+
+def _local_frame_mode(prompt: str) -> str | None:
+    lowered = prompt.lower()
+    if "output clean pure black only" in lowered:
+        return "pure_black"
+    if "white loading spinner centered on pure black" in lowered:
+        return "loading_wheel"
+    if "authored title-card insert" in lowered:
+        return "title_card"
+    return None
+
+
+def _frame_dimensions(aspect_ratio: str | None, resolution: str | None) -> tuple[int, int]:
+    return LOCAL_FRAME_RENDER_SIZES.get((aspect_ratio or "16:9", resolution or "4K"), (3840, 2160))
+
+
+def _load_title_font(size: int) -> ImageFont.ImageFont:
+    try:
+        return ImageFont.truetype("DejaVuSans-Bold.ttf", size=size)
+    except Exception:
+        return ImageFont.load_default()
+
+
+def _extract_title_text(prompt: str) -> str:
+    matches = [m.strip() for m in re.findall(r"[\"']([^\"']{3,160})[\"']", prompt)]
+    if matches:
+        return max(matches, key=len)
+    for line in prompt.splitlines():
+        cleaned = line.strip().strip("-").strip()
+        if not cleaned:
+            continue
+        if cleaned.upper() == cleaned and any(ch.isalpha() for ch in cleaned):
+            return cleaned
+    return "TITLE CARD"
+
+
+def _render_local_special_frame(prompt: str, output_path: Path, aspect_ratio: str, resolution: str) -> str | None:
+    mode = _local_frame_mode(prompt)
+    if mode is None:
+        return None
+
+    width, height = _frame_dimensions(aspect_ratio, resolution)
+    image = Image.new("RGB", (width, height), "black")
+    draw = ImageDraw.Draw(image)
+    cx, cy = width // 2, height // 2
+
+    if mode == "loading_wheel":
+        radius = min(width, height) // 10
+        ring_width = max(16, width // 120)
+        bbox = (cx - radius, cy - radius, cx + radius, cy + radius)
+        draw.arc(bbox, start=20, end=320, fill="white", width=ring_width)
+        image.save(output_path)
+        return "local/loading_wheel"
+
+    if mode == "title_card":
+        title = _extract_title_text(prompt)
+        font = _load_title_font(max(64, width // 18))
+        glow_font = _load_title_font(max(72, width // 17))
+        text_bbox = draw.multiline_textbbox((0, 0), title, font=font, spacing=12, align="center")
+        text_w = text_bbox[2] - text_bbox[0]
+        text_h = text_bbox[3] - text_bbox[1]
+        x = (width - text_w) / 2
+        y = (height - text_h) / 2
+        glow_color = (255, 110, 32)
+        for dx, dy in ((-6, 0), (6, 0), (0, -6), (0, 6)):
+            draw.multiline_text((x + dx, y + dy), title, font=glow_font, fill=glow_color, align="center", spacing=12)
+        draw.multiline_text((x, y), title, font=font, fill="white", align="center", spacing=12)
+        image.save(output_path)
+        return "local/title_card"
+
+    image.save(output_path)
+    return "local/pure_black"
+
+
+def _should_retry_with_prompt_image(prompt: str, detail: dict[str, object]) -> bool:
+    if len(prompt) < prompt_image_retry_threshold():
+        return False
+    return str(detail.get("failure_type", "")) in {"UPSTREAM_TRANSIENT", "MODEL_ERROR", "TIMEOUT"}
 
 
 class FrameHandler(BaseHandler):
@@ -27225,6 +30255,24 @@ class FrameHandler(BaseHandler):
         out_dir.mkdir(parents=True, exist_ok=True)
         output_path = out_dir / f"{inp.frame_id}_gen.{inp.output_format}"
 
+        local_model_used = _render_local_special_frame(
+            inp.prompt,
+            output_path,
+            spec.aspect_ratio or "16:9",
+            spec.resolution or "4K",
+        )
+        if local_model_used:
+            return FrameOutput(
+                success=True,
+                frame_id=inp.frame_id,
+                image_path=output_path,
+                model_used=local_model_used,
+                resolution=spec.resolution or "4K",
+                downshifted=False,
+                elapsed_s=time.monotonic() - t0,
+                refs_used=[str(p) for p in inp.reference_images if p.exists()],
+            )
+
         # Collect reference images: storyboard cell FIRST (primary composition
         # reference), then generic refs (cast, location, props, previous frame).
         ref_paths: list[Path] = []
@@ -27232,27 +30280,40 @@ class FrameHandler(BaseHandler):
             ref_paths.append(inp.storyboard_image)
         ref_paths.extend(p for p in inp.reference_images if p.exists())
 
+        packed_refs = build_reference_pack(
+            pack_dir=inp.output_dir / "frames" / "ref_packs" / inp.frame_id,
+            prompt_text=inp.prompt,
+            reference_images=[p for p in inp.reference_images if p.exists()],
+            storyboard_image=inp.storyboard_image if inp.storyboard_image and inp.storyboard_image.exists() else None,
+        )
+        upload_paths: list[Path] = []
+        if packed_refs.storyboard_image:
+            upload_paths.append(packed_refs.storyboard_image)
+        upload_paths.extend(packed_refs.reference_images)
+
         # Upload references as data URIs
         image_uris: list[str] = []
-        if ref_paths:
-            image_uris = await self.upload_many(ref_paths)
+        if upload_paths:
+            image_uris = await self.upload_many(upload_paths)
             logger.info(
                 "Uploaded %d reference images for frame %s (%s storyboard)",
                 len(image_uris),
                 inp.frame_id,
-                "with" if inp.storyboard_image else "without",
+                "with" if packed_refs.storyboard_image else "without",
             )
 
         # Build prediction input
-        pred_input: dict = {
+        full_prompt_input: dict = {
             "prompt": inp.prompt,
             "aspect_ratio": spec.aspect_ratio,  # "16:9"
             "resolution": spec.resolution,  # "4K"
             "output_format": inp.output_format,
         }
+        pred_input: dict = dict(full_prompt_input)
         if image_uris:
             pred_input["image_input"] = image_uris
         if inp.seed is not None:
+            full_prompt_input["seed"] = inp.seed
             pred_input["seed"] = inp.seed
         request_headers = self._build_request_headers(
             run_id=inp.run_id or "",
@@ -27284,6 +30345,39 @@ class FrameHandler(BaseHandler):
             logs = prediction.get("logs", "")
             detail = classify_replicate_error(error_msg, logs)
 
+            if _should_retry_with_prompt_image(inp.prompt, detail):
+                logger.info(
+                    "Retrying frame %s with prompt-sheet overflow image (%d chars -> split)",
+                    inp.frame_id,
+                    len(inp.prompt),
+                )
+                retry_pack = build_reference_pack(
+                    pack_dir=inp.output_dir / "frames" / "ref_packs" / f"{inp.frame_id}_prompt_image",
+                    prompt_text=inp.prompt,
+                    reference_images=[p for p in inp.reference_images if p.exists()],
+                    storyboard_image=inp.storyboard_image if inp.storyboard_image and inp.storyboard_image.exists() else None,
+                    include_prompt_image=True,
+                )
+                retry_upload_paths: list[Path] = []
+                if retry_pack.storyboard_image:
+                    retry_upload_paths.append(retry_pack.storyboard_image)
+                retry_upload_paths.extend(retry_pack.reference_images)
+                retry_image_uris = await self.upload_many(retry_upload_paths) if retry_upload_paths else []
+                retry_input = dict(full_prompt_input)
+                retry_input["prompt"] = retry_pack.prompt_text
+                if retry_image_uris:
+                    retry_input["image_input"] = retry_image_uris
+                prediction, model_used = await self._run_model_chain(
+                    self.handler_name,
+                    retry_input,
+                    extra_headers=request_headers,
+                )
+                pred_input = retry_input
+                upload_paths = retry_upload_paths
+                error_msg = prediction.get("error", "")
+                logs = prediction.get("logs", "")
+                detail = classify_replicate_error(error_msg, logs)
+
             if detail["failure_type"] == "UPSTREAM_TRANSIENT":
                 logger.info(
                     "Chain failed at 4K for %s — attempting capacity rescue (2K + fallback)",
@@ -27302,30 +30396,52 @@ class FrameHandler(BaseHandler):
                         model_used,
                     )
 
+            if prediction.get("status") != "succeeded":
+                xai_rescue = await self._try_xai_image_rescue(
+                    full_prompt_input,
+                    reference_paths=ref_paths,
+                    output_path=output_path,
+                    error_detail=detail,
+                    sensitive_context=inp.sensitive_context,
+                    extra_headers=request_headers,
+                )
+                if xai_rescue:
+                    prediction, model_used = xai_rescue
+                    downshifted = (spec.resolution or "").upper() == "4K"
+                    logger.info(
+                        "Grok Imagine rescue succeeded for %s via %s",
+                        inp.frame_id,
+                        model_used,
+                    )
+
         # ── Handle final failure ───────────────────────────────
         if prediction.get("status") != "succeeded":
             error_msg = prediction.get("error", "Generation failed")
+            logs = prediction.get("logs", "")
             return FrameOutput(
                 success=False,
                 frame_id=inp.frame_id,
                 model_used=model_used,
                 error=error_msg,
-                error_detail=classify_replicate_error(error_msg),
+                error_detail=classify_replicate_error(error_msg, logs),
                 elapsed_s=time.monotonic() - t0,
             )
 
         # Download output
-        output_url = self.extract_output_url(prediction)
-        if not output_url:
-            return FrameOutput(
-                success=False,
-                frame_id=inp.frame_id,
-                model_used=model_used,
-                error="No output URL in prediction response",
-                elapsed_s=time.monotonic() - t0,
-            )
-
-        await self.download_output(output_url, output_path)
+        local_output_path = prediction.get("local_output_path")
+        if local_output_path:
+            output_path = Path(local_output_path)
+        else:
+            output_url = self.extract_output_url(prediction)
+            if not output_url:
+                return FrameOutput(
+                    success=False,
+                    frame_id=inp.frame_id,
+                    model_used=model_used,
+                    error="No output URL in prediction response",
+                    elapsed_s=time.monotonic() - t0,
+                )
+            await self.download_output(output_url, output_path)
 
         actual_res = "2K" if downshifted else (spec.resolution or "4K")
         logger.info(
@@ -27337,7 +30453,7 @@ class FrameHandler(BaseHandler):
             " (downshifted)" if downshifted else "",
         )
 
-        refs_used = [str(p) for p in ref_paths]
+        refs_used = [str(p) for p in upload_paths]
 
         return FrameOutput(
             success=True,
@@ -27390,6 +30506,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from PIL import Image
+
 from .base import BaseHandler, adapt_input_for_model, classify_replicate_error
 from .models import (
     MODEL_ROUTES,
@@ -27399,6 +30517,51 @@ from .models import (
 )
 
 logger = logging.getLogger("handlers.location_grid")
+
+_DIRECTION_PANEL_ORDER: dict[str, tuple[int, int]] = {
+    "north": (0, 0),
+    "east": (1, 0),
+    "west": (0, 1),
+    "south": (1, 1),
+}
+
+
+def extract_directional_location_variants(grid_path: Path, location_id: str) -> dict[str, Path]:
+    """Extract north/east/west/south crops from a generated 2x2 location grid.
+
+    The location grid includes labels and a title banner near the panel edges.
+    We crop inward on all sides so the downstream frame pipeline gets clean
+    direction-specific environmental refs instead of the full labeled grid.
+    """
+    variants_dir = grid_path.parent.parent / "variants"
+    variants_dir.mkdir(parents=True, exist_ok=True)
+
+    out: dict[str, Path] = {}
+    with Image.open(grid_path) as grid:
+        width, height = grid.size
+        half_w = width // 2
+        half_h = height // 2
+        pad_x = max(24, half_w // 12)
+        pad_y = max(24, half_h // 10)
+        top_row_extra = max(pad_y, half_h // 8)
+
+        for direction, (col, row) in _DIRECTION_PANEL_ORDER.items():
+            left = col * half_w
+            top = row * half_h
+            right = left + half_w
+            bottom = top + half_h
+
+            inner_left = left + pad_x
+            inner_right = right - pad_x
+            inner_top = top + (top_row_extra if row == 0 else pad_y)
+            inner_bottom = bottom - pad_y
+
+            crop = grid.crop((inner_left, inner_top, inner_right, inner_bottom))
+            out_path = variants_dir / f"{location_id}_{direction}.png"
+            crop.save(out_path)
+            out[direction] = out_path
+
+    return out
 
 
 # ── Panel Descriptor ──────────────────────────────────────────────
@@ -27515,6 +30678,15 @@ def build_grid_prompt(
         "",
         *panel_lines,
         "",
+        (
+            "Directional label layout is fixed and must be followed exactly: "
+            "NORTH = top-left panel, label in the bottom-right inner corner; "
+            "EAST = top-right panel, label in the bottom-left inner corner; "
+            "WEST = bottom-left panel, label in the top-right inner corner; "
+            "SOUTH = bottom-right panel, label in the top-left inner corner. "
+            "Do not swap panel positions or move the labels."
+        ),
+        "",
     ]
     if media_style:
         parts.append(media_style)
@@ -27606,27 +30778,45 @@ class LocationGridHandler(BaseHandler):
 
         if prediction.get("status") != "succeeded":
             error_msg = prediction.get("error", "Generation failed")
-            return LocationGridOutput(
-                success=False,
-                location_id=inp.location_id,
-                model_used=model,
-                error=error_msg,
-                error_detail=classify_replicate_error(error_msg),
-                elapsed_s=time.monotonic() - t0,
+            logs = prediction.get("logs", "") or ""
+            detail = classify_replicate_error(error_msg, logs)
+            xai_rescue = await self._try_xai_image_rescue(
+                pred_input,
+                reference_paths=[],
+                output_path=output_path,
+                error_detail=detail,
+                sensitive_context=inp.sensitive_context,
+                extra_headers=request_headers,
             )
+            if xai_rescue:
+                prediction, model = xai_rescue
+            else:
+                return LocationGridOutput(
+                    success=False,
+                    location_id=inp.location_id,
+                    model_used=model,
+                    error=error_msg,
+                    error_detail=detail,
+                    elapsed_s=time.monotonic() - t0,
+                )
 
-        output_url = self.extract_output_url(prediction)
-        if not output_url:
-            return LocationGridOutput(
-                success=False,
-                location_id=inp.location_id,
-                model_used=model,
-                error="No output URL in prediction response",
-                elapsed_s=time.monotonic() - t0,
-            )
+        local_output_path = prediction.get("local_output_path")
+        if local_output_path:
+            output_path = Path(local_output_path)
+        else:
+            output_url = self.extract_output_url(prediction)
+            if not output_url:
+                return LocationGridOutput(
+                    success=False,
+                    location_id=inp.location_id,
+                    model_used=model,
+                    error="No output URL in prediction response",
+                    elapsed_s=time.monotonic() - t0,
+                )
 
-        # ── Download result ───────────────────────────────────
-        await self.download_output(output_url, output_path)
+            # ── Download result ───────────────────────────────────
+            await self.download_output(output_url, output_path)
+        extract_directional_location_variants(output_path, inp.location_id)
         logger.info(
             "Location grid generated for %s [%s] at %s %s",
             inp.location_id,
@@ -27764,6 +30954,7 @@ class HandlerInput(BaseModel):
     output_format: str = "png"
     run_id: Optional[str] = None
     phase: str = ""
+    sensitive_context: bool = False
 
 
 class HandlerOutput(BaseModel):
@@ -27948,6 +31139,294 @@ class VideoClipOutput(HandlerOutput):
     resolution: str = "720p"
 ```
 
+## `handlers/reference_pack.py`
+
+```python
+from __future__ import annotations
+
+import math
+import os
+import textwrap
+from dataclasses import dataclass
+from pathlib import Path
+
+from PIL import Image, ImageDraw, ImageFont, ImageOps
+
+CAST_CELL = 748
+LOCATION_MAX = 1024
+PREVIOUS_MAX = 1024
+PROP_CELL = 512
+MISC_MAX = 1024
+XAI_RESCUE_CELL = 512
+XAI_RESCUE_MAX_TILES = 6
+PROMPT_SHEET_SIZE = (2048, 2048)
+PROMPT_SHEET_FONT = 32
+PROMPT_SHEET_MARGIN = 72
+PROMPT_IMAGE_TRIGGER_CHARS = 3200
+SHEET_BG = (18, 18, 18)
+SHEET_FG = (245, 245, 245)
+SHEET_GAP = 20
+
+
+@dataclass
+class PackedReferenceSet:
+    storyboard_image: Path | None
+    reference_images: list[Path]
+    prompt_text: str
+    prompt_sheet_image: Path | None = None
+
+
+def _classify_ref(path: Path) -> str:
+    posix = path.as_posix().lower()
+    if "/cast/composites/" in posix:
+        return "cast"
+    if "/props/" in posix:
+        return "prop"
+    if "/locations/" in posix:
+        return "location"
+    if "/frames/composed/" in posix:
+        return "previous"
+    return "misc"
+
+
+def _load_font(size: int) -> ImageFont.ImageFont:
+    try:
+        return ImageFont.truetype("DejaVuSansMono.ttf", size=size)
+    except Exception:
+        return ImageFont.load_default()
+
+
+def _resize_to_box(src: Path, dst: Path, max_w: int, max_h: int) -> Path:
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    with Image.open(src) as image:
+        converted = image.convert("RGB")
+        fitted = ImageOps.contain(converted, (max_w, max_h))
+        fitted.save(dst, format="JPEG", quality=88, optimize=True)
+    return dst
+
+
+def _sheet_image(paths: list[Path], dst: Path, *, cell: int, columns: int) -> Path:
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    rows = max(1, math.ceil(len(paths) / columns))
+    width = columns * cell + (columns - 1) * SHEET_GAP
+    height = rows * cell + (rows - 1) * SHEET_GAP
+    sheet = Image.new("RGB", (width, height), SHEET_BG)
+
+    for idx, path in enumerate(paths):
+        with Image.open(path) as image:
+            fitted = ImageOps.contain(image.convert("RGB"), (cell, cell))
+        x = (idx % columns) * (cell + SHEET_GAP) + (cell - fitted.width) // 2
+        y = (idx // columns) * (cell + SHEET_GAP) + (cell - fitted.height) // 2
+        sheet.paste(fitted, (x, y))
+
+    sheet.save(dst, format="JPEG", quality=88, optimize=True)
+    return dst
+
+
+def _prompt_sheet(prompt_text: str, dst: Path) -> Path:
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    width, height = PROMPT_SHEET_SIZE
+    image = Image.new("RGB", (width, height), SHEET_BG)
+    draw = ImageDraw.Draw(image)
+    font = _load_font(PROMPT_SHEET_FONT)
+    usable_width = width - PROMPT_SHEET_MARGIN * 2
+    avg_char_width = max(8, int(font.size * 0.62)) if hasattr(font, "size") else 18
+    wrap_chars = max(40, usable_width // avg_char_width)
+    wrapped_lines: list[str] = []
+    for paragraph in prompt_text.splitlines():
+        paragraph = paragraph.rstrip()
+        if not paragraph:
+            wrapped_lines.append("")
+            continue
+        wrapped_lines.extend(textwrap.wrap(paragraph, width=wrap_chars) or [""])
+
+    y = PROMPT_SHEET_MARGIN
+    line_height = PROMPT_SHEET_FONT + 10
+    for line in wrapped_lines:
+        if y + line_height > height - PROMPT_SHEET_MARGIN:
+            break
+        draw.text((PROMPT_SHEET_MARGIN, y), line, fill=SHEET_FG, font=font)
+        y += line_height
+
+    image.save(dst, format="PNG")
+    return dst
+
+
+def _split_prompt_for_image(prompt_text: str) -> tuple[str, str]:
+    if not prompt_text:
+        return "", ""
+    midpoint = max(1, len(prompt_text) // 2)
+    split_at = prompt_text.rfind("\n", 0, midpoint)
+    if split_at < midpoint // 2:
+        split_at = prompt_text.rfind(" ", 0, midpoint)
+    if split_at < midpoint // 2:
+        split_at = midpoint
+    head = prompt_text[:split_at].rstrip()
+    tail = prompt_text[split_at:].lstrip()
+    if not head or not tail:
+        return prompt_text, ""
+    return head, tail
+
+
+def prompt_image_retry_threshold() -> int:
+    raw = os.getenv("SCREENWIRE_PROMPT_IMAGE_TRIGGER_CHARS", "").strip()
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return PROMPT_IMAGE_TRIGGER_CHARS
+
+
+def build_reference_pack(
+    *,
+    pack_dir: Path,
+    prompt_text: str,
+    reference_images: list[Path],
+    storyboard_image: Path | None = None,
+    include_prompt_image: bool = False,
+) -> PackedReferenceSet:
+    pack_dir.mkdir(parents=True, exist_ok=True)
+
+    always_include_prompt_image = os.getenv("SCREENWIRE_ENABLE_PROMPT_IMAGE", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    use_prompt_image = include_prompt_image or always_include_prompt_image
+    prompt_sheet_image: Path | None = None
+    truncated_prompt = prompt_text
+    overflow_prompt = ""
+    if use_prompt_image:
+        truncated_prompt, overflow_prompt = _split_prompt_for_image(prompt_text)
+
+    packed_storyboard: Path | None = None
+    if storyboard_image and storyboard_image.exists():
+        packed_storyboard = _resize_to_box(
+            storyboard_image,
+            pack_dir / "storyboard.jpg",
+            PREVIOUS_MAX,
+            PREVIOUS_MAX,
+        )
+
+    buckets: dict[str, list[Path]] = {
+        "previous": [],
+        "cast": [],
+        "location": [],
+        "prop": [],
+        "misc": [],
+    }
+    for path in reference_images:
+        if path.exists():
+            buckets[_classify_ref(path)].append(path)
+
+    packed_refs: list[Path] = []
+
+    if buckets["previous"]:
+        packed_refs.append(
+            _resize_to_box(
+                buckets["previous"][0],
+                pack_dir / "previous.jpg",
+                PREVIOUS_MAX,
+                PREVIOUS_MAX,
+            )
+        )
+
+    if buckets["cast"]:
+        cast_refs = buckets["cast"]
+        if len(cast_refs) == 1:
+            packed_refs.append(
+                _resize_to_box(cast_refs[0], pack_dir / "cast.jpg", CAST_CELL, CAST_CELL)
+            )
+        else:
+            packed_refs.append(
+                _sheet_image(
+                    cast_refs,
+                    pack_dir / "cast_sheet.jpg",
+                    cell=CAST_CELL,
+                    columns=min(5, len(cast_refs)),
+                )
+            )
+
+    if buckets["location"]:
+        packed_refs.append(
+            _resize_to_box(
+                buckets["location"][0],
+                pack_dir / "location.jpg",
+                LOCATION_MAX,
+                LOCATION_MAX,
+            )
+        )
+
+    if buckets["prop"]:
+        prop_refs = buckets["prop"]
+        if len(prop_refs) == 1:
+            packed_refs.append(
+                _resize_to_box(prop_refs[0], pack_dir / "prop.jpg", PROP_CELL, PROP_CELL)
+            )
+        else:
+            packed_refs.append(
+                _sheet_image(
+                    prop_refs,
+                    pack_dir / "prop_sheet.jpg",
+                    cell=PROP_CELL,
+                    columns=min(3, len(prop_refs)),
+                )
+            )
+
+    for idx, path in enumerate(buckets["misc"], start=1):
+        packed_refs.append(
+            _resize_to_box(path, pack_dir / f"misc_{idx}.jpg", MISC_MAX, MISC_MAX)
+        )
+
+    if overflow_prompt:
+        prompt_sheet_image = _prompt_sheet(overflow_prompt, pack_dir / "prompt_sheet.png")
+        packed_refs.append(prompt_sheet_image)
+
+    return PackedReferenceSet(
+        storyboard_image=packed_storyboard,
+        reference_images=packed_refs,
+        prompt_text=truncated_prompt,
+        prompt_sheet_image=prompt_sheet_image,
+    )
+
+
+def build_xai_rescue_sheet(
+    *,
+    pack_dir: Path,
+    reference_images: list[Path],
+    storyboard_image: Path | None = None,
+) -> Path | None:
+    """Collapse all rescue refs into one compact sheet for xAI image edit calls."""
+    packed = build_reference_pack(
+        pack_dir=pack_dir / "packed",
+        prompt_text="",
+        reference_images=reference_images,
+        storyboard_image=storyboard_image,
+        include_prompt_image=False,
+    )
+    tiles: list[Path] = []
+    if packed.storyboard_image and packed.storyboard_image.exists():
+        tiles.append(packed.storyboard_image)
+    tiles.extend(path for path in packed.reference_images if path.exists())
+    if not tiles:
+        return None
+
+    rescue_tiles = tiles[:XAI_RESCUE_MAX_TILES]
+    if len(rescue_tiles) == 1:
+        return _resize_to_box(
+            rescue_tiles[0],
+            pack_dir / "xai_rescue.jpg",
+            XAI_RESCUE_CELL * 2,
+            XAI_RESCUE_CELL * 2,
+        )
+    return _sheet_image(
+        rescue_tiles,
+        pack_dir / "xai_rescue.jpg",
+        cell=XAI_RESCUE_CELL,
+        columns=min(3, len(rescue_tiles)),
+    )
+```
+
 ## `handlers/storyboard.py`
 
 ```python
@@ -27982,8 +31461,15 @@ from .models import (
     StoryboardInput,
     StoryboardOutput,
 )
+from .reference_pack import build_reference_pack, prompt_image_retry_threshold
 
 logger = logging.getLogger("handlers.storyboard")
+
+
+def _should_retry_with_prompt_image(prompt: str, detail: dict[str, object]) -> bool:
+    if len(prompt) < prompt_image_retry_threshold():
+        return False
+    return str(detail.get("failure_type", "")) in {"UPSTREAM_TRANSIENT", "MODEL_ERROR", "TIMEOUT"}
 
 
 class StoryboardHandler(BaseHandler):
@@ -28003,35 +31489,42 @@ class StoryboardHandler(BaseHandler):
         spec = RESOLUTION_SPECS[self.handler_name]
 
         # Build output paths
-        out_dir = inp.output_dir / "storyboards"
-        out_dir.mkdir(parents=True, exist_ok=True)
-        composite_path = out_dir / f"{inp.grid_id}_composite.{inp.output_format}"
-        cells_dir = out_dir / "cells" / inp.grid_id
+        inp.output_dir.mkdir(parents=True, exist_ok=True)
+        composite_path = inp.output_dir / f"composite.{inp.output_format}"
+        cells_dir = inp.output_dir / "frames"
         cells_dir.mkdir(parents=True, exist_ok=True)
 
         # Upload reference images (cast composites, prop images, location images)
         image_uris: list[str] = []
-        if inp.reference_images:
-            existing = [p for p in inp.reference_images if p.exists()]
-            if existing:
-                image_uris = await self.upload_many(existing)
-                logger.info(
-                    "Uploaded %d/%d reference images for storyboard %s",
-                    len(image_uris),
-                    len(inp.reference_images),
-                    inp.grid_id,
-                )
+        existing_refs: list[Path] = []
+        packed_refs = build_reference_pack(
+            pack_dir=inp.output_dir / "_packed_refs",
+            prompt_text=inp.prompt,
+            reference_images=[p for p in inp.reference_images if p.exists()],
+            storyboard_image=None,
+        )
+        existing_refs = list(packed_refs.reference_images)
+        if existing_refs:
+            image_uris = await self.upload_many(existing_refs)
+            logger.info(
+                "Uploaded %d/%d reference images for storyboard %s",
+                len(image_uris),
+                len(inp.reference_images),
+                inp.grid_id,
+            )
 
         # Build prediction input
-        pred_input: dict = {
+        full_prompt_input: dict = {
             "prompt": inp.prompt,
             "aspect_ratio": spec.aspect_ratio,  # "1:1"
             "resolution": spec.resolution,  # "2K"
             "output_format": inp.output_format,
         }
+        pred_input: dict = dict(full_prompt_input)
         if image_uris:
             pred_input["image_input"] = image_uris
         if inp.seed is not None:
+            full_prompt_input["seed"] = inp.seed
             pred_input["seed"] = inp.seed
         request_headers = self._build_request_headers(
             run_id=inp.run_id or "",
@@ -28056,27 +31549,74 @@ class StoryboardHandler(BaseHandler):
 
         if prediction.get("status") != "succeeded":
             error_msg = prediction.get("error", "Generation failed")
-            return StoryboardOutput(
-                success=False,
-                grid_id=inp.grid_id,
-                model_used=model_used,
-                error=error_msg,
-                error_detail=classify_replicate_error(error_msg),
-                elapsed_s=time.monotonic() - t0,
+            logs = prediction.get("logs", "") or ""
+            detail = classify_replicate_error(error_msg, logs)
+
+            if _should_retry_with_prompt_image(inp.prompt, detail):
+                logger.info(
+                    "Retrying storyboard %s with prompt-sheet overflow image (%d chars -> split)",
+                    inp.grid_id,
+                    len(inp.prompt),
+                )
+                retry_pack = build_reference_pack(
+                    pack_dir=inp.output_dir / "_packed_refs_prompt_image",
+                    prompt_text=inp.prompt,
+                    reference_images=[p for p in inp.reference_images if p.exists()],
+                    storyboard_image=None,
+                    include_prompt_image=True,
+                )
+                existing_refs = list(retry_pack.reference_images)
+                retry_image_uris = await self.upload_many(existing_refs) if existing_refs else []
+                retry_input = dict(full_prompt_input)
+                retry_input["prompt"] = retry_pack.prompt_text
+                if retry_image_uris:
+                    retry_input["image_input"] = retry_image_uris
+                prediction, model_used = await self._run_model_chain(
+                    self.handler_name,
+                    retry_input,
+                    extra_headers=request_headers,
+                )
+                pred_input = retry_input
+                error_msg = prediction.get("error", "Generation failed")
+                logs = prediction.get("logs", "") or ""
+                detail = classify_replicate_error(error_msg, logs)
+
+            xai_rescue = await self._try_xai_image_rescue(
+                full_prompt_input,
+                reference_paths=existing_refs,
+                output_path=composite_path,
+                error_detail=detail,
+                sensitive_context=inp.sensitive_context,
+                extra_headers=request_headers,
             )
+            if xai_rescue:
+                prediction, model_used = xai_rescue
+            else:
+                return StoryboardOutput(
+                    success=False,
+                    grid_id=inp.grid_id,
+                    model_used=model_used,
+                    error=error_msg,
+                    error_detail=detail,
+                    elapsed_s=time.monotonic() - t0,
+                )
 
         # Download composite
-        output_url = self.extract_output_url(prediction)
-        if not output_url:
-            return StoryboardOutput(
-                success=False,
-                grid_id=inp.grid_id,
-                model_used=model_used,
-                error="No output URL in prediction response",
-                elapsed_s=time.monotonic() - t0,
-            )
+        local_output_path = prediction.get("local_output_path")
+        if local_output_path:
+            composite_path = Path(local_output_path)
+        else:
+            output_url = self.extract_output_url(prediction)
+            if not output_url:
+                return StoryboardOutput(
+                    success=False,
+                    grid_id=inp.grid_id,
+                    model_used=model_used,
+                    error="No output URL in prediction response",
+                    elapsed_s=time.monotonic() - t0,
+                )
 
-        await self.download_output(output_url, composite_path)
+            await self.download_output(output_url, composite_path)
         logger.info(
             "Storyboard composite generated for %s via %s", inp.grid_id, model_used
         )
@@ -28145,7 +31685,7 @@ class StoryboardHandler(BaseHandler):
 
                 # Name by frame_id when available, else by grid position
                 if idx < len(frame_ids):
-                    name = f"{frame_ids[idx]}_cell.png"
+                    name = f"{frame_ids[idx]}.png"
                 else:
                     name = f"cell_{r}_{c}.png"
 
@@ -28193,6 +31733,8 @@ import logging
 import time
 from pathlib import Path
 
+from PIL import Image
+
 from .base import BaseHandler, classify_replicate_error
 from .models import (
     MODEL_ROUTES,
@@ -28205,6 +31747,9 @@ logger = logging.getLogger("handlers.video_clip")
 # Duration constraints (matching server.py's clamping)
 MIN_DURATION_S = 2
 MAX_DURATION_S = 15
+VIDEO_INPUT_MAX_WIDTH = 1280
+VIDEO_INPUT_MAX_HEIGHT = 720
+VIDEO_INPUT_QUALITY = 82
 
 
 class VideoClipHandler(BaseHandler):
@@ -28220,10 +31765,35 @@ class VideoClipHandler(BaseHandler):
 
     handler_name = "video_clip"
 
+    def _prepare_video_input_frame(self, frame_path: Path, output_dir: Path, frame_id: str) -> Path:
+        """
+        Downscale/compress the composed frame before sending it to xAI video.
+
+        Full-resolution PNG frame outputs can exceed the gRPC message size limit.
+        The video model only needs a 720p-class conditioning image, so normalize
+        to a lightweight JPEG first.
+        """
+        temp_dir = output_dir / "video" / "_inputs"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        prepared = temp_dir / f"{frame_id}_video_input.jpg"
+
+        with Image.open(frame_path) as im:
+            im = im.convert("RGB")
+            im.thumbnail((VIDEO_INPUT_MAX_WIDTH, VIDEO_INPUT_MAX_HEIGHT), Image.Resampling.LANCZOS)
+            im.save(
+                prepared,
+                format="JPEG",
+                quality=VIDEO_INPUT_QUALITY,
+                optimize=True,
+                progressive=True,
+            )
+
+        return prepared
+
     async def generate(self, inp: VideoClipInput) -> VideoClipOutput:
         t0 = time.monotonic()
         route = MODEL_ROUTES[self.handler_name]
-        model = route.primary  # xai/grok-imagine-video
+        model = route.primary  # Replicate fallback
 
         # Build output path
         out_dir = inp.output_dir / "video" / "clips"
@@ -28242,16 +31812,11 @@ class VideoClipHandler(BaseHandler):
                 elapsed_s=time.monotonic() - t0,
             )
 
-        # Upload the composed frame
-        try:
-            image_uri = await self.upload_to_replicate(inp.frame_image_path)
-        except Exception as exc:
-            return VideoClipOutput(
-                success=False,
-                frame_id=inp.frame_id,
-                error=f"Failed to upload frame image: {exc}",
-                elapsed_s=time.monotonic() - t0,
-            )
+        prepared_frame = self._prepare_video_input_frame(
+            inp.frame_image_path,
+            inp.output_dir,
+            inp.frame_id,
+        )
 
         # Build prompt: dialogue prefix + motion prompt
         # Dialogue comes first so Grok can attempt lip-sync
@@ -28262,7 +31827,16 @@ class VideoClipHandler(BaseHandler):
             prompt_parts.append(inp.motion_prompt.strip())
         full_prompt = "\n\n".join(prompt_parts) or inp.motion_prompt
 
-        # Build prediction input
+        try:
+            image_uri = await self.upload_to_replicate(prepared_frame)
+        except Exception as exc:
+            return VideoClipOutput(
+                success=False,
+                frame_id=inp.frame_id,
+                error=f"Failed to upload frame image: {exc}",
+                elapsed_s=time.monotonic() - t0,
+            )
+
         pred_input: dict = {
             "prompt": full_prompt,
             "image": image_uri,
@@ -28307,7 +31881,6 @@ class VideoClipHandler(BaseHandler):
                 elapsed_s=time.monotonic() - t0,
             )
 
-        # Download video
         output_url = self.extract_output_url(prediction)
         if not output_url:
             return VideoClipOutput(
@@ -28897,31 +32470,87 @@ echo "╚═══════════════════════�
 echo -e "${RESET}"
 
 # ───────────────────────────────────────────────────────────────
-# Check for existing projects that can be resumed
+# Check for existing projects that can be resumed or healed
 # ───────────────────────────────────────────────────────────────
 RESUMABLE=()
 RESUMABLE_DISPLAY=()
 for proj_dir in "$SCRIPT_DIR"/projects/*/; do
+    [[ ! -d "$proj_dir" ]] && continue
     [[ "$(basename "$proj_dir")" == "_template" ]] && continue
     manifest="$proj_dir/project_manifest.json"
     [[ ! -f "$manifest" ]] && continue
 
-    # Find first incomplete phase
-    next_phase=$(python3 -c "
-import json, sys
-m = json.loads(open('$manifest').read())
-phases = m.get('phases', {})
+    resume_info="$(python3 - <<PY
+import json
+from pathlib import Path
+import run_pipeline
+
+project_dir = Path(r"$proj_dir").resolve()
+manifest_path = project_dir / "project_manifest.json"
+run_pipeline.PROJECT_DIR = project_dir
+run_pipeline.MANIFEST_PATH = manifest_path
+
+manifest = json.loads(manifest_path.read_text())
+project_name = manifest.get("projectName", project_dir.name)
+phases = manifest.get("phases", {})
+next_phase = 7
+reason = "complete"
+issue = ""
+
 for i in range(7):
-    if phases.get(f'phase_{i}', {}).get('status') != 'complete':
-        print(i); sys.exit()
-print(7)
-" 2>/dev/null)
+    status = phases.get(f"phase_{i}", {}).get("status")
+    if status != "complete":
+        next_phase = i
+        reason = status or "not_started"
+        break
+    reusable, issues = run_pipeline._phase_reuse_status(i, project_dir)
+    if not reusable:
+        next_phase = i
+        reason = "heal"
+        issue = issues[0] if issues else ""
+        break
+
+print(json.dumps({
+    "project_name": project_name,
+    "next_phase": next_phase,
+    "reason": reason,
+    "issue": issue,
+}))
+PY
+)"
+
+    next_phase="$(python3 - <<PY
+import json
+data = json.loads('''$resume_info''')
+print(data["next_phase"])
+PY
+)"
 
     if [[ "$next_phase" -lt 7 ]]; then
-        proj_name=$(python3 -c "import json; print(json.loads(open('$manifest').read()).get('projectName','?'))" 2>/dev/null)
-        proj_id=$(basename "$proj_dir")
+        proj_id="$(basename "$proj_dir")"
+        proj_name="$(python3 - <<PY
+import json
+data = json.loads('''$resume_info''')
+print(data["project_name"])
+PY
+)"
+        resume_reason="$(python3 - <<PY
+import json
+data = json.loads('''$resume_info''')
+reason = data["reason"]
+issue = data["issue"]
+if reason == "heal" and issue:
+    print(f"heal Phase {data['next_phase']} ({issue})")
+elif reason == "ready":
+    print(f"Phase {data['next_phase']} ready")
+elif reason == "not_started":
+    print(f"Phase {data['next_phase']} not started")
+else:
+    print(f"Phase {data['next_phase']} ({reason})")
+PY
+)"
         RESUMABLE+=("$proj_id")
-        RESUMABLE_DISPLAY+=("$proj_name  →  Phase $next_phase (${PHASE_NAMES[$next_phase]})")
+        RESUMABLE_DISPLAY+=("$proj_name  →  $resume_reason")
     fi
 done
 
@@ -28929,13 +32558,13 @@ MODE="new"
 PROJECT_ID=""
 
 if [[ ${#RESUMABLE[@]} -gt 0 ]]; then
-    echo -e "${BOLD}Existing projects with progress:${RESET}"
+    echo -e "${BOLD}Existing projects that can resume or heal:${RESET}"
     for i in "${!RESUMABLE[@]}"; do
         echo -e "  ${GREEN}$((i+1)))${RESET} ${RESUMABLE_DISPLAY[$i]}"
     done
     echo -e "  ${CYAN}N)${RESET} New project"
     echo ""
-    read -rp "$(echo -e "${BOLD}Resume or New? [1-${#RESUMABLE[@]}/N]:${RESET} ")" PICK
+    read -rp "$(echo -e "${BOLD}Resume/heal or New? [1-${#RESUMABLE[@]}/N]:${RESET} ")" PICK
     PICK="${PICK:-N}"
 
     if [[ "$PICK" =~ ^[0-9]+$ ]] && [[ "$PICK" -ge 1 ]] && [[ "$PICK" -le ${#RESUMABLE[@]} ]]; then
@@ -28965,7 +32594,6 @@ if [[ "$MODE" == "new" ]]; then
     echo -e "All files will be copied into the project's source_files/.${RESET}"
     read -rp "$(echo -e "${BOLD}Source path:${RESET} ")" SOURCE_PATH
 
-    # Strip surrounding quotes if drag-dropped from file manager
     SOURCE_PATH="${SOURCE_PATH%\"}"
     SOURCE_PATH="${SOURCE_PATH#\"}"
     SOURCE_PATH="${SOURCE_PATH%\'}"
@@ -28980,31 +32608,32 @@ if [[ "$MODE" == "new" ]]; then
         exit 1
     fi
 
-    # ── 4. Stickiness (creative freedom) ──
+    # ── 4. Creative Freedom ──
     echo ""
-    echo -e "${BOLD}Stickiness (creative freedom):${RESET}"
-    echo "  1 = Reformat          2 = Remaster"
-    echo "  3 = Expand            4 = Reimagine"
-    echo "  5 = Create"
-    read -rp "$(echo -e "${BOLD}Stickiness${RESET} [3]: ")" STICKINESS
-    STICKINESS="${STICKINESS:-3}"
-
-    # ── 5. Size ──
-    echo ""
-    echo -e "${BOLD}Project size:${RESET}"
-    echo "  1) short       (10-20 frames)"
-    echo "  2) short_film  (50-125 frames)"
-    echo "  3) televised   (200-300 frames)"
-    echo "  4) feature     (750-1250 frames)"
-    read -rp "$(echo -e "${BOLD}Size${RESET} [1]: ")" SIZE_CHOICE
-    SIZE_CHOICE="${SIZE_CHOICE:-1}"
-    case "$SIZE_CHOICE" in
-        1) SIZE="short" ;;
-        2) SIZE="short_film" ;;
-        3) SIZE="televised" ;;
-        4) SIZE="feature" ;;
+    echo -e "${BOLD}Creative freedom:${RESET}"
+    echo "  1) strict      2) balanced"
+    echo "  3) creative    4) unbounded"
+    read -rp "$(echo -e "${BOLD}Creative freedom${RESET} [2]: ")" CREATIVE_CHOICE
+    CREATIVE_CHOICE="${CREATIVE_CHOICE:-2}"
+    case "$CREATIVE_CHOICE" in
+        1) CREATIVE_FREEDOM="strict" ;;
+        2) CREATIVE_FREEDOM="balanced" ;;
+        3) CREATIVE_FREEDOM="creative" ;;
+        4) CREATIVE_FREEDOM="unbounded" ;;
         *) echo -e "${RED}Invalid choice. Pick 1-4.${RESET}"; exit 1 ;;
     esac
+
+    # ── 5. Frame Budget ──
+    echo ""
+    echo -e "${BOLD}Frame budget:${RESET}"
+    echo "  Enter ${CYAN}auto${RESET} to let the story determine coverage."
+    echo "  Or enter a positive integer frame cap (for example: 60, 180, 320)."
+    read -rp "$(echo -e "${BOLD}Frame budget${RESET} [auto]: ")" FRAME_BUDGET
+    FRAME_BUDGET="${FRAME_BUDGET:-auto}"
+    if [[ ! "$FRAME_BUDGET" =~ ^auto$|^[1-9][0-9]*$ ]]; then
+        echo -e "${RED}Invalid frame budget. Use 'auto' or a positive integer.${RESET}"
+        exit 1
+    fi
 
     # ── 6. Media style ──
     echo ""
@@ -29030,11 +32659,11 @@ if [[ "$MODE" == "new" ]]; then
     # ── Summary ──
     echo ""
     echo -e "${CYAN}────────────────────────────────────────────${RESET}"
-    echo -e "${BOLD}  Name:${RESET}        $PROJECT_NAME"
-    echo -e "${BOLD}  Source:${RESET}      $SOURCE_PATH"
-    echo -e "${BOLD}  Stickiness:${RESET}  $STICKINESS"
-    echo -e "${BOLD}  Size:${RESET}        $SIZE"
-    echo -e "${BOLD}  Style:${RESET}       $MEDIA_STYLE"
+    echo -e "${BOLD}  Name:${RESET}            $PROJECT_NAME"
+    echo -e "${BOLD}  Source:${RESET}          $SOURCE_PATH"
+    echo -e "${BOLD}  Creative Freedom:${RESET} $CREATIVE_FREEDOM"
+    echo -e "${BOLD}  Frame Budget:${RESET}    $FRAME_BUDGET"
+    echo -e "${BOLD}  Style:${RESET}           $MEDIA_STYLE"
     echo -e "${CYAN}────────────────────────────────────────────${RESET}"
     echo ""
     read -rp "$(echo -e "${BOLD}Proceed? [Y/n]:${RESET} ")" CONFIRM
@@ -29049,23 +32678,23 @@ if [[ "$MODE" == "new" ]]; then
     if [[ -f "$SOURCE_PATH" ]]; then
         SEED_FILE="$SOURCE_PATH"
     elif [[ -d "$SOURCE_PATH" ]]; then
-        SEED_FILE=$(find "$SOURCE_PATH" -maxdepth 1 -type f \( -name '*.md' -o -name '*.txt' \) | head -1)
+        SEED_FILE=$(find "$SOURCE_PATH" -maxdepth 1 -type f | head -1)
     fi
 
     # ── Create project ──
     echo -e "${GREEN}▸ Creating project...${RESET}"
-    SEED_ARGS=()
+    CREATE_CMD=(
+        python3 create_project.py
+        --name "$PROJECT_NAME"
+        --id "$PROJECT_ID"
+        --creative-freedom "$CREATIVE_FREEDOM"
+        --frame-budget "$FRAME_BUDGET"
+        --media-style "$MEDIA_STYLE"
+    )
     if [[ -n "$SEED_FILE" ]]; then
-        SEED_ARGS=(--seed "$SEED_FILE")
+        CREATE_CMD+=(--seed "$SEED_FILE")
     fi
-
-    python3 create_project.py \
-        --name "$PROJECT_NAME" \
-        --id "$PROJECT_ID" \
-        --stickiness "$STICKINESS" \
-        --size "$SIZE" \
-        --media-style "$MEDIA_STYLE" \
-        "${SEED_ARGS[@]+"${SEED_ARGS[@]}"}"
+    "${CREATE_CMD[@]}"
 
     PROJECT_SOURCE_DIR="$SCRIPT_DIR/projects/$PROJECT_ID/source_files"
 
@@ -29078,17 +32707,19 @@ if [[ "$MODE" == "new" ]]; then
     fi
 
     # Update onboarding_config.json sourceFiles array with actual files
-    SOURCE_LIST=$(find "$PROJECT_SOURCE_DIR" -maxdepth 1 -type f ! -name 'onboarding_config.json' -printf 'source_files/%f\n' | sort)
-    python3 -c "
+    SOURCE_LIST="$(find "$PROJECT_SOURCE_DIR" -maxdepth 1 -type f ! -name 'onboarding_config.json' -printf 'source_files/%f\n' | sort)"
+    python3 - <<PY
 import json
-cfg_path = '$PROJECT_SOURCE_DIR/onboarding_config.json'
-cfg = json.loads(open(cfg_path).read())
-cfg['sourceFiles'] = [l for l in '''$SOURCE_LIST'''.strip().split('\n') if l]
-open(cfg_path, 'w').write(json.dumps(cfg, indent=2) + '\n')
-"
+from pathlib import Path
+
+cfg_path = Path(r"$PROJECT_SOURCE_DIR") / "onboarding_config.json"
+cfg = json.loads(cfg_path.read_text())
+cfg["sourceFiles"] = [line for line in """$SOURCE_LIST""".strip().splitlines() if line]
+cfg_path.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
+PY
 
     echo -e "${GREEN}▸ Source files in project:${RESET}"
-    ls -1 "$PROJECT_SOURCE_DIR" | grep -v onboarding_config.json
+    ls -1 "$PROJECT_SOURCE_DIR" | grep -v onboarding_config.json || true
 
     PIPELINE_FLAGS=""
 fi
@@ -29099,7 +32730,7 @@ fi
 if [[ "$MODE" == "resume" ]]; then
     PIPELINE_FLAGS="--resume"
     echo ""
-    echo -e "${GREEN}▸ Resuming project: ${PROJECT_ID}${RESET}"
+    echo -e "${GREEN}▸ Resuming/healing project: ${PROJECT_ID}${RESET}"
 fi
 
 # ───────────────────────────────────────────────────────────────
@@ -29136,6 +32767,1096 @@ echo -e "${DIM}Full log: ${LOG_FILE}${RESET}"
 exit $EXIT_CODE
 ```
 
+## `llm/__init__.py`
+
+```python
+"""Shared xAI transport layer for ScreenWire."""
+
+from .xai_client import (
+    DEFAULT_MULTI_AGENT_MODEL,
+    DEFAULT_REASONING_MODEL,
+    DEFAULT_STAGE1_REASONING_MODEL,
+    SyncXAIClient,
+    XAIClient,
+    build_prompt_cache_key,
+    is_multi_agent_model,
+    resolve_model_alias,
+)
+
+__all__ = [
+    "DEFAULT_MULTI_AGENT_MODEL",
+    "DEFAULT_REASONING_MODEL",
+    "DEFAULT_STAGE1_REASONING_MODEL",
+    "SyncXAIClient",
+    "XAIClient",
+    "build_prompt_cache_key",
+    "is_multi_agent_model",
+    "resolve_model_alias",
+]
+```
+
+## `llm/agent_runner.py`
+
+```python
+"""Local CLI-compatible Grok runner used as the repo's process-based LLM adapter."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+from pathlib import Path
+from typing import Any
+
+from llm.xai_client import (
+    DEFAULT_REASONING_MODEL,
+    DEFAULT_STAGE1_REASONING_MODEL,
+    SyncXAIClient,
+    build_prompt_cache_key,
+    is_multi_agent_model,
+    resolve_model_alias,
+)
+from llm.project_tools import build_project_tools, make_project_tool_executor
+
+
+def _resolve_cache_key(default_key: str) -> str:
+    return os.environ.get("XAI_PROMPT_CACHE_KEY", "").strip() or default_key
+
+
+def _emit(content: str, output_format: str) -> None:
+    if output_format == "stream-json":
+        payload = {
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "content": content,
+            },
+        }
+        sys.stdout.write(json.dumps(payload) + "\n")
+    else:
+        sys.stdout.write(content)
+        if not content.endswith("\n"):
+            sys.stdout.write("\n")
+    sys.stdout.flush()
+
+
+def _read_system_prompt(args: argparse.Namespace) -> str:
+    if args.system_prompt_file:
+        return args.system_prompt_file.read()
+    return args.system_prompt or ""
+
+
+def _should_enable_project_tools(task_hint: str, system_prompt: str) -> bool:
+    lowered_hint = (task_hint or "").lower()
+    if lowered_hint.startswith("frame_enricher_worker_"):
+        return False
+    if any(token in lowered_hint for token in ("creative_coordinator", "prose_worker", "director")):
+        return True
+    lowered_prompt = system_prompt.lower()
+    return "your working directory is the project root" in lowered_prompt or "available skills" in lowered_prompt
+
+
+def _tool_reasoning_model(task_hint: str) -> str:
+    lowered_hint = (task_hint or "").lower()
+    if any(token in lowered_hint for token in ("creative_coordinator", "prose_worker", "director")):
+        return DEFAULT_STAGE1_REASONING_MODEL
+    return DEFAULT_REASONING_MODEL
+
+
+def _run_print_mode(args: argparse.Namespace) -> int:
+    system_prompt = _read_system_prompt(args)
+    task_hint = args.task_hint or ""
+    model = resolve_model_alias(args.model, task_hint=task_hint)
+    cache_key = _resolve_cache_key(
+        build_prompt_cache_key("agent-runner-print", model, system_prompt)
+    )
+    client = SyncXAIClient()
+    project_dir_raw = os.environ.get("PROJECT_DIR", "")
+    repo_root = Path(__file__).resolve().parent.parent
+    use_project_tools = bool(project_dir_raw) and _should_enable_project_tools(task_hint, system_prompt)
+
+    if use_project_tools:
+        project_root = Path(project_dir_raw).resolve()
+        skills_dir = Path(os.environ.get("SKILLS_DIR", str(repo_root / "skills"))).resolve()
+        tool_executor = make_project_tool_executor(
+            project_root=project_root,
+            repo_root=repo_root,
+            skills_dir=skills_dir,
+        )
+        tool_model = model if not is_multi_agent_model(model) else _tool_reasoning_model(task_hint)
+        tool_task_hint = task_hint if tool_model == model else ""
+        content = client.generate_text_with_tools(
+            prompt=args.prompt or "",
+            system_prompt=system_prompt,
+            tools=build_project_tools(),
+            tool_executor=tool_executor,
+            model=tool_model,
+            task_hint=tool_task_hint,
+            cache_key=cache_key,
+        )
+    elif is_multi_agent_model(model):
+        content, _ = client.generate_multi_agent(
+            prompt=args.prompt or "",
+            system_prompt=system_prompt,
+            model=model,
+            cache_key=cache_key,
+        )
+    else:
+        content = client.generate_text(
+            prompt=args.prompt or "",
+            system_prompt=system_prompt,
+            model=model,
+            task_hint=task_hint,
+            cache_key=cache_key,
+        )
+
+    _emit(content, args.output_format)
+    return 0
+
+
+def _run_interactive_mode(args: argparse.Namespace) -> int:
+    system_prompt = _read_system_prompt(args)
+    task_hint = args.task_hint or ""
+    model = resolve_model_alias(args.model, task_hint=task_hint)
+    cache_key = _resolve_cache_key(
+        build_prompt_cache_key("agent-runner-interactive", model, system_prompt)
+    )
+    client = SyncXAIClient()
+
+    messages: list[dict[str, Any]] = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    previous_response_id: str | None = None
+
+    for raw_line in sys.stdin:
+        prompt = raw_line.strip()
+        if not prompt:
+            continue
+
+        if is_multi_agent_model(model):
+            if previous_response_id:
+                content, previous_response_id = client.generate_multi_agent(
+                    input_messages=[{"role": "user", "content": prompt}],
+                    model=model,
+                    cache_key=cache_key,
+                    previous_response_id=previous_response_id,
+                )
+            else:
+                content, previous_response_id = client.generate_multi_agent(
+                    prompt=prompt,
+                    system_prompt=system_prompt,
+                    model=model,
+                    cache_key=cache_key,
+                )
+        else:
+            messages.append({"role": "user", "content": prompt})
+            content = client.generate_text(
+                messages=messages,
+                model=model,
+                task_hint=task_hint,
+                cache_key=cache_key,
+            )
+            messages.append({"role": "assistant", "content": content})
+
+        _emit(content, args.output_format)
+
+    return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="ScreenWire local Grok agent runner")
+    parser.add_argument("-p", "--prompt", default="")
+    parser.add_argument("--print", action="store_true", dest="print_mode")
+    parser.add_argument("--system-prompt", default="")
+    parser.add_argument("--system-prompt-file", type=argparse.FileType("r", encoding="utf-8"))
+    parser.add_argument("--dangerously-skip-permissions", action="store_true")
+    parser.add_argument("--output-format", choices=("text", "stream-json"), default="text")
+    parser.add_argument("--model", default=DEFAULT_REASONING_MODEL)
+    parser.add_argument("--task-hint", default="")
+    args = parser.parse_args()
+
+    try:
+        if args.print_mode:
+            return _run_print_mode(args)
+        return _run_interactive_mode(args)
+    except KeyboardInterrupt:
+        return 130
+    except Exception as exc:
+        sys.stderr.write(f"{type(exc).__name__}: {exc}\n")
+        sys.stderr.flush()
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+```
+
+## `llm/project_tools.py`
+
+```python
+"""Project-scoped client-side tools for Grok agent runners."""
+
+from __future__ import annotations
+
+import json
+import os
+import shlex
+import subprocess
+from pathlib import Path
+from typing import Any
+
+
+_TEXT_EXTENSIONS = {
+    ".md",
+    ".txt",
+    ".json",
+    ".yaml",
+    ".yml",
+    ".csv",
+    ".py",
+    ".js",
+    ".ts",
+    ".tsx",
+    ".jsx",
+    ".html",
+    ".css",
+    ".sh",
+    ".log",
+}
+
+_WRITE_ONLY_PROJECT_PREFIXES = (
+    "creative_output/",
+    "logs/",
+    "dispatch/",
+    "graph/",
+    "frames/",
+    "video/",
+    "audio/",
+    "assets/",
+    "cast/",
+    "locations/",
+    "props/",
+)
+
+_SHELL_BLOCKLIST = (
+    " rm ",
+    " rm\n",
+    "mv ",
+    "chmod ",
+    "chown ",
+    "sudo ",
+    "curl ",
+    "wget ",
+    "scp ",
+    "ssh ",
+    "git reset",
+    "git checkout",
+    "git clean",
+    "dd ",
+    "mkfs",
+    ":(){",
+    "shutdown",
+    "reboot",
+)
+
+
+def build_project_tools() -> list[dict[str, Any]]:
+    """Return JSON-schema tool specs for project-scoped agent execution."""
+    return [
+        {
+            "type": "function",
+            "name": "list_directory",
+            "description": (
+                "List files and subdirectories relative to the project root. "
+                "You may also inspect repository support folders like agent_prompts/."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Relative path. Defaults to '.'",
+                    }
+                },
+            },
+        },
+        {
+            "type": "function",
+            "name": "read_file",
+            "description": (
+                "Read a text-based file relative to the project root or repo root. "
+                "For PDFs, use read_pdf instead."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "start_line": {"type": "integer", "minimum": 1},
+                    "end_line": {"type": "integer", "minimum": 1},
+                    "max_chars": {"type": "integer", "minimum": 1},
+                },
+                "required": ["path"],
+            },
+        },
+        {
+            "type": "function",
+            "name": "read_pdf",
+            "description": (
+                "Extract text from a PDF in source_files/. Use repeated calls over page "
+                "ranges to read the full document."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "start_page": {"type": "integer", "minimum": 1},
+                    "end_page": {"type": "integer", "minimum": 1},
+                    "max_chars": {"type": "integer", "minimum": 1},
+                },
+                "required": ["path"],
+            },
+        },
+        {
+            "type": "function",
+            "name": "write_file",
+            "description": (
+                "Write or overwrite a file inside the project directory. Creates parent "
+                "directories when needed."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "content": {"type": "string"},
+                },
+                "required": ["path", "content"],
+            },
+        },
+        {
+            "type": "function",
+            "name": "append_file",
+            "description": "Append text to a file inside the project directory.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "content": {"type": "string"},
+                },
+                "required": ["path", "content"],
+            },
+        },
+        {
+            "type": "function",
+            "name": "run_shell_command",
+            "description": (
+                "Run a safe read-oriented shell command inside the project directory. "
+                "Use this for repo inspection or invoking the existing skill scripts. "
+                "Destructive commands are blocked."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string"},
+                    "cwd": {
+                        "type": "string",
+                        "description": "Relative working directory, defaults to '.'.",
+                    },
+                },
+                "required": ["command"],
+            },
+        },
+    ]
+
+
+def make_project_tool_executor(
+    *,
+    project_root: Path,
+    repo_root: Path,
+    skills_dir: Path,
+) -> Any:
+    """Create a callable that executes project-scoped tool requests."""
+    project_root = project_root.resolve()
+    repo_root = repo_root.resolve()
+    skills_dir = skills_dir.resolve()
+
+    def _resolve_read_path(raw_path: str) -> Path:
+        if not raw_path:
+            raise ValueError("path is required")
+        candidate = Path(raw_path).expanduser()
+        if candidate.is_absolute():
+            resolved = candidate.resolve()
+            if _is_within(resolved, project_root) or _is_within(resolved, repo_root):
+                return resolved
+            raise ValueError(f"path escapes allowed roots: {raw_path}")
+
+        direct_project = (project_root / candidate).resolve()
+        if _is_within(direct_project, project_root) and direct_project.exists():
+            return direct_project
+
+        direct_repo = (repo_root / candidate).resolve()
+        if _is_within(direct_repo, repo_root) and direct_repo.exists():
+            return direct_repo
+
+        if str(candidate).startswith(("agent_prompts/", "skills/", "llm/")):
+            if _is_within(direct_repo, repo_root):
+                return direct_repo
+
+        if _is_within(direct_project, project_root):
+            return direct_project
+        raise ValueError(f"unresolvable path: {raw_path}")
+
+    def _resolve_write_path(raw_path: str) -> Path:
+        if not raw_path:
+            raise ValueError("path is required")
+        candidate = Path(raw_path)
+        if candidate.is_absolute():
+            resolved = candidate.resolve()
+            if _is_within(resolved, project_root):
+                return resolved
+            raise ValueError(f"write path escapes project root: {raw_path}")
+
+        normalized = candidate.as_posix().lstrip("./")
+        if normalized and not normalized.startswith(_WRITE_ONLY_PROJECT_PREFIXES):
+            raise ValueError(
+                "writes are only allowed inside project output folders: "
+                f"{normalized}"
+            )
+        resolved = (project_root / normalized).resolve()
+        if not _is_within(resolved, project_root):
+            raise ValueError(f"write path escapes project root: {raw_path}")
+        return resolved
+
+    def _resolve_cwd(raw_path: str | None) -> Path:
+        if not raw_path:
+            return project_root
+        path = _resolve_read_path(raw_path)
+        if path.is_file():
+            return path.parent
+        return path
+
+    def _list_directory(path: str = ".") -> str:
+        target = _resolve_cwd(path)
+        if not target.exists():
+            raise FileNotFoundError(f"directory not found: {path}")
+        if not target.is_dir():
+            raise NotADirectoryError(f"not a directory: {path}")
+        rows: list[str] = [f"Directory: {target}"]
+        for child in sorted(target.iterdir(), key=lambda item: (item.is_file(), item.name.lower())):
+            kind = "dir" if child.is_dir() else "file"
+            try:
+                rel = child.relative_to(project_root)
+            except ValueError:
+                rel = child.relative_to(repo_root)
+            size = child.stat().st_size if child.is_file() else 0
+            rows.append(f"{kind}\t{rel.as_posix()}\t{size}")
+        return "\n".join(rows)
+
+    def _read_text_file(path: str, start_line: int | None = None, end_line: int | None = None, max_chars: int | None = None) -> str:
+        target = _resolve_read_path(path)
+        if target.suffix.lower() == ".pdf":
+            raise ValueError("Use read_pdf for PDF documents")
+        if not target.exists():
+            raise FileNotFoundError(path)
+        text = target.read_text(encoding="utf-8", errors="replace")
+        if start_line or end_line:
+            lines = text.splitlines()
+            start_idx = max((start_line or 1) - 1, 0)
+            end_idx = end_line if end_line is not None else len(lines)
+            text = "\n".join(lines[start_idx:end_idx])
+        limit = max_chars or 40000
+        truncated = len(text) > limit
+        if truncated:
+            text = text[:limit]
+        header = [f"Path: {target}"]
+        if truncated:
+            header.append(
+                f"NOTE: output truncated to {limit} chars; narrow the request with line ranges if needed."
+            )
+        return "\n".join(header) + "\n\n" + text
+
+    def _read_pdf(path: str, start_page: int | None = None, end_page: int | None = None, max_chars: int | None = None) -> str:
+        target = _resolve_read_path(path)
+        if target.suffix.lower() != ".pdf":
+            raise ValueError("read_pdf only supports .pdf files")
+        text, page_count = _extract_pdf_text(
+            target,
+            start_page=start_page or 1,
+            end_page=end_page,
+        )
+        limit = max_chars or 50000
+        truncated = len(text) > limit
+        if truncated:
+            text = text[:limit]
+        header = [
+            f"Path: {target}",
+            f"PDF_PAGE_COUNT: {page_count}",
+            f"PAGES_EXTRACTED: {start_page or 1}-{end_page or page_count}",
+        ]
+        if truncated:
+            header.append(
+                f"NOTE: text truncated to {limit} chars; call read_pdf again with a smaller page range."
+            )
+        return "\n".join(header) + "\n\n" + text
+
+    def _write_file(path: str, content: str) -> str:
+        target = _resolve_write_path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+        return f"WROTE {target} ({len(content)} chars)"
+
+    def _append_file(path: str, content: str) -> str:
+        target = _resolve_write_path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with target.open("a", encoding="utf-8") as handle:
+            handle.write(content)
+        return f"APPENDED {target} ({len(content)} chars)"
+
+    def _run_shell_command(command: str, cwd: str | None = None) -> str:
+        normalized = f" {command.strip()} "
+        lowered = normalized.lower()
+        if any(token in lowered for token in _SHELL_BLOCKLIST):
+            raise ValueError(f"blocked shell command: {command}")
+        workdir = _resolve_cwd(cwd)
+        env = {
+            **os.environ,
+            "PROJECT_DIR": str(project_root),
+            "SKILLS_DIR": str(skills_dir),
+        }
+        proc = subprocess.run(
+            command,
+            cwd=workdir,
+            env=env,
+            shell=True,
+            text=True,
+            capture_output=True,
+            timeout=30,
+        )
+        payload = {
+            "cwd": str(workdir),
+            "returncode": proc.returncode,
+            "stdout": proc.stdout[-12000:],
+            "stderr": proc.stderr[-12000:],
+        }
+        return json.dumps(payload, ensure_ascii=False, indent=2)
+
+    tool_map = {
+        "list_directory": lambda **kwargs: _list_directory(kwargs.get("path", ".")),
+        "read_file": lambda **kwargs: _read_text_file(
+            kwargs["path"],
+            start_line=kwargs.get("start_line"),
+            end_line=kwargs.get("end_line"),
+            max_chars=kwargs.get("max_chars"),
+        ),
+        "read_pdf": lambda **kwargs: _read_pdf(
+            kwargs["path"],
+            start_page=kwargs.get("start_page"),
+            end_page=kwargs.get("end_page"),
+            max_chars=kwargs.get("max_chars"),
+        ),
+        "write_file": lambda **kwargs: _write_file(kwargs["path"], kwargs["content"]),
+        "append_file": lambda **kwargs: _append_file(kwargs["path"], kwargs["content"]),
+        "run_shell_command": lambda **kwargs: _run_shell_command(
+            kwargs["command"],
+            cwd=kwargs.get("cwd"),
+        ),
+    }
+
+    def _execute(name: str, arguments_json: str) -> str:
+        if name not in tool_map:
+            raise ValueError(f"unknown tool: {name}")
+        try:
+            arguments = json.loads(arguments_json) if arguments_json else {}
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"invalid tool arguments: {exc}") from exc
+        result = tool_map[name](**arguments)
+        if isinstance(result, str):
+            return result
+        return json.dumps(result, ensure_ascii=False)
+
+    return _execute
+
+
+def _is_within(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def _extract_pdf_text(path: Path, *, start_page: int, end_page: int | None) -> tuple[str, int]:
+    page_count = _pdf_page_count(path)
+    last_page = min(end_page or page_count, page_count)
+    first_page = max(start_page, 1)
+    if last_page < first_page:
+        raise ValueError("end_page must be >= start_page")
+
+    pdftotext = shutil_which("pdftotext")
+    if pdftotext:
+        proc = subprocess.run(
+            [
+                pdftotext,
+                "-f",
+                str(first_page),
+                "-l",
+                str(last_page),
+                "-layout",
+                "-nopgbrk",
+                str(path),
+                "-",
+            ],
+            text=True,
+            capture_output=True,
+            timeout=60,
+        )
+        if proc.returncode == 0 and proc.stdout.strip():
+            return proc.stdout, page_count
+
+    try:
+        import fitz  # type: ignore
+    except Exception as exc:  # pragma: no cover - environment-dependent
+        raise RuntimeError("No PDF extraction backend available") from exc
+
+    doc = fitz.open(path)
+    try:
+        chunks: list[str] = []
+        for page_num in range(first_page - 1, last_page):
+            chunks.append(doc.load_page(page_num).get_text("text"))
+        return "\n".join(chunks), page_count
+    finally:
+        doc.close()
+
+
+def _pdf_page_count(path: Path) -> int:
+    try:
+        import fitz  # type: ignore
+    except Exception:
+        return 1
+    doc = fitz.open(path)
+    try:
+        return len(doc)
+    finally:
+        doc.close()
+
+
+def shutil_which(name: str) -> str | None:
+    """Local wrapper to avoid importing shutil at module import time."""
+    import shutil
+
+    return shutil.which(name)
+```
+
+## `llm/xai_client.py`
+
+```python
+"""Unified xAI client for Grok reasoning and multi-agent calls."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+from pathlib import Path
+from typing import Any, Callable, Optional
+
+from dotenv import load_dotenv
+from openai import AsyncOpenAI, OpenAI
+
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+
+DEFAULT_STAGE1_REASONING_MODEL = "grok-4.20-reasoning"
+DEFAULT_REASONING_MODEL = "grok-4-1-fast-reasoning"
+DEFAULT_MULTI_AGENT_MODEL = "grok-4.20-multi-agent"
+XAI_BASE_URL = "https://api.x.ai/v1"
+
+_STAGE1_HINTS = (
+    "creative_coordinator",
+    "prose_worker",
+    "director",
+)
+_MULTI_AGENT_HINTS = (
+    "creative_coordinator",
+)
+
+
+def build_prompt_cache_key(namespace: str, *parts: str) -> str:
+    """Build a stable prompt-cache key for repeated prompt prefixes."""
+    digest = hashlib.sha256()
+    digest.update(namespace.encode("utf-8"))
+    for part in parts:
+        digest.update(b"\0")
+        digest.update((part or "").encode("utf-8"))
+    return f"screenwire:{namespace}:{digest.hexdigest()[:24]}"
+
+
+def _looks_stage1_task(task_hint: str) -> bool:
+    lowered = (task_hint or "").lower()
+    return any(token in lowered for token in _STAGE1_HINTS)
+
+
+def _looks_multi_agent_task(task_hint: str) -> bool:
+    lowered = (task_hint or "").lower()
+    return any(token in lowered for token in _MULTI_AGENT_HINTS)
+
+
+def is_multi_agent_model(model: str) -> bool:
+    return "multi-agent" in (model or "").lower()
+
+
+def resolve_model_alias(model: str, *, task_hint: str = "") -> str:
+    """Map legacy Claude names and generic defaults to Grok aliases."""
+    raw = (model or "").strip()
+    lowered = raw.lower()
+
+    if not raw:
+        raw = DEFAULT_REASONING_MODEL
+        lowered = raw.lower()
+
+    if lowered.startswith("grok-"):
+        if lowered == DEFAULT_REASONING_MODEL and _looks_multi_agent_task(task_hint):
+            return DEFAULT_MULTI_AGENT_MODEL
+        if lowered == DEFAULT_REASONING_MODEL and _looks_stage1_task(task_hint):
+            return DEFAULT_STAGE1_REASONING_MODEL
+        return raw
+
+    if "haiku" in lowered:
+        return DEFAULT_REASONING_MODEL
+
+    if "opus" in lowered or "sonnet" in lowered or "claude" in lowered:
+        if _looks_multi_agent_task(task_hint):
+            return DEFAULT_MULTI_AGENT_MODEL
+        if _looks_stage1_task(task_hint):
+            return DEFAULT_STAGE1_REASONING_MODEL
+        return DEFAULT_REASONING_MODEL
+
+    if _looks_multi_agent_task(task_hint):
+        return DEFAULT_MULTI_AGENT_MODEL
+    if _looks_stage1_task(task_hint):
+        return DEFAULT_STAGE1_REASONING_MODEL
+    return DEFAULT_REASONING_MODEL
+
+
+def _build_messages(
+    *,
+    prompt: Optional[str] = None,
+    system_prompt: str = "",
+    messages: Optional[list[dict[str, Any]]] = None,
+) -> list[dict[str, Any]]:
+    if messages is not None:
+        return messages
+
+    built: list[dict[str, Any]] = []
+    if system_prompt:
+        built.append({"role": "system", "content": system_prompt})
+    if prompt is not None:
+        built.append({"role": "user", "content": prompt})
+    return built
+
+
+def _extract_chat_text(response: Any) -> str:
+    content = response.choices[0].message.content
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                text = item.get("text")
+                if isinstance(text, str):
+                    parts.append(text)
+            else:
+                text = getattr(item, "text", None)
+                if isinstance(text, str):
+                    parts.append(text)
+        return "".join(parts).strip()
+    return str(content).strip()
+
+
+def _extract_response_text(response: Any) -> str:
+    text = getattr(response, "output_text", None)
+    if isinstance(text, str):
+        return text.strip()
+    return str(text or "").strip()
+
+
+class _BaseXAIClient:
+    def __init__(self, api_key: str | None = None):
+        self.api_key = api_key or os.getenv("XAI_API_KEY", "")
+        if not self.api_key:
+            raise ValueError("XAI_API_KEY environment variable is required")
+
+
+class XAIClient(_BaseXAIClient):
+    """Async xAI client for runtime modules."""
+
+    def __init__(self, api_key: str | None = None):
+        super().__init__(api_key=api_key)
+        self.client = AsyncOpenAI(api_key=self.api_key, base_url=XAI_BASE_URL)
+
+    async def generate_text(
+        self,
+        *,
+        prompt: str | None = None,
+        system_prompt: str = "",
+        messages: Optional[list[dict[str, Any]]] = None,
+        model: str = DEFAULT_REASONING_MODEL,
+        task_hint: str = "",
+        temperature: float = 0.7,
+        max_tokens: int | None = 4096,
+        cache_key: str = "",
+        **kwargs: Any,
+    ) -> str:
+        resolved_model = resolve_model_alias(model, task_hint=task_hint)
+        if is_multi_agent_model(resolved_model):
+            return await self.generate_multi_agent(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                input_messages=messages,
+                model=resolved_model,
+                cache_key=cache_key,
+                **kwargs,
+            )
+
+        request: dict[str, Any] = {
+            "model": resolved_model,
+            "messages": _build_messages(prompt=prompt, system_prompt=system_prompt, messages=messages),
+            "temperature": temperature,
+            **kwargs,
+        }
+        if max_tokens is not None:
+            request["max_tokens"] = max_tokens
+        if cache_key:
+            request["extra_headers"] = {"x-grok-conv-id": cache_key}
+        response = await self.client.chat.completions.create(**request)
+        return _extract_chat_text(response)
+
+    async def generate_json(
+        self,
+        *,
+        schema: dict[str, Any],
+        prompt: str | None = None,
+        system_prompt: str = "",
+        messages: Optional[list[dict[str, Any]]] = None,
+        model: str = DEFAULT_REASONING_MODEL,
+        task_hint: str = "",
+        temperature: float = 0.0,
+        max_tokens: int | None = 4096,
+        cache_key: str = "",
+        schema_name: str = "screenwire_output",
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        resolved_model = resolve_model_alias(model, task_hint=task_hint)
+        if is_multi_agent_model(resolved_model):
+            resolved_model = DEFAULT_REASONING_MODEL
+
+        request: dict[str, Any] = {
+            "model": resolved_model,
+            "messages": _build_messages(prompt=prompt, system_prompt=system_prompt, messages=messages),
+            "temperature": temperature,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": schema_name,
+                    "schema": schema,
+                    "strict": True,
+                },
+            },
+            **kwargs,
+        }
+        if max_tokens is not None:
+            request["max_tokens"] = max_tokens
+        if cache_key:
+            request["extra_headers"] = {"x-grok-conv-id": cache_key}
+        response = await self.client.chat.completions.create(**request)
+        return json.loads(_extract_chat_text(response))
+
+    async def generate_multi_agent(
+        self,
+        *,
+        prompt: str | None = None,
+        system_prompt: str = "",
+        input_messages: Optional[list[dict[str, Any]]] = None,
+        model: str = DEFAULT_MULTI_AGENT_MODEL,
+        cache_key: str = "",
+        previous_response_id: str | None = None,
+        **kwargs: Any,
+    ) -> str:
+        resolved_model = resolve_model_alias(model, task_hint="")
+        if not is_multi_agent_model(resolved_model):
+            resolved_model = DEFAULT_MULTI_AGENT_MODEL
+
+        if input_messages is None:
+            input_messages = _build_messages(prompt=prompt, system_prompt=system_prompt, messages=None)
+
+        request: dict[str, Any] = {
+            "model": resolved_model,
+            "input": input_messages,
+            **kwargs,
+        }
+        if cache_key:
+            request["prompt_cache_key"] = cache_key
+        if previous_response_id:
+            request["previous_response_id"] = previous_response_id
+        response = await self.client.responses.create(**request)
+        return _extract_response_text(response)
+
+
+class SyncXAIClient(_BaseXAIClient):
+    """Sync xAI client for subprocess-style agent runners."""
+
+    def __init__(self, api_key: str | None = None):
+        super().__init__(api_key=api_key)
+        self.client = OpenAI(api_key=self.api_key, base_url=XAI_BASE_URL)
+
+    def generate_text(
+        self,
+        *,
+        prompt: str | None = None,
+        system_prompt: str = "",
+        messages: Optional[list[dict[str, Any]]] = None,
+        model: str = DEFAULT_REASONING_MODEL,
+        task_hint: str = "",
+        temperature: float = 0.7,
+        max_tokens: int | None = 4096,
+        cache_key: str = "",
+        **kwargs: Any,
+    ) -> str:
+        resolved_model = resolve_model_alias(model, task_hint=task_hint)
+        if is_multi_agent_model(resolved_model):
+            text, _ = self.generate_multi_agent(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                input_messages=messages,
+                model=resolved_model,
+                cache_key=cache_key,
+                **kwargs,
+            )
+            return text
+
+        request: dict[str, Any] = {
+            "model": resolved_model,
+            "messages": _build_messages(prompt=prompt, system_prompt=system_prompt, messages=messages),
+            "temperature": temperature,
+            **kwargs,
+        }
+        if max_tokens is not None:
+            request["max_tokens"] = max_tokens
+        if cache_key:
+            request["extra_headers"] = {"x-grok-conv-id": cache_key}
+        response = self.client.chat.completions.create(**request)
+        return _extract_chat_text(response)
+
+    def generate_text_with_tools(
+        self,
+        *,
+        prompt: str | None = None,
+        system_prompt: str = "",
+        messages: Optional[list[dict[str, Any]]] = None,
+        tools: list[dict[str, Any]],
+        tool_executor: Callable[[str, str], str],
+        model: str = DEFAULT_REASONING_MODEL,
+        task_hint: str = "",
+        cache_key: str = "",
+        max_tool_turns: int = 24,
+        **kwargs: Any,
+    ) -> str:
+        """Run a client-side tool loop using xAI Responses API."""
+        resolved_model = resolve_model_alias(model, task_hint=task_hint)
+        current_input: Any = _build_messages(
+            prompt=prompt,
+            system_prompt=system_prompt,
+            messages=messages,
+        )
+        previous_response_id: str | None = None
+
+        for _ in range(max_tool_turns):
+            request: dict[str, Any] = {
+                "model": resolved_model,
+                "input": current_input,
+                "tools": tools,
+                **kwargs,
+            }
+            if cache_key:
+                request["prompt_cache_key"] = cache_key
+            if previous_response_id:
+                request["previous_response_id"] = previous_response_id
+
+            response = self.client.responses.create(**request)
+
+            tool_outputs: list[dict[str, Any]] = []
+            for item in getattr(response, "output", []) or []:
+                if getattr(item, "type", None) != "function_call":
+                    continue
+                tool_name = getattr(item, "name", "")
+                arguments = getattr(item, "arguments", "") or ""
+                call_id = getattr(item, "call_id", "")
+                try:
+                    result = tool_executor(tool_name, arguments)
+                except Exception as exc:
+                    result = f"TOOL_ERROR: {type(exc).__name__}: {exc}"
+                tool_outputs.append(
+                    {
+                        "type": "function_call_output",
+                        "call_id": call_id,
+                        "output": result,
+                    }
+                )
+
+            if not tool_outputs:
+                return _extract_response_text(response)
+
+            previous_response_id = getattr(response, "id", None)
+            current_input = tool_outputs
+
+        raise RuntimeError(
+            f"Exceeded max_tool_turns={max_tool_turns} without a final model response"
+        )
+
+    def generate_multi_agent(
+        self,
+        *,
+        prompt: str | None = None,
+        system_prompt: str = "",
+        input_messages: Optional[list[dict[str, Any]]] = None,
+        model: str = DEFAULT_MULTI_AGENT_MODEL,
+        cache_key: str = "",
+        previous_response_id: str | None = None,
+        **kwargs: Any,
+    ) -> tuple[str, str | None]:
+        resolved_model = resolve_model_alias(model, task_hint="")
+        if not is_multi_agent_model(resolved_model):
+            resolved_model = DEFAULT_MULTI_AGENT_MODEL
+
+        if input_messages is None:
+            input_messages = _build_messages(prompt=prompt, system_prompt=system_prompt, messages=None)
+
+        request: dict[str, Any] = {
+            "model": resolved_model,
+            "input": input_messages,
+            **kwargs,
+        }
+        if cache_key:
+            request["prompt_cache_key"] = cache_key
+        if previous_response_id:
+            request["previous_response_id"] = previous_response_id
+        response = self.client.responses.create(**request)
+        return _extract_response_text(response), getattr(response, "id", None)
+
+    def list_models(self) -> list[str]:
+        models = self.client.models.list()
+        data = getattr(models, "data", []) or []
+        return sorted(
+            {
+                getattr(model, "id", "")
+                for model in data
+                if getattr(model, "id", "")
+            }
+        )
+```
+
 ## `logs/prompt_size_audit_projects.json`
 
 ```json
@@ -29158,6 +33879,512 @@ exit $EXIT_CODE
 }
 ```
 
+## `project_report.py`
+
+```python
+#!/usr/bin/env python3
+"""Generate a concatenated non-media project report after prompt assembly."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import shutil
+from collections import Counter
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+from video_prompt_projection import generate_video_prompt_projection
+
+TEXT_SUFFIXES = {
+    ".json",
+    ".jsonl",
+    ".log",
+    ".md",
+    ".mmd",
+    ".py",
+    ".txt",
+    ".yaml",
+    ".yml",
+}
+
+INCLUDE_PATHS = [
+    "project_manifest.json",
+    "dialogue.json",
+    "source_files",
+    "creative_output",
+    "graph",
+    "cast",
+    "locations",
+    "props",
+    "frames/prompts",
+    "frames/shot_packets",
+    "frames/storyboard_prompts",
+    "video/prompts",
+    "logs/pipeline",
+    "scripts",
+]
+
+EXCLUDE_PARTS = {
+    "archive",
+    "assembled",
+    "audio",
+    "clips",
+    "composed",
+    "export",
+    "generated",
+    "primary",
+    "storyboards",
+}
+
+GRAPH_REGISTRIES = [
+    "cast",
+    "locations",
+    "props",
+    "scenes",
+    "frames",
+    "dialogue",
+    "storyboard_grids",
+    "cast_frame_states",
+    "prop_frame_states",
+    "location_frame_states",
+    "edges",
+]
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _slug(dt: datetime) -> str:
+    return dt.strftime("%Y%m%dT%H%M%SZ")
+
+
+def _archive_previous_report(reports_dir: Path) -> Path | None:
+    report_path = reports_dir / "project_report.md"
+    snapshot_dir = reports_dir / "snapshot"
+    if not report_path.exists() and not snapshot_dir.exists():
+        return None
+    archive_dir = reports_dir / "archive" / _slug(_now())
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    if report_path.exists():
+        shutil.move(str(report_path), str(archive_dir / "project_report.md"))
+    if snapshot_dir.exists():
+        shutil.move(str(snapshot_dir), str(archive_dir / "snapshot"))
+    return archive_dir
+
+
+def _is_text_file(path: Path) -> bool:
+    return path.suffix.lower() in TEXT_SUFFIXES
+
+
+def _include_file(project_dir: Path, path: Path) -> bool:
+    rel = path.relative_to(project_dir)
+    if rel.name == "project_report.md":
+        return False
+    if any(part in EXCLUDE_PARTS for part in rel.parts):
+        return False
+    return path.is_file() and _is_text_file(path)
+
+
+def _iter_snapshot_files(project_dir: Path) -> list[Path]:
+    files: list[Path] = []
+    seen: set[Path] = set()
+    for raw_root in INCLUDE_PATHS:
+        root = project_dir / raw_root
+        if not root.exists():
+            continue
+        candidates = [root] if root.is_file() else sorted(root.rglob("*"))
+        for path in candidates:
+            if path in seen:
+                continue
+            if _include_file(project_dir, path):
+                files.append(path)
+                seen.add(path)
+    return sorted(files, key=lambda p: p.relative_to(project_dir).as_posix())
+
+
+def _render_tree(files: list[Path], project_dir: Path) -> list[str]:
+    tree: dict[str, Any] = {}
+    for path in files:
+        rel = path.relative_to(project_dir)
+        cursor = tree
+        for part in rel.parts[:-1]:
+            cursor = cursor.setdefault(part, {})
+        cursor[rel.parts[-1]] = None
+
+    lines: list[str] = []
+
+    def _walk(node: dict[str, Any], prefix: str = "") -> None:
+        keys = sorted(node)
+        for index, key in enumerate(keys):
+            connector = "└── " if index == len(keys) - 1 else "├── "
+            lines.append(f"{prefix}{connector}{key}")
+            child = node[key]
+            if isinstance(child, dict):
+                extension = "    " if index == len(keys) - 1 else "│   "
+                _walk(child, prefix + extension)
+
+    _walk(tree)
+    return lines
+
+
+def _load_graph(project_dir: Path) -> dict[str, Any] | None:
+    graph_path = project_dir / "graph" / "narrative_graph.json"
+    if not graph_path.exists():
+        return None
+    return json.loads(graph_path.read_text(encoding="utf-8"))
+
+
+def _collect_path_counts(value: Any, prefix: tuple[str, ...], counter: Counter[tuple[str, ...]]) -> None:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            path = prefix + (key,)
+            counter[path] += 1
+            _collect_path_counts(child, path, counter)
+        return
+    if isinstance(value, list):
+        counter[prefix + ("[]",)] += len(value)
+        for child in value:
+            _collect_path_counts(child, prefix + ("[]",), counter)
+
+
+def _field_usage_by_registry(graph: dict[str, Any]) -> dict[str, Counter[tuple[str, ...]]]:
+    usage: dict[str, Counter[tuple[str, ...]]] = {}
+    for registry in GRAPH_REGISTRIES:
+        value = graph.get(registry)
+        counter: Counter[tuple[str, ...]] = Counter()
+        if isinstance(value, dict):
+            for item in value.values():
+                _collect_path_counts(item, (), counter)
+        elif isinstance(value, list):
+            for item in value:
+                _collect_path_counts(item, (), counter)
+        usage[registry] = counter
+    return usage
+
+
+def _render_field_usage(counter: Counter[tuple[str, ...]]) -> list[str]:
+    tree: dict[str, Any] = {}
+    for path, count in sorted(counter.items()):
+        cursor = tree
+        for part in path:
+            cursor = cursor.setdefault(part, {})
+        cursor["__count__"] = count
+
+    lines: list[str] = []
+
+    def _walk(node: dict[str, Any], depth: int = 0) -> None:
+        for key in sorted(k for k in node if k != "__count__"):
+            value = node[key]
+            indent = "  " * depth
+            count = value.get("__count__") if isinstance(value, dict) else None
+            if isinstance(value, dict):
+                suffix = f": `{count}`" if count is not None else ""
+                lines.append(f"{indent}- `{key}`{suffix}")
+                _walk(value, depth + 1)
+
+    _walk(tree)
+    return lines
+
+
+def _edge_stats(graph: dict[str, Any]) -> tuple[Counter[str], list[tuple[str, int, int]]]:
+    edge_type_counts: Counter[str] = Counter()
+    indegree: Counter[str] = Counter()
+    outdegree: Counter[str] = Counter()
+    for edge in graph.get("edges", []):
+        edge_type_counts[edge.get("edge_type", "unknown")] += 1
+        source_id = edge.get("source_id")
+        target_id = edge.get("target_id")
+        if source_id:
+            outdegree[source_id] += 1
+        if target_id:
+            indegree[target_id] += 1
+    node_ids = set(indegree) | set(outdegree)
+    top_nodes = sorted(
+        ((node_id, indegree[node_id], outdegree[node_id]) for node_id in node_ids),
+        key=lambda item: (item[1] + item[2], item[2], item[1], item[0]),
+        reverse=True,
+    )[:25]
+    return edge_type_counts, top_nodes
+
+
+def _prompt_reference_usage(prompt_files: list[Path]) -> Counter[str]:
+    refs: Counter[str] = Counter()
+    for path in prompt_files:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        for ref in payload.get("reference_images") or []:
+            ref_text = str(ref)
+            ref_path = Path(ref_text)
+            if any(part in EXCLUDE_PARTS for part in ref_path.parts):
+                continue
+            refs[ref_text] += 1
+    return refs
+
+
+def _fence_for(path: Path) -> str:
+    suffix = path.suffix.lower()
+    if suffix == ".json":
+        return "json"
+    if suffix == ".md":
+        return "md"
+    if suffix == ".py":
+        return "python"
+    if suffix in {".yaml", ".yml"}:
+        return "yaml"
+    return "text"
+
+
+def _frame_sort_key(frame_id: str) -> tuple[int, str]:
+    try:
+        return int(frame_id.split("_")[1]), frame_id
+    except Exception:
+        return 10**9, frame_id
+
+
+def _collapse_frame_ranges(frame_ids: list[str]) -> list[str]:
+    if not frame_ids:
+        return []
+    sorted_ids = sorted(frame_ids, key=_frame_sort_key)
+    numbers: list[int] = []
+    for frame_id in sorted_ids:
+        try:
+            numbers.append(int(frame_id.split("_")[1]))
+        except Exception:
+            continue
+    if not numbers:
+        return sorted_ids
+    ranges: list[str] = []
+    start = prev = numbers[0]
+    for number in numbers[1:]:
+        if number == prev + 1:
+            prev = number
+            continue
+        ranges.append(f"f_{start:03d}" if start == prev else f"f_{start:03d}-f_{prev:03d}")
+        start = prev = number
+    ranges.append(f"f_{start:03d}" if start == prev else f"f_{start:03d}-f_{prev:03d}")
+    return ranges
+
+
+def _load_quality_gate(project_dir: Path, phase_num: int) -> dict[str, Any] | None:
+    path = project_dir / "logs" / "pipeline" / f"phase_{phase_num}_quality_gate.json"
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def _output_coverage(
+    project_dir: Path,
+    graph: dict[str, Any] | None,
+    image_prompts: list[Path],
+) -> dict[str, Any]:
+    prompt_ids = {path.stem.replace("_image", "") for path in image_prompts}
+    composed_ids = {
+        path.stem.replace("_gen", "")
+        for path in (project_dir / "frames" / "composed").glob("f_*_gen.png")
+    }
+    graph_frame_ids = set(graph.get("frames", {}).keys()) if graph is not None else set()
+    planned_ids = graph_frame_ids or prompt_ids
+    missing_ids = sorted(prompt_ids - composed_ids, key=_frame_sort_key)
+
+    by_location: dict[str, dict[str, int]] = {}
+    if graph is not None:
+        for frame_id, frame in graph.get("frames", {}).items():
+            location_id = frame.get("location_id") or "unknown"
+            bucket = by_location.setdefault(location_id, {"total": 0, "generated": 0})
+            bucket["total"] += 1
+            if frame_id in composed_ids:
+                bucket["generated"] += 1
+
+    return {
+        "planned_frame_count": len(planned_ids),
+        "image_prompt_count": len(prompt_ids),
+        "composed_frame_count": len(composed_ids),
+        "missing_ids": missing_ids,
+        "missing_ranges": _collapse_frame_ranges(missing_ids),
+        "phase4_quality_gate": _load_quality_gate(project_dir, 4),
+        "by_location": by_location,
+    }
+
+
+def generate_project_report(project_dir: Path) -> Path:
+    project_dir = project_dir.resolve()
+    reports_dir = project_dir / "reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    (reports_dir / "archive").mkdir(parents=True, exist_ok=True)
+    archived = _archive_previous_report(reports_dir)
+
+    snapshot_files = _iter_snapshot_files(project_dir)
+    graph = _load_graph(project_dir)
+    manifest = json.loads((project_dir / "project_manifest.json").read_text(encoding="utf-8"))
+    tree_lines = _render_tree(snapshot_files, project_dir)
+
+    image_prompts = sorted((project_dir / "frames" / "prompts").glob("*_image.json")) if (project_dir / "frames" / "prompts").exists() else []
+    video_prompts = sorted((project_dir / "video" / "prompts").glob("*_video.json")) if (project_dir / "video" / "prompts").exists() else []
+    output_coverage = _output_coverage(project_dir, graph, image_prompts)
+    video_projection_md, video_projection_json = generate_video_prompt_projection(project_dir)
+
+    lines: list[str] = []
+    lines.append("# Project Report")
+    lines.append("")
+    lines.append(f"- Project: `{project_dir.name}`")
+    lines.append(f"- Generated at: `{_now().isoformat()}`")
+    lines.append(f"- Report path: `reports/project_report.md`")
+    if archived is not None:
+        lines.append(f"- Previous report archived to: `{archived.relative_to(project_dir).as_posix()}`")
+    lines.append("")
+
+    lines.append("## Snapshot Coverage")
+    lines.append("")
+
+    lines.append("## Video Prompt Projection")
+    lines.append("")
+    lines.append(
+        f"- Video request projection report: `{video_projection_md.relative_to(project_dir).as_posix()}`"
+    )
+    lines.append(
+        f"- Video request projection JSON: `{video_projection_json.relative_to(project_dir).as_posix()}`"
+    )
+    lines.append("")
+    lines.append(f"- Text snapshot files included: `{len(snapshot_files)}`")
+    lines.append(f"- Image prompt files: `{len(image_prompts)}`")
+    lines.append(f"- Video prompt files: `{len(video_prompts)}`")
+    if graph is not None:
+        for registry in GRAPH_REGISTRIES:
+            value = graph.get(registry)
+            if isinstance(value, dict):
+                lines.append(f"- Graph `{registry}` count: `{len(value)}`")
+            elif isinstance(value, list):
+                lines.append(f"- Graph `{registry}` count: `{len(value)}`")
+    lines.append("")
+
+    lines.append("## Snapshot Tree")
+    lines.append("")
+    lines.append("```text")
+    lines.extend(tree_lines or ["(no text snapshot files found)"])
+    lines.append("```")
+    lines.append("")
+
+    lines.append("## Output Coverage")
+    lines.append("")
+    lines.append(f"- Planned graph frames: `{output_coverage['planned_frame_count']}`")
+    lines.append(f"- Image prompts assembled: `{output_coverage['image_prompt_count']}`")
+    lines.append(f"- Composed frames generated: `{output_coverage['composed_frame_count']}`")
+    lines.append(f"- Missing composed frames: `{len(output_coverage['missing_ids'])}`")
+    phase4_gate = output_coverage["phase4_quality_gate"]
+    if phase4_gate is not None:
+        lines.append(f"- Phase 4 quality gate passed: `{phase4_gate.get('passed')}`")
+        lines.append(f"- Phase 4 quality gate issue count: `{len(phase4_gate.get('issues', []))}`")
+    lines.append("")
+
+    lines.append("### Missing Composed Frame IDs")
+    lines.append("")
+    missing_ranges = output_coverage["missing_ranges"]
+    if missing_ranges:
+        for group in missing_ranges:
+            lines.append(f"- `{group}`")
+    else:
+        lines.append("- No missing composed frames")
+    lines.append("")
+
+    lines.append("### Per-Location Composed Coverage")
+    lines.append("")
+    if output_coverage["by_location"]:
+        for location_id, stats in sorted(output_coverage["by_location"].items()):
+            total = stats["total"]
+            generated = stats["generated"]
+            rate = 0.0 if total == 0 else (generated / total) * 100
+            lines.append(f"- `{location_id}`: `{generated}/{total}` (`{rate:.1f}%`)")
+    else:
+        lines.append("- No graph-backed location coverage available")
+    lines.append("")
+
+    if phase4_gate is not None and phase4_gate.get("issues"):
+        lines.append("### Phase 4 Quality Gate Issues")
+        lines.append("")
+        for issue in phase4_gate.get("issues", []):
+            lines.append(f"- {issue}")
+        lines.append("")
+
+    if graph is not None:
+        edge_type_counts, top_nodes = _edge_stats(graph)
+        field_usage = _field_usage_by_registry(graph)
+
+        lines.append("## Graph Edge Usage")
+        lines.append("")
+        for edge_type, count in edge_type_counts.most_common():
+            lines.append(f"- `{edge_type}`: `{count}`")
+        if not edge_type_counts:
+            lines.append("- No edges found")
+        lines.append("")
+
+        lines.append("## Graph Node Degree")
+        lines.append("")
+        for node_id, indeg, outdeg in top_nodes:
+            lines.append(f"- `{node_id}`: in=`{indeg}` out=`{outdeg}` total=`{indeg + outdeg}`")
+        if not top_nodes:
+            lines.append("- No node degree data found")
+        lines.append("")
+
+        lines.append("## Graph Field Usage")
+        lines.append("")
+        for registry in GRAPH_REGISTRIES:
+            lines.append(f"### `{registry}`")
+            usage_lines = _render_field_usage(field_usage.get(registry, Counter()))
+            lines.extend(usage_lines or ["- No fields found"])
+            lines.append("")
+
+    prompt_refs = _prompt_reference_usage(image_prompts)
+    lines.append("## Prompt Reference Usage")
+    lines.append("")
+    for ref_path, count in prompt_refs.most_common():
+        lines.append(f"- `{ref_path}`: `{count}`")
+    if not prompt_refs:
+        lines.append("- No prompt reference images found")
+    lines.append("")
+
+    lines.append("## Manifest Snapshot")
+    lines.append("")
+    lines.append("```json")
+    lines.append(json.dumps(manifest, indent=2, ensure_ascii=False))
+    lines.append("```")
+    lines.append("")
+
+    lines.append("## Full Text Snapshot")
+    lines.append("")
+    for path in snapshot_files:
+        rel = path.relative_to(project_dir).as_posix()
+        lines.append(f"### `{rel}`")
+        lines.append("")
+        lines.append(f"```{_fence_for(path)}")
+        lines.append(path.read_text(encoding="utf-8"))
+        lines.append("```")
+        lines.append("")
+
+    report_path = reports_dir / "project_report.md"
+    report_path.write_text("\n".join(lines), encoding="utf-8")
+    return report_path
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Generate a concatenated project report")
+    parser.add_argument("--project-dir", default=".", help="Project directory")
+    args = parser.parse_args()
+    report_path = generate_project_report(Path(args.project_dir))
+    print(f"SUCCESS: Project report written to {report_path}")
+
+
+if __name__ == "__main__":
+    main()
+```
+
 ## `requirements.txt`
 
 ```text
@@ -29169,6 +34396,7 @@ python-dotenv
 httpx
 aiofiles
 pydantic
+openai>=1.35.0
 ```
 
 ## `run_pipeline.py`
@@ -29179,7 +34407,7 @@ pydantic
 
 Drives the full ScreenWire AI pipeline from Phase 0 -> Phase 6 without
 human input. Starts the FastAPI server, polls /health until ready, spawns
-Claude CLI agents for each phase sequentially, then runs Phase 6 export
+local Grok-backed agent runners for each phase sequentially, then runs Phase 6 export
 programmatically via ffmpeg.
 
 Usage:
@@ -29188,21 +34416,39 @@ Usage:
 
 import argparse
 import atexit
+import hashlib
 import json
 import math
 import os
 import re
 import signal
+import shutil
 import subprocess
 import sys
 import tempfile
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, as_completed, wait
 from datetime import datetime, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
+from graph.feature_flags import ENABLE_STORYBOARD_GUIDANCE
+from llm.xai_client import (
+    DEFAULT_REASONING_MODEL,
+    DEFAULT_STAGE1_REASONING_MODEL,
+    build_prompt_cache_key,
+)
+from screenwire_contracts import (
+    creative_freedom_contract,
+    default_dialogue_workflow,
+    derive_frame_range_from_budget,
+    derive_output_size_from_frame_budget,
+    derive_output_size_label_from_frame_budget,
+    minimum_scene_count_for_frame_budget,
+    normalize_frame_budget,
+)
 from telemetry import PHASE_ENV, RUN_ID_ENV, emit_event, generate_run_id, with_run_context
+from video_prompt_projection import build_video_request_projection, generate_video_prompt_projection
 load_dotenv(Path(__file__).resolve().parent / ".env")
 
 # ---------------------------------------------------------------------------
@@ -29287,18 +34533,27 @@ PHASE_TIMEOUT = None       # No timeout — agents run until complete
 SERVER_START_TIMEOUT = 30  # seconds to wait for server to come up
 SERVER_POLL_INTERVAL = 1   # seconds between /health polls
 
-DEFAULT_MODEL = "claude-opus-4-6"
+DEFAULT_MODEL = DEFAULT_REASONING_MODEL
 AUDIT_PHASE2 = False  # Set to True via --audit flag to spawn graph auditor agent after Step 2c
+FRAME_GEN_CONCURRENCY = 10
+VIDEO_GEN_CONCURRENCY = max(1, int(os.getenv("SCREENWIRE_VIDEO_CONCURRENCY", "2")))
+VIDEO_REFINE_CONCURRENCY = max(1, int(os.getenv("SCREENWIRE_VIDEO_REFINE_CONCURRENCY", "5")))
+VIDEO_GEN_RETRIES = max(1, int(os.getenv("SCREENWIRE_VIDEO_RETRIES", "3")))
 
-# Resolve claude CLI path (Windows subprocess.run can't find bare "claude")
-import shutil as _shutil
-CLAUDE_CLI = _shutil.which("claude") or "claude"
+AGENT_RUNNER_CMD = [sys.executable, "-m", "llm.agent_runner"]
 
 LOGS_DIR: Path | None = None          # Set in main() after --project
 PIPELINE_LOGS_DIR: Path | None = None  # Set in main() after --project
 PIPELINE_RUN_ID = ""
 LIVE_MODE = False
 LIVE_ENV = "SCREENWIRE_LIVE"
+
+
+def _with_repo_pythonpath(env: dict[str, str]) -> dict[str, str]:
+    repo_root = str(APP_DIR)
+    existing = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = repo_root if not existing else f"{repo_root}{os.pathsep}{existing}"
+    return env
 
 # Phase names for reporting
 PHASE_NAMES = {
@@ -29403,7 +34658,7 @@ def _stream_subprocess(
 
     Uses os.read() on non-blocking file descriptors instead of readline()
     so that output appears immediately even when the child process doesn't
-    emit newlines (e.g. claude --print buffering).
+    emit newlines (e.g. agent runner buffering).
 
     Returns a subprocess.CompletedProcess with stdout/stderr populated.
     """
@@ -29787,6 +35042,40 @@ def _deploy_shared_conventions(project_dir: Path) -> None:
     log(f"Deployed CLAUDE.md → {target.relative_to(project_dir)}")
 
 
+def _deploy_project_reporting_assets(project_dir: Path) -> None:
+    """Ensure each project has the concatenation script and report dirs."""
+    template_script = PROJECTS_DIR / "_template" / "scripts" / "concatenate_project_snapshot.py"
+    target_script = project_dir / "scripts" / "concatenate_project_snapshot.py"
+    target_script.parent.mkdir(parents=True, exist_ok=True)
+    (project_dir / "reports" / "archive").mkdir(parents=True, exist_ok=True)
+
+    if not template_script.exists():
+        log_warn(f"Project report template missing: {template_script}")
+        return
+
+    source_text = template_script.read_text(encoding="utf-8")
+    current_text = target_script.read_text(encoding="utf-8") if target_script.exists() else None
+    if current_text != source_text:
+        target_script.write_text(source_text, encoding="utf-8")
+        target_script.chmod(0o755)
+        log(f"Deployed project report script → {target_script.relative_to(project_dir)}")
+
+
+def _run_project_report(project_dir: Path) -> None:
+    """Generate the per-project concatenated report after prompts are assembled."""
+    _deploy_project_reporting_assets(project_dir)
+    report_script = project_dir / "scripts" / "concatenate_project_snapshot.py"
+    report_result = _stream_subprocess(
+        [sys.executable, str(report_script), "--project-dir", str(project_dir)],
+        cwd=project_dir,
+        label="project_report",
+    )
+    if report_result.returncode != 0:
+        raise RuntimeError("Project report generation failed after prompt assembly.")
+    generate_video_prompt_projection(project_dir)
+    log_ok("Project report generated")
+
+
 # ---------------------------------------------------------------------------
 # Context seed builder (Morpheus swarm shared prefix)
 # ---------------------------------------------------------------------------
@@ -29795,9 +35084,8 @@ def build_context_seed(project_dir: Path) -> str:
     """Pre-read all Phase 1 outputs into a single markdown document.
 
     This document is PREPENDED to every Morpheus swarm agent's system prompt
-    as a shared cacheable prefix.  The Anthropic API caches matching system
-    prompt prefixes — Agent 1 pays full cost, Agents 2-5 get ~90% input
-    discount on the shared prefix (within 5-min TTL).
+    as a shared cacheable prefix so repeated xAI requests can reuse the same
+    stable prompt prefix across swarm workers.
 
     Returns a markdown string (~15-50KB depending on project size).
     """
@@ -29823,33 +35111,36 @@ def build_context_seed(project_dir: Path) -> str:
         sections.append(config_text)
         sections.append("```\n")
 
-        # 2a. Extract stickiness level explicitly so all agents see it
+        # 2a. Extract creative freedom and dialogue workflow explicitly so all agents see it
         try:
             import json as _json
             config_data = _json.loads(config_text)
-            stickiness_level = config_data.get("stickinessLevel", "unknown")
-            stickiness_perm = config_data.get("stickinessPermission", "unknown")
-            tier_labels = {1: "Reformat", 2: "Remaster", 3: "Expand", 4: "Reimagine", 5: "Create"}
-            label = tier_labels.get(stickiness_level, "unknown")
-            sections.append("## Stickiness Tier (Extracted)\n")
-            sections.append(f"- **Level**: {stickiness_level} ({label})")
-            sections.append(f"- **Permission**: {stickiness_perm}")
-            if stickiness_level in (1, 2):
-                sections.append(
-                    "- **Enforcement**: STRICT — No new characters, locations, or props "
-                    "beyond what exists in source material. Skip any skeleton entity not "
-                    "found in source files."
-                )
-            elif stickiness_level in (4, 5):
-                sections.append(
-                    "- **Enforcement**: New entities allowed ONLY with "
-                    "`///ADDITION_JUSTIFICATION` in the outline skeleton. "
-                    "Skip unjustified additions."
-                )
-            else:
-                sections.append(
-                    "- **Enforcement**: Standard — all skeleton entities authorized."
-                )
+            creative_freedom = config_data.get("creativeFreedom", "balanced")
+            freedom = creative_freedom_contract(creative_freedom)
+            sections.append("## Creative Freedom (Extracted)\n")
+            sections.append(f"- **Tier**: {creative_freedom}")
+            sections.append(f"- **Philosophy**: {freedom['philosophy']}")
+            sections.append(
+                f"- **Permission**: {config_data.get('creativeFreedomPermission', freedom['permission'])}"
+            )
+            sections.append(
+                f"- **Failure Modes**: {config_data.get('creativeFreedomFailureModes', freedom['failure_modes'])}"
+            )
+            sections.append(
+                f"- **Dialogue Policy**: {config_data.get('dialoguePolicy', freedom['dialogue_policy'])}"
+            )
+            workflow = config_data.get("dialogueWorkflow", default_dialogue_workflow())
+            if isinstance(workflow, dict):
+                sections.append("## Dialogue Workflow (Extracted)\n")
+                sections.append(f"- **Enabled**: {workflow.get('enabled', True)}")
+                sections.append(f"- **Version**: {workflow.get('version', 'unknown')}")
+                agents = workflow.get("agents") or []
+                for agent in agents:
+                    if not isinstance(agent, dict):
+                        continue
+                    sections.append(
+                        f"- **Agent** `{agent.get('name', 'unknown')}` on `{agent.get('runsOn', 'unknown')}`"
+                    )
             sections.append("\n")
         except Exception:
             pass  # Config is already embedded as raw JSON above
@@ -29939,6 +35230,30 @@ def _run_phase_2_postprocessing(project_dir: Path) -> None:
     if assemble_result.returncode != 0:
         raise RuntimeError("Phase 2 prompt assembly failed. Fix graph shot-packet data before proceeding.")
 
+    _run_project_report(project_dir)
+
+    dialogue_result = _stream_subprocess(
+        [sys.executable, str(SKILLS_DIR / "graph_validate_dialogue"),
+         "--project-dir", str(project_dir)],
+        cwd=project_dir, label="graph_validate_dialogue")
+    if dialogue_result.returncode != 0:
+        raise RuntimeError(
+            "Phase 2 dialogue validation failed. Fix dialogue recovery, frame assignment, "
+            "or creative-freedom tier compliance before proceeding."
+        )
+
+    prompt_pair_result = _stream_subprocess(
+        [sys.executable, str(Path(__file__).resolve().parent / "graph" / "prompt_pair_validator.py"),
+         "--project-dir", str(project_dir)],
+        cwd=project_dir, label="prompt_pair_validator")
+    if prompt_pair_result.returncode != 0:
+        raise RuntimeError(
+            "Phase 2 prompt consistency validation failed. Fix contradictory subject counts, "
+            "dialogue metadata, or prompt continuity before proceeding."
+        )
+
+    _reconcile_scene_cast_presence(project_dir)
+
     materialize_result = _stream_subprocess(
         [sys.executable, str(SKILLS_DIR / "graph_materialize"),
          "--project-dir", str(project_dir)],
@@ -29959,6 +35274,50 @@ def _run_phase_2_postprocessing(project_dir: Path) -> None:
     log_ok("Deterministic post-processing complete")
 
 
+def _reconcile_scene_cast_presence(project_dir: Path) -> None:
+    """Fold actual visible-cast usage back into scene.cast_present after enrichment.
+
+    Stage 1 scene cast rosters can be sparse or omit late-discovered visible participants
+    (phone voices, collective beats, etc.). After prompt assembly we have the deterministic
+    shot packet view of who is visibly active per frame, so use that to reconcile the scene-
+    level cast roster before materialization and quality gating.
+    """
+    from graph.api import build_shot_packet
+    from graph.store import GraphStore
+
+    store = GraphStore(str(project_dir))
+    graph = store.load()
+
+    scene_cast_usage: dict[str, set[str]] = {
+        scene_id: set(scene.cast_present or [])
+        for scene_id, scene in graph.scenes.items()
+    }
+    for frame_id in graph.frame_order:
+        frame = graph.frames.get(frame_id)
+        if frame is None or frame.scene_id not in graph.scenes:
+            continue
+        try:
+            visible_cast_ids = build_shot_packet(graph, frame_id).visible_cast_ids or []
+        except Exception:
+            visible_cast_ids = []
+        scene_cast_usage.setdefault(frame.scene_id, set()).update(
+            cast_id for cast_id in visible_cast_ids if cast_id in graph.cast
+        )
+
+    changed = False
+    for scene_id, cast_ids in scene_cast_usage.items():
+        scene = graph.scenes.get(scene_id)
+        if scene is None:
+            continue
+        resolved = sorted(cast_ids)
+        if resolved != list(scene.cast_present or []):
+            scene.cast_present = resolved
+            changed = True
+
+    if changed:
+        store.save(graph)
+
+
 # ---------------------------------------------------------------------------
 # Agent spawning
 # ---------------------------------------------------------------------------
@@ -29974,7 +35333,7 @@ def run_agent(
     timeout: int | None = None,
     stream_output: bool = True,
 ) -> subprocess.CompletedProcess:
-    """Spawn a Claude CLI agent and wait for it to finish.
+    """Spawn a local Grok-backed agent runner and wait for it to finish.
 
     Args:
         prompt_prefix: Optional text APPENDED to the system prompt (after the
@@ -29983,7 +35342,7 @@ def run_agent(
         context_seed:  Optional text PREPENDED to the system prompt (before the
                        agent's own prompt) as a shared cacheable prefix.  All
                        swarm agents sharing the same seed benefit from API-level
-                       prompt caching (~90% input discount on Agents 2-5).
+                       prompt caching on the shared base prompt.
     """
     if project_dir is None:
         project_dir = PROJECT_DIR
@@ -29997,24 +35356,25 @@ def run_agent(
     # Expand {{include:path}} markers — reference files resolved relative to prompt dir
     system_prompt = _expand_includes(system_prompt, prompt_path.parent)
 
-    # context_seed is PREPENDED to the system prompt.  This is the shared
-    # cacheable prefix for the Morpheus swarm — the Anthropic API caches
-    # matching system prompt prefixes, so Agent 1 pays full cost and Agents
-    # 2-5 get ~90% input discount on the shared prefix (within 5-min TTL).
+    # context_seed is PREPENDED to the system prompt. This is the shared
+    # cacheable prefix for the Morpheus swarm so repeated xAI requests can
+    # reuse the same stable prompt prefix.
     if context_seed:
         system_prompt = context_seed + "\n\n---\n\n" + system_prompt
 
+    cacheable_system_prompt = system_prompt
+
     # prompt_prefix is APPENDED to the system prompt (not prepended).
-    # This keeps the large shared base prompt as the cacheable prefix — the
-    # Anthropic API caches matching prefixes (~1024+ token threshold), so all
-    # parallel workers sharing the same base prompt pay full input cost only once.
+    # This keeps the large shared base prompt as the cacheable prefix so
+    # parallel workers sharing the same base prompt can reuse it efficiently.
     # The short per-worker override at the end doesn't break prefix caching and
     # retains system-prompt authority (stronger than user message overrides).
     if prompt_prefix:
         system_prompt = system_prompt + "\n\n---\n\n" + prompt_prefix
 
-    env = {**os.environ, "PROJECT_DIR": str(project_dir), "SKILLS_DIR": str(SKILLS_DIR)}
-    # Remove CLAUDECODE env var to prevent nested-session detection
+    env = _with_repo_pythonpath(
+        {**os.environ, "PROJECT_DIR": str(project_dir), "SKILLS_DIR": str(SKILLS_DIR)}
+    )
     env.pop("CLAUDECODE", None)
 
     # Build the user message (trigger prompt).
@@ -30031,6 +35391,14 @@ def run_agent(
             "in your system prompt. Do not stop or wait for input."
         )
 
+    env["XAI_PROMPT_CACHE_KEY"] = _agent_prompt_cache_key(
+        agent_id=agent_id,
+        project_dir=project_dir,
+        model=model,
+        cacheable_system_prompt=cacheable_system_prompt,
+        trigger_msg=trigger_msg,
+    )
+
     # Write full system prompt to a temp file (Windows cmd line limit is ~32K chars)
     import tempfile as _tempfile
     prompt_tmpfile = _tempfile.NamedTemporaryFile(
@@ -30042,13 +35410,14 @@ def run_agent(
     prompt_tmp_path = prompt_tmpfile.name
 
     cmd = [
-        CLAUDE_CLI,
+        *AGENT_RUNNER_CMD,
         "--print",
         "-p", trigger_msg,
         "--system-prompt-file", prompt_tmp_path,
         "--dangerously-skip-permissions",
         "--output-format", "text",
         "--model", model,
+        "--task-hint", agent_id,
     ]
 
     if dry_run:
@@ -30078,6 +35447,35 @@ def run_agent(
         except OSError:
             pass
     return result
+
+
+def _agent_cache_family(agent_id: str) -> str:
+    lowered = (agent_id or "").lower()
+    if lowered.startswith("prose_worker_scene_"):
+        return "phase1-creative"
+    if lowered in {"creative_coordinator", "director"}:
+        return "phase1-creative"
+    if lowered.startswith("frame_enricher_worker_"):
+        return "phase2-frame-enricher"
+    return lowered or "agent"
+
+
+def _agent_prompt_cache_key(
+    *,
+    agent_id: str,
+    project_dir: Path,
+    model: str,
+    cacheable_system_prompt: str,
+    trigger_msg: str,
+) -> str:
+    return build_prompt_cache_key(
+        "agent-runner",
+        project_dir.resolve().name,
+        _agent_cache_family(agent_id),
+        model,
+        cacheable_system_prompt,
+        trigger_msg,
+    )
 
 
 def check_agent_result(agent_id: str, result: subprocess.CompletedProcess,
@@ -30209,8 +35607,8 @@ def _read_onboarding_config(base: Path) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def _frame_needs_haiku_enrichment(frame) -> bool:
-    """Return True when a frame is missing core Haiku-authored fields."""
+def _frame_needs_frame_enrichment(frame) -> bool:
+    """Return True when a frame is missing core frame-enricher-authored fields."""
     if not getattr(frame, "action_summary", ""):
         return True
     if not getattr(frame, "video_optimized_prompt_block", ""):
@@ -30234,21 +35632,259 @@ def _frame_needs_haiku_enrichment(frame) -> bool:
     return False
 
 
-def _pending_haiku_inputs(graph, inputs: list[dict]) -> list[dict]:
-    """Filter Haiku inputs down to frames that still need enrichment."""
+def _pending_frame_enricher_inputs(graph, inputs: list[dict]) -> list[dict]:
+    """Filter frame-enricher inputs down to frames that still need enrichment."""
     pending: list[dict] = []
     for input_dict in inputs:
         frame_id = str(input_dict.get("frame_id", "")).strip()
         frame = graph.frames.get(frame_id)
         if frame is None:
             continue
-        if _frame_needs_haiku_enrichment(frame):
+        if _frame_needs_frame_enrichment(frame):
             pending.append(input_dict)
     return pending
 
 
-def _parse_haiku_worker_output(raw_text: str, frame_id: str) -> dict:
-    """Parse a CLI Haiku worker response into the enrichment contract."""
+def _compact_identifier_token(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", (value or "").lower())
+
+
+def _posture_from_pose_name(pose_name: str):
+    if not pose_name:
+        return None
+    prefix = pose_name.split("_", 1)[0].lower()
+    mapping = {
+        "standing": "standing",
+        "sitting": "sitting",
+        "crouching": "crouching",
+        "kneeling": "kneeling",
+        "lying": "lying",
+        "walking": "walking",
+        "running": "running",
+        "leaning": "leaning",
+        "hunched": "hunched",
+    }
+    return mapping.get(prefix)
+
+
+def _rehydrate_phase_2_from_manifest(project_dir: Path, graph) -> int:
+    """Backfill parser-only graphs from the last successful manifest/materialization pass."""
+    manifest_path = project_dir / "project_manifest.json"
+    if not manifest_path.exists():
+        return 0
+
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception:
+        return 0
+
+    manifest_frames = {
+        str(frame.get("frameId", "")).strip(): frame
+        for frame in manifest.get("frames", [])
+        if str(frame.get("frameId", "")).strip()
+    }
+    if not manifest_frames:
+        return 0
+
+    from graph.api import get_frame_cast_state_models
+    from graph.schema import CastFrameState, CastFrameRole, CinematicTag, EmotionalArc, LightingDirection, LightingQuality, Posture
+
+    restored = 0
+
+    for frame_id, frame in graph.frames.items():
+        manifest_frame = manifest_frames.get(frame_id)
+        if not manifest_frame:
+            continue
+
+        restored_frame = False
+
+        action_summary = manifest_frame.get("actionSummary")
+        if action_summary:
+            frame.action_summary = action_summary
+            restored_frame = True
+
+        prompt_block = manifest_frame.get("videoOptimizedPromptBlock")
+        if prompt_block:
+            frame.video_optimized_prompt_block = prompt_block
+            restored_frame = True
+
+        emotional_arc = manifest_frame.get("emotionalArc")
+        if emotional_arc:
+            try:
+                frame.emotional_arc = EmotionalArc(emotional_arc)
+            except ValueError:
+                frame.emotional_arc = emotional_arc
+            restored_frame = True
+
+        visual_flow_element = manifest_frame.get("visualFlowElement")
+        if visual_flow_element:
+            frame.visual_flow_element = visual_flow_element
+            restored_frame = True
+
+        cinematic_tag = manifest_frame.get("cinematicTag")
+        if cinematic_tag:
+            if isinstance(cinematic_tag, dict):
+                tag = str(cinematic_tag.get("tag") or "").strip()
+                modifier = str(cinematic_tag.get("modifier") or "").strip()
+                full_tag = str(cinematic_tag.get("full_tag") or cinematic_tag.get("fullTag") or "").strip()
+                if not full_tag:
+                    full_tag = " ".join(part for part in (tag, modifier) if part).strip()
+                family = str(cinematic_tag.get("family") or "").strip()
+                if not family and tag:
+                    family = tag.split(".", 1)[0][:1]
+                frame.cinematic_tag = CinematicTag(
+                    tag=tag,
+                    modifier=modifier,
+                    full_tag=full_tag or tag,
+                    definition=str(cinematic_tag.get("definition") or "").strip(),
+                    family=family,
+                    editorial_function=str(cinematic_tag.get("editorial_function") or cinematic_tag.get("editorialFunction") or "").strip(),
+                    ai_prompt_language=str(cinematic_tag.get("ai_prompt_language") or cinematic_tag.get("aiPromptLanguage") or "").strip(),
+                    lens_guidance=str(cinematic_tag.get("lens_guidance") or cinematic_tag.get("lensGuidance") or "").strip(),
+                    dof_guidance=str(cinematic_tag.get("dof_guidance") or cinematic_tag.get("dofGuidance") or "").strip(),
+                )
+            else:
+                tag = str(cinematic_tag).strip()
+                frame.cinematic_tag = CinematicTag(
+                    tag=tag,
+                    full_tag=tag,
+                    family=tag.split(".", 1)[0][:1],
+                )
+            restored_frame = True
+
+        composition = manifest_frame.get("composition") or {}
+        for field in ("shot", "angle", "placement", "grouping", "blocking", "movement", "focus", "transition", "rule"):
+            value = composition.get(field)
+            if value:
+                setattr(frame.composition, field, value)
+                restored_frame = True
+
+        background = manifest_frame.get("background") or {}
+        for field in ("visible_description", "camera_facing", "background_action", "background_sound", "background_music"):
+            value = background.get(field)
+            if value:
+                setattr(frame.background, field, value)
+                restored_frame = True
+        depth_layers = background.get("depth_layers")
+        if isinstance(depth_layers, list) and depth_layers:
+            frame.background.depth_layers = depth_layers
+            restored_frame = True
+
+        directing = manifest_frame.get("directing") or {}
+        for field in (
+            "dramatic_purpose", "beat_turn", "pov_owner", "viewer_knowledge_delta",
+            "power_dynamic", "tension_source", "camera_motivation",
+            "movement_motivation", "movement_path", "reaction_target", "background_life",
+        ):
+            value = directing.get(field)
+            if value:
+                setattr(frame.directing, field, value)
+                restored_frame = True
+
+        # Manifest does not currently persist environment. Restore minimal lighting so
+        # parser-only reruns can safely skip fresh frame-enricher calls when prompt artifacts exist.
+        if restored_frame:
+            if frame.environment.lighting.direction is None:
+                frame.environment.lighting.direction = LightingDirection.AMBIENT
+            if frame.environment.lighting.quality is None:
+                frame.environment.lighting.quality = LightingQuality.SOFT
+
+        visible_cast_ids = list(manifest_frame.get("castIds") or [])
+        frame_states = {
+            state.cast_id: state
+            for state in get_frame_cast_state_models(graph, frame_id)
+        }
+        visible_state_ids = [
+            state.cast_id
+            for state in frame_states.values()
+            if getattr(getattr(state, "frame_role", None), "value", getattr(state, "frame_role", None)) != "referenced"
+        ]
+
+        snapshot = manifest_frame.get("castBibleSnapshot") or {}
+        for character in snapshot.get("characters") or []:
+            raw_cast_id = str(character.get("character_id", "")).strip()
+            if not raw_cast_id:
+                continue
+
+            resolved_cast_id = raw_cast_id
+            if resolved_cast_id not in frame_states:
+                target_token = _compact_identifier_token(resolved_cast_id.removeprefix("cast_"))
+                for candidate in frame_states:
+                    if _compact_identifier_token(candidate.removeprefix("cast_")) == target_token:
+                        resolved_cast_id = candidate
+                        break
+                else:
+                    if len(visible_state_ids) == 1:
+                        resolved_cast_id = visible_state_ids[0]
+
+            state = frame_states.get(resolved_cast_id)
+            if state is None:
+                default_role = CastFrameRole.SUBJECT if len(visible_cast_ids) <= 1 else CastFrameRole.BACKGROUND
+                if resolved_cast_id not in graph.cast:
+                    continue
+                state = CastFrameState(
+                    cast_id=resolved_cast_id,
+                    frame_id=frame_id,
+                    frame_role=default_role,
+                )
+                graph.cast_frame_states[f"{resolved_cast_id}@{frame_id}"] = state
+                frame_states[resolved_cast_id] = state
+
+            if getattr(getattr(state, "frame_role", None), "value", getattr(state, "frame_role", None)) == "referenced":
+                continue
+
+            if visible_cast_ids:
+                state.frame_role = (
+                    CastFrameRole.SUBJECT
+                    if len(visible_cast_ids) == 1 and resolved_cast_id in visible_cast_ids
+                    else CastFrameRole.BACKGROUND
+                )
+
+            pose = (character.get("pose") or {})
+            pose_name = str(pose.get("pose", "")).strip()
+            posture_name = _posture_from_pose_name(pose_name)
+            if posture_name:
+                try:
+                    state.posture = Posture(posture_name)
+                except ValueError:
+                    pass
+
+            modifiers = pose.get("modifiers") or []
+            for modifier in modifiers:
+                if ":" not in modifier:
+                    continue
+                key, value = modifier.split(":", 1)
+                key = key.strip()
+                value = value.strip()
+                if not value:
+                    continue
+                if key == "action":
+                    state.action = value
+                elif key == "screen_position":
+                    state.screen_position = value
+                elif key == "facing_direction":
+                    state.facing_direction = value
+                elif key == "looking_at":
+                    state.looking_at = value
+                elif key == "emotion":
+                    state.emotion = value
+                elif key == "state_tag":
+                    state.active_state_tag = value
+                elif key == "clothing_state":
+                    state.clothing_state = value
+                elif key == "eye_direction":
+                    state.eye_direction = value
+
+            restored_frame = True
+
+        if restored_frame:
+            restored += 1
+
+    return restored
+
+
+def _parse_frame_enricher_worker_output(raw_text: str, frame_id: str) -> dict:
+    """Parse a CLI frame-enricher worker response into the enrichment contract."""
     text = (raw_text or "").strip()
     if not text:
         return {"frame_id": frame_id, "error": "empty_output"}
@@ -30271,14 +35907,14 @@ def _parse_haiku_worker_output(raw_text: str, frame_id: str) -> dict:
     return result
 
 
-def _run_haiku_cli_worker(input_dict: dict, *, dry_run: bool = False) -> dict:
-    """Run one Haiku enrichment worker through the same Claude CLI path as other agents."""
-    from graph.haiku_enricher import HAIKU_MODEL, HAIKU_SYSTEM_PROMPT
+def _run_frame_enricher_cli_worker(input_dict: dict, *, dry_run: bool = False) -> dict:
+    """Run one frame enrichment worker through the shared local agent runner."""
+    from graph.frame_enricher import FRAME_ENRICHER_MODEL, FRAME_ENRICHER_SYSTEM_PROMPT
 
     frame_id = str(input_dict.get("frame_id", "unknown"))
-    worker_id = f"haiku_worker_{frame_id}"
+    worker_id = f"frame_enricher_worker_{frame_id}"
     worker_timer = Timer()
-    live_log(f"  [Haiku] starting {frame_id}")
+    live_log(f"  [FrameEnricher] starting {frame_id}")
 
     prompt_file = tempfile.NamedTemporaryFile(
         mode="w",
@@ -30289,7 +35925,7 @@ def _run_haiku_cli_worker(input_dict: dict, *, dry_run: bool = False) -> dict:
         encoding="utf-8",
     )
     try:
-        prompt_file.write(HAIKU_SYSTEM_PROMPT)
+        prompt_file.write(FRAME_ENRICHER_SYSTEM_PROMPT)
         prompt_file.close()
 
         prompt_prefix = (
@@ -30303,7 +35939,7 @@ def _run_haiku_cli_worker(input_dict: dict, *, dry_run: bool = False) -> dict:
             worker_id,
             prompt_file.name,
             project_dir=PROJECT_DIR,
-            model=HAIKU_MODEL,
+            model=FRAME_ENRICHER_MODEL,
             dry_run=dry_run,
             prompt_prefix=prompt_prefix,
             timeout=None,
@@ -30312,7 +35948,7 @@ def _run_haiku_cli_worker(input_dict: dict, *, dry_run: bool = False) -> dict:
         check_agent_result(worker_id, result, worker_timer)
         if result.returncode != 0:
             return {"frame_id": frame_id, "error": f"agent_exit_{result.returncode}"}
-        return _parse_haiku_worker_output(result.stdout or "", frame_id)
+        return _parse_frame_enricher_worker_output(result.stdout or "", frame_id)
     finally:
         try:
             os.unlink(prompt_file.name)
@@ -30320,8 +35956,8 @@ def _run_haiku_cli_worker(input_dict: dict, *, dry_run: bool = False) -> dict:
             pass
 
 
-def _run_haiku_cli_batch(inputs: list[dict], *, dry_run: bool = False, max_concurrent: int = 20) -> list[dict]:
-    """Run Haiku frame workers through Claude CLI, preserving input order."""
+def _run_frame_enricher_cli_batch(inputs: list[dict], *, dry_run: bool = False, max_concurrent: int = 20) -> list[dict]:
+    """Run frame-enricher workers through the local agent runner, preserving input order."""
     if not inputs:
         return []
 
@@ -30332,7 +35968,7 @@ def _run_haiku_cli_batch(inputs: list[dict], *, dry_run: bool = False, max_concu
     total = len(inputs)
     with ThreadPoolExecutor(max_workers=min(max_concurrent, len(inputs))) as executor:
         futures = {
-            executor.submit(_run_haiku_cli_worker, input_dict, dry_run=dry_run): idx
+            executor.submit(_run_frame_enricher_cli_worker, input_dict, dry_run=dry_run): idx
             for idx, input_dict in enumerate(inputs)
         }
         for future in as_completed(futures):
@@ -30359,17 +35995,24 @@ def _run_haiku_cli_batch(inputs: list[dict], *, dry_run: bool = False, max_concu
                 total=total,
             )
             live_log(
-                f"  [Haiku {completed}/{total}] {frame_id} {status} "
+                f"  [FrameEnricher {completed}/{total}] {frame_id} {status} "
                 f"({success_count} ok, {failure_count} failed{eta_suffix})",
                 color=color,
             )
 
     return [result if result is not None else {"frame_id": str(inputs[idx].get("frame_id", "unknown")), "error": "missing_result"} for idx, result in enumerate(results)]
 
-
 def _project_output_size(base: Path, manifest: dict | None = None) -> str:
     """Resolve the project's declared output size from onboarding/manifest."""
     config = _read_onboarding_config(base)
+    frame_budget = (
+        config.get("frameBudget")
+        or config.get("frame_budget")
+        or (manifest or {}).get("frameBudget")
+        or (manifest or {}).get("frame_budget")
+    )
+    if frame_budget not in (None, "", []):
+        return derive_output_size_from_frame_budget(frame_budget)
     raw = (
         config.get("outputSize")
         or config.get("output_size")
@@ -30378,6 +36021,22 @@ def _project_output_size(base: Path, manifest: dict | None = None) -> str:
         or "short"
     )
     return str(raw).strip().lower()
+
+
+def _project_frame_budget(base: Path, manifest: dict | None = None) -> int | None:
+    config = _read_onboarding_config(base)
+    raw = (
+        config.get("frameBudget")
+        or config.get("frame_budget")
+        or (manifest or {}).get("frameBudget")
+        or (manifest or {}).get("frame_budget")
+    )
+    if raw in (None, "", []):
+        return None
+    try:
+        return normalize_frame_budget(raw)
+    except ValueError:
+        return None
 
 
 def _count_protagonists(manifest: dict, base: Path) -> int:
@@ -30430,6 +36089,50 @@ def _refine_status_kind(refined_by: str) -> str:
     if value.startswith("failed:"):
         return "failed"
     return "unknown"
+
+
+_CAST_LOCATION_SUFFIXES = {
+    "arizona", "california", "topanga", "sedona", "canyon", "ranch", "room", "hall",
+}
+
+
+def _edit_distance_le_one(a: str, b: str) -> bool:
+    if a == b:
+        return True
+    if abs(len(a) - len(b)) > 1:
+        return False
+    if len(a) > len(b):
+        a, b = b, a
+    i = j = edits = 0
+    while i < len(a) and j < len(b):
+        if a[i] == b[j]:
+            i += 1
+            j += 1
+            continue
+        edits += 1
+        if edits > 1:
+            return False
+        if len(a) == len(b):
+            i += 1
+            j += 1
+        else:
+            j += 1
+    if i < len(a) or j < len(b):
+        edits += 1
+    return edits <= 1
+
+
+def _suspicious_cast_name_reasons(name: str) -> list[str]:
+    lowered = (name or "").strip().lower()
+    if not lowered:
+        return ["empty"]
+    reasons: list[str] = []
+    tokens = [token for token in re.split(r"\s+", lowered) if token]
+    if any(char.isdigit() for char in lowered):
+        reasons.append("contains digits")
+    if len(tokens) >= 2 and tokens[-1] in _CAST_LOCATION_SUFFIXES:
+        reasons.append("ends with location-like token")
+    return reasons
 
 
 def quality_gate_phase_1(base: Path) -> list[str]:
@@ -30526,7 +36229,34 @@ def quality_gate_phase_2(base: Path) -> list[str]:
 
     try:
         from graph.store import GraphStore
-        from graph.api import get_frame_cast_state_models
+        from graph.api import build_shot_packet, get_frame_cast_state_models
+
+        def _dialogue_requires_visible_primary_speaker(frame, dialogue_node, visible_cast_ids) -> bool:
+            cast_id = (getattr(dialogue_node, "cast_id", "") or "").lower()
+            speaker = (getattr(dialogue_node, "speaker", "") or "").lower()
+            source_text = (getattr(frame, "source_text", "") or "").lower()
+            if any(
+                token in f"{cast_id} {speaker} {source_text}"
+                for token in ("voice over", "voiceover", "voice_over", "on phone", "phone")
+            ):
+                return False
+
+            first_line = source_text.splitlines()[0].strip() if source_text else ""
+            if "(" in first_line and ")" in first_line and visible_cast_ids:
+                alias = first_line.split("(", 1)[1].split(")", 1)[0].strip().lower()
+                for visible_cast_id in visible_cast_ids:
+                    cast_node = graph.cast.get(visible_cast_id)
+                    if cast_node is None:
+                        continue
+                    for raw in (
+                        getattr(cast_node, "display_name", None),
+                        getattr(cast_node, "name", None),
+                        getattr(cast_node, "source_name", None),
+                    ):
+                        normalized = re.sub(r"\s+", " ", (raw or "").strip()).lower()
+                        if normalized and alias == normalized:
+                            return False
+            return True
 
         store = GraphStore(str(base))
         graph = store.load()
@@ -30541,11 +36271,15 @@ def quality_gate_phase_2(base: Path) -> list[str]:
             if not frame:
                 continue
 
-            visible_cast_ids = sorted({
+            raw_visible_cast_ids = sorted({
                 cs.cast_id
                 for cs in get_frame_cast_state_models(graph, frame_id)
                 if getattr(getattr(cs, "frame_role", None), "value", getattr(cs, "frame_role", None)) != "referenced"
             })
+            try:
+                visible_cast_ids = sorted(set(build_shot_packet(graph, frame_id).visible_cast_ids or raw_visible_cast_ids))
+            except Exception:
+                visible_cast_ids = raw_visible_cast_ids
 
             scene = graph.scenes.get(frame.scene_id)
             scene_cast_ids = set(getattr(scene, "cast_present", []) or [])
@@ -30570,7 +36304,11 @@ def quality_gate_phase_2(base: Path) -> list[str]:
                     dialogue_node = graph.dialogue.get(dialogue_id)
                     if not dialogue_node:
                         continue
-                    if dialogue_node.primary_visual_frame == frame_id and dialogue_node.cast_id not in visible_cast_ids:
+                    if (
+                        dialogue_node.primary_visual_frame == frame_id
+                        and _dialogue_requires_visible_primary_speaker(frame, dialogue_node, visible_cast_ids)
+                        and dialogue_node.cast_id not in visible_cast_ids
+                    ):
                         dialogue_presence_conflicts.append(
                             f"{frame_id}: primary dialogue speaker {dialogue_node.cast_id} missing from visible cast"
                         )
@@ -30594,6 +36332,52 @@ def quality_gate_phase_2(base: Path) -> list[str]:
             issues.append(
                 f"{len(dialogue_presence_conflicts)} primary dialogue frame(s) omit the speaker from visible cast "
                 f"(sample: {'; '.join(dialogue_presence_conflicts[:3])})"
+            )
+
+        total_graph_frames = max(len(graph.frame_order), 1)
+        dialogue_frames = sum(
+            1
+            for frame_id in graph.frame_order
+            if (
+                (frame := graph.frames.get(frame_id)) is not None
+                and (frame.is_dialogue or bool(frame.dialogue_ids))
+            )
+        )
+        dialogue_ratio = dialogue_frames / total_graph_frames
+        if total_graph_frames >= 2 and dialogue_ratio < 0.45:
+            issues.append(
+                f"Dialogue density too low: {dialogue_frames}/{total_graph_frames} frame(s) "
+                f"({dialogue_ratio:.0%}) carry dialogue or dialogue reaction coverage — target is at least 45%"
+            )
+
+        suspicious_cast_names: list[str] = []
+        seen_cast_tokens: dict[str, str] = {}
+        near_duplicate_cast_names: list[str] = []
+        for cast_id, cast_node in sorted(graph.cast.items()):
+            display_name = getattr(cast_node, "display_name", None) or cast_node.name
+            reasons = _suspicious_cast_name_reasons(display_name)
+            if reasons:
+                suspicious_cast_names.append(f"{cast_id} ({display_name}): {', '.join(reasons)}")
+            compact = re.sub(r"[^a-z0-9]+", "", display_name.lower())
+            if not compact:
+                continue
+            for seen_compact, seen_cast_id in seen_cast_tokens.items():
+                if compact == seen_compact or _edit_distance_le_one(compact, seen_compact):
+                    near_duplicate_cast_names.append(
+                        f"{seen_cast_id} and {cast_id} have near-duplicate display names"
+                    )
+                    break
+            seen_cast_tokens.setdefault(compact, cast_id)
+
+        if suspicious_cast_names:
+            issues.append(
+                f"{len(suspicious_cast_names)} cast name(s) look unnormalized "
+                f"(sample: {'; '.join(suspicious_cast_names[:3])})"
+            )
+        if near_duplicate_cast_names:
+            issues.append(
+                f"{len(near_duplicate_cast_names)} near-duplicate cast name pair(s) detected "
+                f"(sample: {'; '.join(near_duplicate_cast_names[:3])})"
             )
 
     except Exception as e:
@@ -30651,6 +36435,40 @@ def quality_gate_phase_4(base: Path) -> list[str]:
     for img in composed:
         if img.stat().st_size < 10240:
             issues.append(f"Composed frame {img.name} is only {img.stat().st_size} bytes — may be corrupt")
+
+    try:
+        from graph.prompt_pair_validator import (
+            IssueSeverity,
+            PromptPairCategory,
+            validate_all_prompt_pairs,
+        )
+        from graph.store import GraphStore
+
+        store = GraphStore(str(base))
+        graph = store.load()
+        image_prompts: dict[str, dict] = {}
+        video_prompts: dict[str, dict] = {}
+        for frame_id in graph.frame_order:
+            image_path = base / "frames" / "prompts" / f"{frame_id}_image.json"
+            video_path = base / "video" / "prompts" / f"{frame_id}_video.json"
+            if image_path.exists():
+                image_prompts[frame_id] = json.loads(image_path.read_text())
+            if video_path.exists():
+                video_prompts[frame_id] = json.loads(video_path.read_text())
+
+        prompt_issues = [
+            issue
+            for issue in validate_all_prompt_pairs(graph, image_prompts, video_prompts)
+            if issue.severity == IssueSeverity.ERROR
+            and issue.category == PromptPairCategory.SUBJECT_COUNT_CONSISTENCY
+        ]
+        if prompt_issues:
+            issues.append(
+                f"{len(prompt_issues)} prompt subject-count contradiction(s) remain "
+                f"(sample: {'; '.join(issue.description for issue in prompt_issues[:3])})"
+            )
+    except Exception as e:
+        issues.append(f"phase 4 prompt consistency check failed: {e}")
 
     return issues
 
@@ -30766,6 +36584,13 @@ def detect_resume_phase() -> int:
         phase_data = phases.get(f"phase_{i}", {})
         if phase_data.get("status") != "complete":
             return i
+        reusable, issues = _phase_reuse_status(i, PROJECT_DIR)
+        if not reusable:
+            log_warn(
+                f"Resume will rerun phase {i} — existing artifacts are incomplete: "
+                + "; ".join(issues[:3])
+            )
+            return i
     return 7  # all done
 
 
@@ -30785,8 +36610,75 @@ def verify_prerequisites(target_phase: int) -> None:
             fail(f"Prerequisite not met: phase_{i} status is '{status}' "
                  f"(expected 'complete'). Run earlier phases first or use "
                  f"full pipeline mode.")
+        reusable, issues = _phase_reuse_status(i, PROJECT_DIR)
+        if not reusable:
+            fail(
+                f"Prerequisite artifacts for phase_{i} are incomplete: "
+                + "; ".join(issues[:5])
+                + ". Rerun that phase or use --resume."
+            )
 
     log_ok(f"All prerequisites for phase {target_phase} verified (phases 0-{target_phase - 1} complete)")
+
+
+def _dedupe_issues(items: list[str]) -> list[str]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for item in items:
+        normalized = str(item).strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        ordered.append(normalized)
+    return ordered
+
+
+def _phase_1_reuse_issues(project_dir: Path) -> list[str]:
+    state = _scan_phase_1_state(project_dir)
+    issues: list[str] = []
+    if not state["skeleton_exists"]:
+        issues.append("outline_skeleton.md missing")
+    if not state["expected_scene_numbers"]:
+        issues.append("no scene numbers detected from outline_skeleton.md")
+    if state["missing_scene_numbers"]:
+        issues.append(
+            "missing scene drafts: "
+            + ", ".join(f"{scene_num:02d}" for scene_num in state["missing_scene_numbers"][:8])
+        )
+    if not state["creative_output_exists"]:
+        issues.append("creative_output.md missing")
+    if state["creative_output_stale"]:
+        issues.append("creative_output.md is stale relative to scene drafts")
+    issues.extend(_phase_1_skeleton_issues(project_dir))
+    issues.extend(quality_gate_phase_1(project_dir))
+    return _dedupe_issues(issues)
+
+
+def _phase_2_reuse_issues(project_dir: Path) -> list[str]:
+    issues = list(quality_gate_phase_2(project_dir))
+    graph_path = project_dir / "graph" / "narrative_graph.json"
+    image_prompts = list((project_dir / "frames" / "prompts").glob("*_image.json"))
+    video_prompts = list((project_dir / "video" / "prompts").glob("*_video.json"))
+    if not graph_path.exists():
+        issues.append("graph/narrative_graph.json missing")
+    if not image_prompts:
+        issues.append("frames/prompts missing assembled image prompts")
+    if not video_prompts:
+        issues.append("video/prompts missing assembled video prompts")
+    dialogue_report = project_dir / "logs" / "pipeline" / "dialogue_confirmation_report.json"
+    if not dialogue_report.exists():
+        issues.append("logs/pipeline/dialogue_confirmation_report.json missing")
+    return _dedupe_issues(issues)
+
+
+def _phase_reuse_status(phase_num: int, project_dir: Path) -> tuple[bool, list[str]]:
+    if phase_num == 1:
+        issues = _phase_1_reuse_issues(project_dir)
+        return (not issues, issues)
+    if phase_num == 2:
+        issues = _phase_2_reuse_issues(project_dir)
+        return (not issues, issues)
+    return (True, [])
 
 
 # ---------------------------------------------------------------------------
@@ -30885,6 +36777,66 @@ def _scan_phase_1_state(project_dir: Path) -> dict:
     }
 
 
+def _phase_1_min_scene_count(project_dir: Path) -> int:
+    config = _read_onboarding_config(project_dir)
+    return minimum_scene_count_for_frame_budget(
+        config.get("frameBudget", config.get("outputSize"))
+    )
+
+
+def _phase_1_skeleton_issues(project_dir: Path) -> list[str]:
+    skeleton_path = project_dir / "creative_output" / "outline_skeleton.md"
+    if not skeleton_path.exists() or skeleton_path.stat().st_size == 0:
+        return ["outline_skeleton.md missing"]
+
+    text = skeleton_path.read_text(encoding="utf-8", errors="replace")
+    issues: list[str] = []
+
+    scene_count = len(re.findall(r"^///SCENE:\s*", text, re.MULTILINE))
+    min_scene_count = _phase_1_min_scene_count(project_dir)
+    if scene_count < min_scene_count:
+        issues.append(
+            f"only {scene_count} explicit ///SCENE tags found; expected at least {min_scene_count}"
+        )
+
+    placeholder_patterns = (
+        r"\(Additional [^)]+ would follow",
+        r"remaining \d+ scenes? follow",
+        r"follow similar detailed format",
+        r"due to length",
+        r"scenes? \d+(?:-\d+)? .* cover",
+        r"continuing with full scenes",
+        r"remaining chronology",
+        r"actual file",
+        r"note on remaining scenes",
+        r"removed per override",
+    )
+    for pattern in placeholder_patterns:
+        if re.search(pattern, text, re.IGNORECASE):
+            issues.append(f"skeleton contains placeholder/summary text matching: {pattern}")
+
+    referenced_scene_numbers = [
+        int(match)
+        for match in re.findall(r"\bscene[_ ]0*(\d+)\b", text, re.IGNORECASE)
+    ]
+    if scene_count and referenced_scene_numbers:
+        max_referenced_scene = max(referenced_scene_numbers)
+        if max_referenced_scene > scene_count:
+            issues.append(
+                f"skeleton references scene_{max_referenced_scene:02d} but only defines "
+                f"{scene_count} explicit ///SCENE blocks"
+            )
+
+    if "## B. Character Roster" not in text:
+        issues.append("missing character roster section")
+    if "## C. Location Roster" not in text:
+        issues.append("missing location roster section")
+    if "## D. Prop Roster" not in text:
+        issues.append("missing prop roster section")
+
+    return issues
+
+
 def _assemble_creative_output_from_drafts(project_dir: Path, scene_numbers: list[int]) -> Path:
     creative_dir = project_dir / "creative_output"
     scenes_dir = creative_dir / "scenes"
@@ -30916,6 +36868,66 @@ def _assemble_creative_output_from_drafts(project_dir: Path, scene_numbers: list
     tmp_path.write_text(assembled_text, encoding="utf-8")
     os.replace(tmp_path, output_path)
     return output_path
+
+
+def _normalized_onboarding_signature(project_dir: Path) -> dict:
+    config = _read_onboarding_config(project_dir)
+    normalized = {
+        key: value
+        for key, value in config.items()
+        if key not in {"projectName", "projectId", "sourceFiles"}
+    }
+
+    source_digests: list[dict[str, str]] = []
+    for rel_path in config.get("sourceFiles", []):
+        abs_path = project_dir / rel_path
+        if not abs_path.exists() or not abs_path.is_file():
+            continue
+        digest = hashlib.sha256(abs_path.read_bytes()).hexdigest()
+        source_digests.append(
+            {
+                "name": abs_path.name,
+                "sha256": digest,
+                "size": str(abs_path.stat().st_size),
+            }
+        )
+
+    normalized["sourceDigests"] = source_digests
+    return normalized
+
+
+def _find_phase_1_reuse_candidate(project_dir: Path) -> Path | None:
+    target_sig = _normalized_onboarding_signature(project_dir)
+    creative_dir = project_dir / "creative_output"
+
+    for candidate in sorted(PROJECTS_DIR.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
+        if candidate == project_dir or not candidate.is_dir():
+            continue
+        candidate_creative = candidate / "creative_output"
+        candidate_state = _scan_phase_1_state(candidate)
+        if not candidate_state["skeleton_exists"] or not candidate_state["creative_output_exists"]:
+            continue
+        if candidate_creative == creative_dir:
+            continue
+        try:
+            candidate_sig = _normalized_onboarding_signature(candidate)
+        except Exception:
+            continue
+        if candidate_sig == target_sig:
+            return candidate
+    return None
+
+
+def _restore_phase_1_from_matching_project(project_dir: Path) -> Path | None:
+    candidate = _find_phase_1_reuse_candidate(project_dir)
+    if candidate is None:
+        return None
+
+    source_dir = candidate / "creative_output"
+    target_dir = project_dir / "creative_output"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(source_dir, target_dir, dirs_exist_ok=True)
+    return candidate
 
 
 # ---------------------------------------------------------------------------
@@ -30972,7 +36984,8 @@ def phase_0_verify(dry_run: bool) -> dict:
 
     # Check key subdirectories exist
     required_dirs = ["cast", "locations", "props", "creative_output",
-                     "source_files", "assets", "frames", "audio", "video", "logs"]
+                     "source_files", "assets", "frames", "audio", "video", "logs",
+                     "scripts", "reports"]
     for d in required_dirs:
         dp = PROJECT_DIR / d
         if not dp.exists():
@@ -30985,7 +36998,7 @@ def phase_0_verify(dry_run: bool) -> dict:
 
 def phase_1_narrative(dry_run: bool, phase_timers: dict) -> None:
     """Phase 1 -- Creative Coordinator writes skeleton (contracts), then
-    parallel Haiku workers write prose per scene, then CC assembles."""
+    parallel Grok prose workers write prose per scene, then CC assembles."""
     log_header("PHASE 1 -- Narrative (Contracts + Parallel Prose)")
     timer = Timer()
     phase_timers["phase_1"] = timer
@@ -30997,6 +37010,24 @@ def phase_1_narrative(dry_run: bool, phase_timers: dict) -> None:
     creative_output_path = creative_dir / "creative_output.md"
     prompt_file = str(PROMPTS_DIR / "creative_coordinator.md")
     result_skeleton = None
+    cc_skeleton_prefix = (
+        "CRITICAL OVERRIDE — THIS SUPERSEDES ALL INSTRUCTIONS ABOVE.\n"
+        "Complete ONLY the skeleton phase (Phase 1: ARCHITECT). "
+        "Write creative_output/outline_skeleton.md with the full story foundation, "
+        "character roster, location roster, per-scene construction specs, and "
+        "continuity chain. Do NOT write scene prose. Do NOT write creative_output.md. "
+        "Do NOT proceed to Phase 2 or Phase 3. Skeleton ONLY. "
+        "Stop after the skeleton is complete and update your state.\n\n"
+        "NON-NEGOTIABLE OUTPUT CONTRACT:\n"
+        "- Write every required ///CAST, ///LOCATION, ///LOCATION_DIR, ///PROP, and ///SCENE tag explicitly.\n"
+        "- If you claim N scenes, you must emit N distinct explicit ///SCENE blocks and N distinct scene sections.\n"
+        "- Do NOT summarize omitted sections.\n"
+        "- Do NOT write placeholder notes like 'additional scenes follow', 'remaining scenes cover', "
+        "'continuing with full scenes', 'actual file', or 'note on remaining scenes'.\n"
+        "- Cover the full source chronology from beginning through ending. Never stop early because a budget fills.\n"
+        "- If frameBudget is numeric, compress density to fit it. If frameBudget is auto, use as many scenes as needed.\n"
+        "- Overwrite creative_output/outline_skeleton.md completely with the final full skeleton.\n"
+    )
 
     def _checkpoint(stage: str) -> dict:
         state = _scan_phase_1_state(base)
@@ -31028,7 +37059,7 @@ def phase_1_narrative(dry_run: bool, phase_timers: dict) -> None:
         result = run_agent(
             f"prose_worker_scene_{scene_num:02d}", prompt_file,
             dry_run=dry_run, prompt_prefix=prose_prefix,
-            model="claude-haiku-4-5-20251001",
+            model=DEFAULT_STAGE1_REASONING_MODEL,
             timeout=300,
         )
         return scene_num, result, worker_timer
@@ -31070,23 +37101,44 @@ def phase_1_narrative(dry_run: bool, phase_timers: dict) -> None:
         )
     else:
         log("--- Phase 1a: Skeleton (contracts) ---")
-        cc_skeleton_prefix = (
-            "CRITICAL OVERRIDE — THIS SUPERSEDES ALL INSTRUCTIONS ABOVE.\n"
-            "Complete ONLY the skeleton phase (Phase 1: ARCHITECT). "
-            "Write creative_output/outline_skeleton.md with the full story foundation, "
-            "character roster, location roster, per-scene construction specs, and "
-            "continuity chain. Do NOT write scene prose. Do NOT write creative_output.md. "
-            "Do NOT proceed to Phase 2 or Phase 3. Skeleton ONLY. "
-            "Stop after the skeleton is complete and update your state."
-        )
         result_skeleton = run_agent("creative_coordinator", prompt_file,
-                                    dry_run=dry_run, prompt_prefix=cc_skeleton_prefix)
+                                    dry_run=dry_run, prompt_prefix=cc_skeleton_prefix,
+                                    model=DEFAULT_STAGE1_REASONING_MODEL)
         check_agent_result("creative_coordinator_skeleton", result_skeleton, timer)
+        if not dry_run and skeleton_path.exists():
+            skeleton_issues = _phase_1_skeleton_issues(base)
+            if skeleton_issues:
+                log_warn("Skeleton quality issues detected after first pass:")
+                for issue in skeleton_issues:
+                    print(f"  - {issue}", flush=True)
+                correction_prefix = (
+                    cc_skeleton_prefix
+                    + "\nCORRECTION PASS:\n"
+                    + "\n".join(f"- Fix this: {issue}" for issue in skeleton_issues)
+                    + "\nReturn only after the rewritten outline_skeleton.md satisfies all of these constraints."
+                )
+                retry_timer = Timer()
+                retry_result = run_agent(
+                    "creative_coordinator",
+                    prompt_file,
+                    dry_run=dry_run,
+                    prompt_prefix=correction_prefix,
+                    model=DEFAULT_STAGE1_REASONING_MODEL,
+                )
+                check_agent_result("creative_coordinator_skeleton_retry", retry_result, retry_timer)
+                result_skeleton = retry_result
+        if not dry_run and not skeleton_path.exists():
+            reused_from = _restore_phase_1_from_matching_project(base)
+            if reused_from is not None:
+                log_ok(
+                    "Restored Phase 1 narrative outputs from matching project "
+                    f"{reused_from.name}"
+                )
 
     state = _checkpoint("skeleton_complete")
 
-    # Step 2: Parallel Haiku workers write prose per scene
-    log("--- Phase 1b: Parallel prose writing (Haiku per scene) ---")
+    # Step 2: Parallel prose workers write prose per scene
+    log("--- Phase 1b: Parallel prose writing (Grok per scene) ---")
     if not dry_run:
         if not skeleton_path.exists():
             log_err("Skeleton not found — cannot dispatch parallel prose workers")
@@ -31113,7 +37165,7 @@ def phase_1_narrative(dry_run: bool, phase_timers: dict) -> None:
                 else:
                     log_ok("All expected scene drafts already exist — skipping prose workers")
     else:
-        log("[DRY-RUN] Would spawn parallel Haiku prose workers per scene", YELLOW)
+        log("[DRY-RUN] Would spawn parallel Grok prose workers per scene", YELLOW)
 
     state = _checkpoint("prose_complete")
 
@@ -31174,13 +37226,13 @@ def phase_2_morpheus(dry_run: bool, phase_timers: dict) -> None:
 
     Step 2a:   Python parser (deterministic, <5 seconds)
                Reads CC output files → NarrativeGraph with all entities, frames, dialogue, edges.
-    Step 2b:   Parallel Haiku workers for per-frame enrichment (composition, environment, directing).
+    Step 2b:   Parallel frame enricher workers for per-frame enrichment (composition, environment, directing).
     Step 2b.5: Grok cinematic tagging — assigns CinematicTag to every FrameNode.
     Step 2c:   Continuity validator — deterministic graph integrity checks (no LLM).
     Step 2d:   Prompt assembly + materialization (existing deterministic post-processing).
     Optional:  Graph auditor agent spawned after Step 2c if --audit flag is set.
     """
-    log_header("PHASE 2 -- CC-First Graph Build (Parser → Haiku → Grok → Validator)")
+    log_header("PHASE 2 -- CC-First Graph Build (Parser → Frame Enricher → Grok → Validator)")
     timer = Timer()
     phase_timers["phase_2"] = timer
 
@@ -31215,16 +37267,25 @@ def phase_2_morpheus(dry_run: bool, phase_timers: dict) -> None:
         from graph.store import GraphStore
 
         config = _read_onboarding_config(PROJECT_DIR)
+        frame_budget = _project_frame_budget(PROJECT_DIR)
         project_node = ProjectNode(
             project_id=config.get("projectId", ""),
             title=config.get("projectName", ""),
             pipeline=config.get("pipeline", "story_upload"),
-            stickiness_level=config.get("stickinessLevel", 3),
-            stickiness_permission=config.get("stickinessPermission", ""),
-            output_size=config.get("outputSize", "short"),
-            output_size_label=config.get("outputSizeLabel", ""),
-            frame_range=config.get("frameRange", [10, 20]),
-            scene_range=config.get("sceneRange", [1, 3]),
+            creative_freedom=config.get("creativeFreedom", "balanced"),
+            creative_freedom_permission=config.get("creativeFreedomPermission", ""),
+            creative_freedom_failure_modes=config.get("creativeFreedomFailureModes", ""),
+            dialogue_policy=config.get("dialoguePolicy", ""),
+            frame_budget=frame_budget,
+            output_size=derive_output_size_from_frame_budget(
+                config.get("frameBudget", config.get("outputSize", "auto"))
+            ),
+            output_size_label=derive_output_size_label_from_frame_budget(
+                config.get("frameBudget", config.get("outputSizeLabel", "auto"))
+            ),
+            frame_range=derive_frame_range_from_budget(
+                config.get("frameBudget", config.get("frameRange"))
+            ),
             media_style=config.get("mediaStyle", "live_clear"),
             media_style_prefix=config.get("mediaStylePrefix", ""),
             aspect_ratio=config.get("aspectRatio", "16:9"),
@@ -31254,25 +37315,32 @@ def phase_2_morpheus(dry_run: bool, phase_timers: dict) -> None:
     else:
         log("[DRY-RUN] Would run cc_parser.parse_cc_output() → NarrativeGraph", YELLOW)
 
-    # ── Step 2b: Parallel Haiku enrichment ────────────────────────────────
-    log_header("  STEP 2b — Haiku Enrichment (parallel per-frame)")
+    # ── Step 2b: Parallel frame enrichment ────────────────────────────────
+    log_header("  STEP 2b — Frame Enrichment (parallel per-frame)")
     t2b = Timer()
     if not dry_run:
-        from graph.haiku_enricher import (
-            build_haiku_inputs, apply_haiku_enrichment,
+        from graph.frame_enricher import (
+            build_frame_enricher_inputs, apply_frame_enrichment,
         )
 
-        inputs = build_haiku_inputs(graph)
-        pending_inputs = _pending_haiku_inputs(graph, inputs)
+        restored_from_manifest = _rehydrate_phase_2_from_manifest(PROJECT_DIR, graph)
+        if restored_from_manifest:
+            log_ok(
+                "Rehydrated existing Phase 2 enrichment from project_manifest.json for "
+                f"{restored_from_manifest} frame(s)"
+            )
+
+        inputs = build_frame_enricher_inputs(graph)
+        pending_inputs = _pending_frame_enricher_inputs(graph, inputs)
         if not pending_inputs:
-            log_ok("All frames already contain core Haiku enrichment — skipping Step 2b")
+            log_ok("All frames already contain core frame enrichment — skipping Step 2b")
             results = []
         else:
             log(
-                f"Dispatching {len(pending_inputs)} Haiku workers via Claude CLI "
+                f"Dispatching {len(pending_inputs)} frame enricher workers via local Grok runner "
                 f"(max_concurrent=20, skipped={len(inputs) - len(pending_inputs)} already enriched)..."
             )
-            results = _run_haiku_cli_batch(
+            results = _run_frame_enricher_cli_batch(
                 pending_inputs,
                 dry_run=dry_run,
                 max_concurrent=20,
@@ -31285,15 +37353,15 @@ def phase_2_morpheus(dry_run: bool, phase_timers: dict) -> None:
                 h_failures += 1
                 log_warn(f"Frame {result.get('frame_id')} enrichment failed: {result['error']}")
             else:
-                apply_haiku_enrichment(graph, result)
+                apply_frame_enrichment(graph, result)
                 h_successes += 1
         store.save(graph)
         log_ok(
-            f"Haiku enrichment complete in {t2b.elapsed_str()}: "
+            f"Frame enrichment complete in {t2b.elapsed_str()}: "
             f"{h_successes} succeeded, {h_failures} failed"
         )
     else:
-        log("[DRY-RUN] Would dispatch parallel Haiku per-frame enrichment (max_concurrent=20)", YELLOW)
+        log("[DRY-RUN] Would dispatch parallel frame-enricher per-frame enrichment (max_concurrent=20)", YELLOW)
 
     # ── Step 2b.5: Grok cinematic tagging ─────────────────────────────────
     log_header("  STEP 2b.5 — Grok Cinematic Tagging")
@@ -31322,7 +37390,7 @@ def phase_2_morpheus(dry_run: bool, phase_timers: dict) -> None:
     MAX_FIX_PASSES = 2
     if not dry_run:
         from graph.continuity_validator import validate_continuity
-        from graph.haiku_enricher import build_haiku_inputs, apply_haiku_enrichment
+        from graph.frame_enricher import build_frame_enricher_inputs, apply_frame_enrichment
         from graph.store import GraphStore as _GraphStore
 
         _store_cv = _GraphStore(PROJECT_DIR)
@@ -31348,7 +37416,7 @@ def phase_2_morpheus(dry_run: bool, phase_timers: dict) -> None:
                 log(f"    [FIXED] {i['check_name']}: {i['message']}")
 
             if needs_re_enrich and pass_num < MAX_FIX_PASSES:
-                log(f"  Dispatching Haiku re-enrichment for {len(needs_re_enrich)} frame issue(s)...")
+                log(f"  Dispatching frame re-enrichment for {len(needs_re_enrich)} frame issue(s)...")
                 issue_frame_ids = {
                     str(issue.get("frame_id", "")).strip()
                     for issue in needs_re_enrich
@@ -31356,10 +37424,10 @@ def phase_2_morpheus(dry_run: bool, phase_timers: dict) -> None:
                 }
                 re_inputs = [
                     input_dict
-                    for input_dict in build_haiku_inputs(graph_cv)
+                    for input_dict in build_frame_enricher_inputs(graph_cv)
                     if str(input_dict.get("frame_id", "")).strip() in issue_frame_ids
                 ]
-                re_results = _run_haiku_cli_batch(
+                re_results = _run_frame_enricher_cli_batch(
                     re_inputs,
                     dry_run=dry_run,
                     max_concurrent=10,
@@ -31367,7 +37435,7 @@ def phase_2_morpheus(dry_run: bool, phase_timers: dict) -> None:
                 re_ok = 0
                 for r in re_results:
                     if "error" not in r:
-                        apply_haiku_enrichment(graph_cv, r)
+                        apply_frame_enrichment(graph_cv, r)
                         re_ok += 1
                 log(f"  Re-enrichment complete: {re_ok}/{len(re_results)} succeeded")
                 _store_cv.save(graph_cv)
@@ -31751,6 +37819,7 @@ def _generate_single_grid_storyboard(prompt_data: dict) -> dict | None:
             scene=scene,
             frame_ids=frame_ids,
             style_prefix=style_prefix,
+            grid_id=grid_id,
             run_id=PIPELINE_RUN_ID,
             phase=os.environ.get(PHASE_ENV, ""),
         ))
@@ -31814,6 +37883,7 @@ async def _generate_single_grid_storyboard_async(prompt_data: dict) -> dict | No
             scene=scene,
             frame_ids=frame_ids,
             style_prefix=style_prefix,
+            grid_id=grid_id,
             run_id=PIPELINE_RUN_ID,
             phase=os.environ.get(PHASE_ENV, ""),
         )
@@ -31871,6 +37941,7 @@ def _generate_storyboard_grids_phase3(dry_run: bool) -> None:
     if assemble_result.returncode != 0:
         log_warn(f"Prompt re-assembly failed after grid build (exit {assemble_result.returncode})")
         return
+    _run_project_report(PROJECT_DIR)
 
     # Generate storyboards from prompt JSONs in order so each grid can inherit
     # the previous grid's output as continuity guidance.
@@ -31966,10 +38037,12 @@ def _generate_storyboard_grids_phase3(dry_run: bool) -> None:
 
     # Re-assemble prompts so frame ref_images now include grid cell images
     log("Re-assembling prompts with grid storyboard references...")
-    _stream_subprocess(
+    final_assemble = _stream_subprocess(
         [sys.executable, str(SKILLS_DIR / "graph_assemble_prompts"),
          "--project-dir", str(PROJECT_DIR)],
         cwd=PROJECT_DIR, label="graph_assemble_prompts")
+    if final_assemble.returncode == 0:
+        _run_project_report(PROJECT_DIR)
     log_ok("Prompts re-assembled with grid storyboard references")
 
     # Persist storyboard grid metadata to project_manifest.json so downstream
@@ -32040,10 +38113,12 @@ def phase_3_assets(dry_run: bool, phase_timers: dict) -> None:
     # Step 3c: Project prompt audit logs from the canonical graph state.
     log("--- Phase 3c: Project prompt audit logs from graph ---")
     if not dry_run:
-        _stream_subprocess(
+        phase3c_assemble = _stream_subprocess(
             [sys.executable, str(SKILLS_DIR / "graph_assemble_prompts"),
              "--project-dir", str(PROJECT_DIR)],
             cwd=PROJECT_DIR, label="graph_assemble_prompts_post_assets")
+        if phase3c_assemble.returncode == 0:
+            _run_project_report(PROJECT_DIR)
         log_ok("Prompt audit logs refreshed from graph state")
 
     # Step 3d: Validate assets + update manifest so graph has real paths
@@ -32054,15 +38129,20 @@ def phase_3_assets(dry_run: bool, phase_timers: dict) -> None:
     # Step 3e: Re-project prompt audit logs after any validation/regeneration.
     log("--- Phase 3e: Refresh prompt audit logs after validation ---")
     if not dry_run:
-        _stream_subprocess(
+        phase3e_assemble = _stream_subprocess(
             [sys.executable, str(SKILLS_DIR / "graph_assemble_prompts"),
              "--project-dir", str(PROJECT_DIR)],
             cwd=PROJECT_DIR, label="graph_assemble_prompts")
+        if phase3e_assemble.returncode == 0:
+            _run_project_report(PROJECT_DIR)
         log_ok("Prompt audit logs refreshed with validated asset paths")
 
-    # Step 3f: Storyboard generation (includes tag verification gate)
+    # Step 3f: Storyboard generation (optional guidance layer)
     log("--- Phase 3f: Storyboard grid generation ---")
-    _generate_storyboard_grids_phase3(dry_run)
+    if ENABLE_STORYBOARD_GUIDANCE:
+        _generate_storyboard_grids_phase3(dry_run)
+    else:
+        log("Storyboard guidance disabled — bypassing storyboard prompt/composite generation")
 
     created_files = []
     if not dry_run:
@@ -32152,16 +38232,16 @@ def _audit_phase4_assets() -> dict:
             if not expected.exists() or expected.stat().st_size < MIN_VALID_SIZE:
                 missing_props.append(prop_id)
 
-    # Storyboard grids
-    for grid_id, grid in graph.storyboard_grids.items():
-        if grid.composite_image_path:
-            p = Path(grid.composite_image_path) if Path(grid.composite_image_path).is_absolute() else base / grid.composite_image_path
-            if not p.exists() or p.stat().st_size < 1000:
-                missing_storyboards.append(grid_id)
-        else:
-            expected = base / "frames" / "storyboards" / grid_id / "composite.png"
-            if not expected.exists() or expected.stat().st_size < 1000:
-                missing_storyboards.append(grid_id)
+    if ENABLE_STORYBOARD_GUIDANCE:
+        for grid_id, grid in graph.storyboard_grids.items():
+            if grid.composite_image_path:
+                p = Path(grid.composite_image_path) if Path(grid.composite_image_path).is_absolute() else base / grid.composite_image_path
+                if not p.exists() or p.stat().st_size < 1000:
+                    missing_storyboards.append(grid_id)
+            else:
+                expected = base / "frames" / "storyboards" / grid_id / "composite.png"
+                if not expected.exists() or expected.stat().st_size < 1000:
+                    missing_storyboards.append(grid_id)
 
     total = len(missing_cast) + len(missing_locations) + len(missing_props)
 
@@ -32175,8 +38255,88 @@ def _audit_phase4_assets() -> dict:
     }
 
 
+def _run_final_frame_worker(
+    frame_id: str,
+    prompt_data: dict,
+    out_rel: str,
+) -> dict:
+    """Generate one final frame and return structured result data."""
+    out_path = PROJECT_DIR / out_rel
+    storyboard_ref = prompt_data.get("storyboard_image")
+    other_refs = list(prompt_data.get("reference_images") or [])
+    cmd = [
+        sys.executable, str(SKILLS_DIR / "sw_generate_frame"),
+        "--prompt", prompt_data["prompt"],
+        "--out", out_rel,
+        "--size", prompt_data.get("size", "landscape_16_9"),
+        "--frame-id", frame_id,
+    ]
+    if storyboard_ref:
+        cmd.extend(["--storyboard-image", storyboard_ref])
+    if other_refs:
+        cmd.extend(["--ref-images", ",".join(other_refs)])
+    if _frame_prompt_requires_sensitive_context(prompt_data):
+        cmd.append("--sensitive-context")
+
+    result = _stream_subprocess(
+        cmd,
+        cwd=PROJECT_DIR,
+        label=f"frame_{frame_id}",
+        env={**os.environ, "PROJECT_DIR": str(PROJECT_DIR), "SKILLS_DIR": str(SKILLS_DIR)},
+    )
+    stdout_text = result.stdout or ""
+    stderr_text = result.stderr or ""
+
+    if result.returncode != 0 and "failure_type: UPSTREAM_TRANSIENT" in stdout_text:
+        retry_result = _stream_subprocess(
+            cmd,
+            cwd=PROJECT_DIR,
+            label=f"frame_{frame_id}_retry",
+            env={**os.environ, "PROJECT_DIR": str(PROJECT_DIR), "SKILLS_DIR": str(SKILLS_DIR)},
+        )
+        result = retry_result
+        stdout_text = retry_result.stdout or ""
+        stderr_text = retry_result.stderr or ""
+
+    return {
+        "frame_id": frame_id,
+        "out_rel": out_rel,
+        "out_path": out_path,
+        "storyboard_ref": storyboard_ref,
+        "other_refs": other_refs,
+        "returncode": result.returncode,
+        "stdout": stdout_text,
+        "stderr": stderr_text,
+    }
+
+
+_SENSITIVE_FRAME_TOKENS = [REDACTED]
+    "vial",
+    "dropper",
+    "administers",
+    "administering",
+    "drops into",
+    "open wide",
+    "mouth open",
+    "forced to open",
+    "peer pressure",
+    "drugged",
+    "intimate coercion",
+)
+
+
+def _frame_prompt_requires_sensitive_context(prompt_data: dict) -> bool:
+    parts = [
+        str(prompt_data.get("prompt", "")),
+        str(prompt_data.get("negative_prompt", "")),
+        str(prompt_data.get("scene_id", "")),
+    ]
+    haystack = " ".join(parts).lower()
+    return any(token in haystack for token in _SENSITIVE_FRAME_TOKENS)
+
+
 def _generate_final_frames(dry_run: bool) -> tuple[int, int, int]:
-    """Generate final frames sequentially from composed continuity plus available guidance refs."""
+    """Generate final frames with a continuously topped-up worker pool."""
     from graph.prompt_assembler import assemble_image_prompt
     from graph.runtime_state import mark_frame_composed, project_relative_path, save_graph_projection
     from graph.store import GraphStore
@@ -32192,6 +38352,8 @@ def _generate_final_frames(dry_run: bool) -> tuple[int, int, int]:
     failed = 0
     total = len(graph.frame_order)
     graph_dirty = False
+
+    pending_jobs: list[tuple[int, str, str, dict]] = []
 
     for i, frame_id in enumerate(graph.frame_order, 1):
         out_rel = f"frames/composed/{frame_id}_gen.png"
@@ -32212,27 +38374,12 @@ def _generate_final_frames(dry_run: bool) -> tuple[int, int, int]:
             continue
 
         prompt_data = assemble_image_prompt(graph, frame_id, project_dir=PROJECT_DIR)
-        storyboard_ref = prompt_data.get("storyboard_image")
-        other_refs = list(prompt_data.get("reference_images") or [])
-
-        cmd = [
-            sys.executable, str(SKILLS_DIR / "sw_generate_frame"),
-            "--prompt", prompt_data["prompt"],
-            "--out", out_rel,
-            "--size", prompt_data.get("size", "landscape_16_9"),
-            "--frame-id", frame_id,
-        ]
-        if storyboard_ref:
-            cmd.extend(["--storyboard-image", storyboard_ref])
-        if other_refs:
-            cmd.extend(["--ref-images", ",".join(other_refs)])
-
-        refs_used = ([storyboard_ref] if storyboard_ref else []) + other_refs
 
         if dry_run:
             log(
                 f"  [{i}/{total}] [DRY-RUN] Would generate {frame_id} "
-                f"{'with storyboard + ' if storyboard_ref else 'with '}{len(other_refs)} ref(s)",
+                f"{'with storyboard + ' if prompt_data.get('storyboard_image') else 'with '}"
+                f"{len(list(prompt_data.get('reference_images') or []))} ref(s)",
                 YELLOW,
             )
             generated += 1
@@ -32240,38 +38387,83 @@ def _generate_final_frames(dry_run: bool) -> tuple[int, int, int]:
 
         log(
             f"  [{i}/{total}] {frame_id}: generating final frame "
-            f"{'storyboard+' if storyboard_ref else ''}{len(other_refs)} refs"
+            f"{'storyboard+' if prompt_data.get('storyboard_image') else ''}"
+            f"{len(list(prompt_data.get('reference_images') or []))} refs"
         )
-        result = _stream_subprocess(
-            cmd,
-            cwd=PROJECT_DIR,
-            label=f"frame_{frame_id}",
-            env={**os.environ, "PROJECT_DIR": str(PROJECT_DIR), "SKILLS_DIR": str(SKILLS_DIR)},
-        )
-        if result.returncode == 0 and out_path.exists() and out_path.stat().st_size > 1000:
-            normalized_refs = [
-                ref for ref in (
-                    [project_relative_path(PROJECT_DIR, storyboard_ref)] if storyboard_ref else []
-                ) + [
-                    project_relative_path(PROJECT_DIR, ref) for ref in other_refs
-                ]
-                if ref
-            ]
-            mark_frame_composed(
-                graph,
-                frame_id,
-                out_rel,
-                refs_used=normalized_refs,
-                run_id=PIPELINE_RUN_ID,
-                actor="frame_generation",
-                phase=os.environ.get(PHASE_ENV, ""),
-            )
-            generated += 1
-            graph_dirty = True
-            continue
+        pending_jobs.append((i, frame_id, out_rel, prompt_data))
 
-        failed += 1
-        log_err(f"  [{i}/{total}] {frame_id}: final frame generation failed")
+    if not dry_run and pending_jobs:
+        def _handle_worker_completion(job_idx: int, job_frame_id: str, worker_result: dict | None, exc: Exception | None) -> None:
+            nonlocal failed, generated, graph_dirty
+            if exc is not None:
+                failed += 1
+                log_err(f"  [{job_idx}/{total}] {job_frame_id}: final frame generation crashed: {exc}")
+                return
+
+            assert worker_result is not None
+            worker_out_path = worker_result["out_path"]
+            if worker_result["returncode"] == 0 and worker_out_path.exists() and worker_out_path.stat().st_size > 1000:
+                storyboard_ref = worker_result["storyboard_ref"]
+                other_refs = worker_result["other_refs"]
+                normalized_refs = [
+                    ref for ref in (
+                        [project_relative_path(PROJECT_DIR, storyboard_ref)] if storyboard_ref else []
+                    ) + [
+                        project_relative_path(PROJECT_DIR, ref) for ref in other_refs
+                    ]
+                    if ref
+                ]
+                mark_frame_composed(
+                    graph,
+                    job_frame_id,
+                    worker_result["out_rel"],
+                    refs_used=normalized_refs,
+                    run_id=PIPELINE_RUN_ID,
+                    actor="frame_generation",
+                    phase=os.environ.get(PHASE_ENV, ""),
+                )
+                generated += 1
+                graph_dirty = True
+                return
+
+            failed += 1
+            log_err(f"  [{job_idx}/{total}] {job_frame_id}: final frame generation failed")
+
+        with ThreadPoolExecutor(max_workers=min(FRAME_GEN_CONCURRENCY, len(pending_jobs))) as executor:
+            pending_iter = iter(pending_jobs)
+            active_futures: dict = {}
+
+            def _submit_next() -> bool:
+                try:
+                    job_idx, job_frame_id, job_out_rel, job_prompt = next(pending_iter)
+                except StopIteration:
+                    return False
+                future = executor.submit(
+                    _run_final_frame_worker,
+                    job_frame_id,
+                    job_prompt,
+                    job_out_rel,
+                )
+                active_futures[future] = (job_idx, job_frame_id)
+                return True
+
+            for _ in range(min(FRAME_GEN_CONCURRENCY, len(pending_jobs))):
+                _submit_next()
+
+            while active_futures:
+                done, _ = wait(active_futures.keys(), return_when=FIRST_COMPLETED)
+                for future in done:
+                    job_idx, job_frame_id = active_futures.pop(future)
+                    try:
+                        worker_result = future.result()
+                        _handle_worker_completion(job_idx, job_frame_id, worker_result, None)
+                    except Exception as exc:
+                        _handle_worker_completion(job_idx, job_frame_id, None, exc)
+                    _submit_next()
+
+                if graph_dirty:
+                    save_graph_projection(graph, PROJECT_DIR, store=store)
+                    graph_dirty = False
 
     if graph_dirty and not dry_run:
         save_graph_projection(graph, PROJECT_DIR, store=store)
@@ -32280,8 +38472,8 @@ def _generate_final_frames(dry_run: bool) -> tuple[int, int, int]:
 
 
 def phase_4_production(dry_run: bool, phase_timers: dict) -> None:
-    """Phase 4 -- Generate final frames sequentially from structured prompts."""
-    log_header("PHASE 4 -- Sequential Final Frame Generation")
+    """Phase 4 -- Generate final frames with a continuous worker pool."""
+    log_header("PHASE 4 -- Continuous Final Frame Generation")
     timer = Timer()
     phase_timers["phase_4"] = timer
     base = PROJECT_DIR
@@ -32292,12 +38484,13 @@ def phase_4_production(dry_run: bool, phase_timers: dict) -> None:
         _store = GraphStore(str(PROJECT_DIR))
         _graph = _store.load()
 
-        # Storyboard guidance is helpful but not required for final frame generation.
-        # Build it when absent so later prompts can use it, but keep Phase 4 runnable
-        # even when storyboard generation is unavailable or partially missing.
-        if not _graph.storyboard_grids or not _graph.seeded_domains.get("storyboard_grids"):
-            log_warn(f"Phase 4: no storyboard grids in graph — rebuilding")
-            _generate_storyboard_grids_phase3(dry_run=False)
+        if ENABLE_STORYBOARD_GUIDANCE:
+            # Storyboard guidance is helpful but not required for final frame generation.
+            # Build it when absent so later prompts can use it, but keep Phase 4 runnable
+            # even when storyboard generation is unavailable or partially missing.
+            if not _graph.storyboard_grids or not _graph.seeded_domains.get("storyboard_grids"):
+                log_warn(f"Phase 4: no storyboard grids in graph — rebuilding")
+                _generate_storyboard_grids_phase3(dry_run=False)
 
         audit = _audit_phase4_assets()
 
@@ -32318,16 +38511,18 @@ def phase_4_production(dry_run: bool, phase_timers: dict) -> None:
             log_warn(f"  Storyboards: {', '.join(audit['missing_storyboards'])}")
             log("Proceeding without those storyboard guidance refs; prompts will fall back to core refs.")
 
-    log("Generating final frames sequentially from shot-packet prompts...")
+    log(f"Generating final frames with a continuously topped-up pool ({FRAME_GEN_CONCURRENCY} concurrent workers)...")
     generated, skipped, failed = _generate_final_frames(dry_run)
     log_ok(f"Final frame generation done: {generated} generated, {skipped} skipped, {failed} failed")
 
     if not dry_run:
         log("Refreshing prompt audit logs from graph-backed composed frames...")
-        _stream_subprocess(
+        phase4_assemble = _stream_subprocess(
             [sys.executable, str(SKILLS_DIR / "graph_assemble_prompts"),
              "--project-dir", str(PROJECT_DIR)],
             cwd=PROJECT_DIR, label="graph_assemble_prompts_phase4")
+        if phase4_assemble.returncode == 0:
+            _run_project_report(PROJECT_DIR)
         log_ok("Prompt audit logs refreshed with final composed frames")
 
     if not dry_run:
@@ -32345,6 +38540,7 @@ def phase_4_production(dry_run: bool, phase_timers: dict) -> None:
 
 def _generate_video_clip(frame_id: str, image_path: Path, prompt: str,
                          duration: int, out_path: Path,
+                         dialogue_text: str,
                          dry_run: bool) -> subprocess.CompletedProcess | None:
     """Generate a single video clip from a composed frame. No agent needed."""
     if out_path.exists() and out_path.stat().st_size > 5000:
@@ -32359,15 +38555,42 @@ def _generate_video_clip(frame_id: str, image_path: Path, prompt: str,
         "--frame-id", frame_id,
         "--duration", str(duration),
     ]
+    if dialogue_text.strip():
+        cmd.extend(["--dialogue-text", dialogue_text.strip()])
 
     if dry_run:
         log(f"  [DRY-RUN] Would generate clip for {frame_id}", YELLOW)
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
-    return _stream_subprocess(
-        cmd, cwd=PROJECT_DIR, timeout=None, label=f"video_{frame_id}",
-        env={**os.environ, "PROJECT_DIR": str(PROJECT_DIR), "SKILLS_DIR": str(SKILLS_DIR)},
+    retryable_tokens = (
+        "502 bad gateway",
+        "503 service unavailable",
+        "429",
+        "upstream_transient",
+        "temporarily unavailable",
+        "please retry",
+        "timeout",
     )
+    result: subprocess.CompletedProcess | None = None
+    for attempt in range(1, VIDEO_GEN_RETRIES + 1):
+        result = _stream_subprocess(
+            cmd, cwd=PROJECT_DIR, timeout=None, label=f"video_{frame_id}",
+            env={**os.environ, "PROJECT_DIR": str(PROJECT_DIR), "SKILLS_DIR": str(SKILLS_DIR)},
+        )
+        if result.returncode == 0:
+            return result
+        combined = f"{result.stdout}\n{result.stderr}".lower()
+        retryable = any(token in combined for token in retryable_tokens)
+        if attempt >= VIDEO_GEN_RETRIES or not retryable:
+            return result
+        backoff = min(45, 5 * attempt)
+        log_warn(
+            f"  {frame_id}: video generation attempt {attempt}/{VIDEO_GEN_RETRIES} failed "
+            f"with retryable upstream error — retrying in {backoff}s"
+        )
+        time.sleep(backoff)
+
+    return result
 
 
 def phase_5_video(dry_run: bool, phase_timers: dict) -> None:
@@ -32442,7 +38665,6 @@ def phase_5_video(dry_run: bool, phase_timers: dict) -> None:
     import threading
     from queue import Queue
 
-    VIDEO_CONCURRENCY = 10
     gen_queue: Queue = Queue()
     stats = {"refined": 0, "refine_skipped": 0, "refine_failed": 0,
              "generated": 0, "gen_skipped": 0, "gen_failed": 0}
@@ -32496,14 +38718,16 @@ def phase_5_video(dry_run: bool, phase_timers: dict) -> None:
                 encoding="utf-8",
             )
 
-        video_prompt = prompt_state.get("prompt", "")
+        projected_payload = build_video_request_projection(prompt_state)
+        video_prompt = projected_payload.get("motion_prompt", "") or prompt_state.get("prompt", "")
+        dialogue_text = projected_payload.get("dialogue_text", "")
         dur = max(2, min(15, int(prompt_state.get("duration", 5))))
         if prompt_state.get("dialogue_fit_status") == "capped_to_model_max":
             log_warn(f"  [{idx}/{total}] {fid}: dialogue wants "
                      f"{prompt_state.get('recommended_duration', dur)}s, capped to 15s")
 
         out_path = clips_dir / f"{fid}.mp4"
-        gen_queue.put((idx, fid, image_path, video_prompt, dur, out_path))
+        gen_queue.put((idx, fid, image_path, video_prompt, dialogue_text, dur, out_path))
 
     def _gen_from_queue():
         """Pull refined frames from queue and generate clips."""
@@ -32512,9 +38736,9 @@ def phase_5_video(dry_run: bool, phase_timers: dict) -> None:
             if item is None:  # poison pill
                 gen_queue.task_done()
                 break
-            idx, fid, image_path, video_prompt, dur, out_path = item
+            idx, fid, image_path, video_prompt, dialogue_text, dur, out_path = item
             log(f"  [{idx}/{total}] {fid} ({dur}s) → generating clip")
-            result = _generate_video_clip(fid, image_path, video_prompt, dur, out_path, dry_run)
+            result = _generate_video_clip(fid, image_path, video_prompt, dur, out_path, dialogue_text, dry_run)
             done = 0
             generated_ok = 0
             generated_skipped = 0
@@ -32556,14 +38780,13 @@ def phase_5_video(dry_run: bool, phase_timers: dict) -> None:
 
     # Start generator workers — they consume from queue as items arrive
     gen_workers = []
-    for _ in range(VIDEO_CONCURRENCY):
+    for _ in range(VIDEO_GEN_CONCURRENCY):
         t = threading.Thread(target=_gen_from_queue, daemon=True)
         t.start()
         gen_workers.append(t)
 
     # Refine frames with concurrency — each pushes to gen_queue when done
-    REFINE_CONCURRENCY = 5
-    with ThreadPoolExecutor(max_workers=REFINE_CONCURRENCY) as refine_pool:
+    with ThreadPoolExecutor(max_workers=VIDEO_REFINE_CONCURRENCY) as refine_pool:
         refine_futures = [refine_pool.submit(_refine_and_enqueue, item)
                           for item in frame_items]
         for future in as_completed(refine_futures):
@@ -32993,7 +39216,7 @@ def parse_args() -> argparse.Namespace:
         "--model",
         type=str,
         default=None,
-        help="Override default model for all agents (e.g., claude-haiku-4-5-20251001)",
+        help="Override default model for all agents (e.g., grok-4-1-fast-reasoning)",
     )
     parser.add_argument(
         "--parallel-phase4",
@@ -33058,6 +39281,7 @@ def main() -> None:
 
     # Deploy shared conventions as CLAUDE.md into project dir (prompt caching)
     _deploy_shared_conventions(PROJECT_DIR)
+    _deploy_project_reporting_assets(PROJECT_DIR)
 
     # Ensure log directories exist
     PIPELINE_LOGS_DIR.mkdir(parents=True, exist_ok=True)
@@ -33101,6 +39325,26 @@ def main() -> None:
             details={"phase_number": n, "phase_name": PHASE_NAMES.get(n, str(n))},
         )
         try:
+            if only_phase is None and n in (1, 2):
+                reusable, issues = _phase_reuse_status(n, PROJECT_DIR)
+                if reusable:
+                    log_ok(f"Skipping phase {n} — existing outputs are intact and reusable")
+                    emit_event(
+                        PROJECT_DIR,
+                        event="phase_skipped",
+                        run_id=PIPELINE_RUN_ID,
+                        phase=phase_label,
+                        details={
+                            "phase_number": n,
+                            "phase_name": PHASE_NAMES.get(n, str(n)),
+                            "reason": "existing_outputs_reusable",
+                        },
+                    )
+                    return None
+                log_warn(
+                    f"Re-running phase {n} to heal incomplete artifacts: "
+                    + "; ".join(issues[:3])
+                )
             match n:
                 case 0: phase_0_verify(dry_run)
                 case 1: phase_1_narrative(dry_run, phase_timers)
@@ -33182,6 +39426,234 @@ if __name__ == "__main__":
     main()
 ```
 
+## `screenwire_contracts.py`
+
+```python
+"""Shared ScreenWire onboarding/runtime contracts."""
+
+from __future__ import annotations
+
+from copy import deepcopy
+from typing import Any
+
+
+CREATIVE_FREEDOM_CONTRACTS: dict[str, dict[str, str]] = {
+    "strict": {
+        "philosophy": "Change as little as possible to make it work.",
+        "fidelity": "98-100%",
+        "permission": (
+            "Only minimal technical fixes are allowed. Preserve source dialogue, blocking, props, "
+            "intent, and scene progression exactly."
+        ),
+        "failure_modes": (
+            "Helpful additions, paraphrase, or invented connective tissue can drift the work away "
+            "from the source. Prevent this by blocking any new text, new beats, or interpretive rewrite."
+        ),
+        "dialogue_policy": "Never add or alter dialogue. Word-for-word only. Zero improvisation.",
+    },
+    "balanced": {
+        "philosophy": "Follow the source closely with room for natural flow.",
+        "fidelity": "85-95%",
+        "permission": (
+            "Minor organic moments, natural pauses, slight framing tweaks, and delivery smoothing are "
+            "allowed, but the source meaning and intent must stay intact."
+        ),
+        "failure_modes": (
+            "Dialogue can drift into sounding more natural and quietly change meaning. Prevent this by "
+            "allowing only light delivery smoothing and forbidding new lines or new plot material."
+        ),
+        "dialogue_policy": (
+            "Minor re-phrasing for natural delivery only. No new lines. No added reactions. "
+            "Changes must preserve exact meaning and intent."
+        ),
+    },
+    "creative": {
+        "philosophy": "Keep the core story while allowing artistic reframes.",
+        "fidelity": "70-85%",
+        "permission": (
+            "Alternative angles, lighting, color, visual metaphor, and subtext emphasis are allowed. "
+            "Short reaction lines may be added when they reinforce existing subtext."
+        ),
+        "failure_modes": (
+            "Invented dialogue or new entities can quietly alter tone, voice, or plot direction. "
+            "Prevent this by limiting additions to short reaction lines and keeping all changes aligned "
+            "with existing subtext, character voice, and motivation."
+        ),
+        "dialogue_policy": (
+            "Short reaction lines and moderate re-phrasing are allowed only when they preserve meaning, "
+            "voice, and motivation. No new plot-advancing lines."
+        ),
+    },
+    "unbounded": {
+        "philosophy": "Start from a seed idea and fully expand into a complete story.",
+        "fidelity": "40-70%",
+        "permission": (
+            "Freely invent new information, characters, subplots, pacing, and connective tissue while "
+            "preserving the core emotional arc and final outcome."
+        ),
+        "failure_modes": (
+            "The story can balloon into a different arc or ending. Prevent this by locking the core "
+            "emotional arc and final outcome even while everything else can expand."
+        ),
+        "dialogue_policy": (
+            "Freely add, alter, or invent dialogue as long as it serves the core emotional arc and ending."
+        ),
+    },
+}
+
+DEFAULT_CREATIVE_FREEDOM = "balanced"
+DEFAULT_FRAME_BUDGET: int | None = None
+
+FRAME_BUDGET_PRESETS: dict[str, int] = {
+    "short": 20,
+    "short_film": 125,
+    "televised": 300,
+    "feature": 1250,
+}
+
+DEFAULT_DIALOGUE_WORKFLOW: dict = {
+    "enabled": True,
+    "version": "grok-4.2-recovery-universal",
+    "agents": [
+        {
+            "name": "extraction_recovery",
+            "promptFile": "agent_prompts/dialogue_extraction_recovery.md",
+            "runsOn": "skeleton_load",
+            "alwaysRun": True,
+        },
+        {
+            "name": "mapping_assignment",
+            "promptFile": "agent_prompts/dialogue_mapping_assignment.md",
+            "runsOn": "after_extraction",
+            "usesCreativeFreedomTier": True,
+        },
+        {
+            "name": "confirmation_validation",
+            "promptFile": "agent_prompts/dialogue_confirmation_validation.md",
+            "runsOn": "before_prompt_generation",
+            "enforcesCreativeFreedomTier": True,
+        },
+    ],
+    "recoveryPass": {
+        "forceUniversal": True,
+        "fallbackToContext": True,
+    },
+    "tierEnforcement": {
+        "strict": {
+            "addDialogue": False,
+            "alterDialogue": "none",
+            "reactionLines": False,
+            "mustPreserveMeaningAndVoice": True,
+        },
+        "balanced": {
+            "addDialogue": False,
+            "alterDialogue": "light",
+            "reactionLines": False,
+            "mustPreserveMeaningAndVoice": True,
+        },
+        "creative": {
+            "addDialogue": "short_reactions_only",
+            "alterDialogue": "moderate",
+            "reactionLines": True,
+            "mustPreserveMeaningAndVoice": True,
+        },
+        "unbounded": {
+            "addDialogue": "full_freedom",
+            "alterDialogue": "full_freedom",
+            "reactionLines": True,
+            "mustPreserveMeaningAndVoice": False,
+        },
+    },
+}
+
+
+def creative_freedom_contract(tier: str) -> dict[str, str]:
+    normalized = (tier or "").strip().lower()
+    return deepcopy(
+        CREATIVE_FREEDOM_CONTRACTS.get(normalized, CREATIVE_FREEDOM_CONTRACTS[DEFAULT_CREATIVE_FREEDOM])
+    )
+
+
+def default_dialogue_workflow() -> dict:
+    return deepcopy(DEFAULT_DIALOGUE_WORKFLOW)
+
+
+def normalize_frame_budget(value: Any) -> int | None:
+    """Normalize onboarding/runtime frame budget values.
+
+    Returns None for ``auto`` or empty values.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise ValueError("frameBudget cannot be boolean")
+    if isinstance(value, int):
+        if value <= 0:
+            raise ValueError("frameBudget must be a positive integer or 'auto'")
+        return value
+
+    raw = str(value).strip().lower()
+    if not raw or raw == "auto":
+        return None
+    if raw in FRAME_BUDGET_PRESETS:
+        return FRAME_BUDGET_PRESETS[raw]
+    if raw.isdigit():
+        budget = int(raw)
+        if budget <= 0:
+            raise ValueError("frameBudget must be a positive integer or 'auto'")
+        return budget
+    raise ValueError(f"Invalid frameBudget value: {value!r}")
+
+
+def derive_output_size_from_frame_budget(value: Any) -> str:
+    """Map a normalized frame budget to an internal size label."""
+    budget = normalize_frame_budget(value)
+    if budget is None:
+        return "auto"
+    if budget <= 20:
+        return "short"
+    if budget <= 125:
+        return "short_film"
+    if budget <= 300:
+        return "televised"
+    return "feature"
+
+
+def derive_output_size_label_from_frame_budget(value: Any) -> str:
+    budget = normalize_frame_budget(value)
+    if budget is None:
+        return "Auto"
+    return f"{budget} Frames"
+
+
+def derive_frame_range_from_budget(value: Any) -> list[int]:
+    budget = normalize_frame_budget(value)
+    if budget is None:
+        return []
+    return [budget, budget]
+
+
+def minimum_scene_count_for_frame_budget(value: Any) -> int:
+    """Heuristic-only guardrail for Phase 1 quality checks.
+
+    This is intentionally loose. Scene count should never be a user-authored
+    threshold anymore; it is only a sanity check against trivially incomplete
+    outputs.
+    """
+    budget = normalize_frame_budget(value)
+    if budget is None:
+        return 1
+    if budget <= 20:
+        return 1
+    if budget <= 60:
+        return 2
+    if budget <= 150:
+        return 4
+    if budget <= 300:
+        return 6
+    return 10
+```
+
 ## `server.py`
 
 ```python
@@ -33222,6 +39694,7 @@ from tenacity import (
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
+from llm.xai_client import DEFAULT_REASONING_MODEL
 from telemetry import activate_run_context, current_phase, current_run_id, emit_event
 
 from handlers import (
@@ -33253,6 +39726,7 @@ if not _project_dir_env:
 PROJECT_DIR = Path(_project_dir_env)
 
 REPLICATE_API_TOKEN = [REDACTED]
+XAI_API_KEY = [REDACTED]
 ENABLE_MANIFEST_QUEUE = os.getenv("SCREENWIRE_ENABLE_MANIFEST_QUEUE", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
@@ -33534,7 +40008,7 @@ class _ImageTagHandler(FileSystemEventHandler):
 # ---------------------------------------------------------------------------
 
 class AgentProcessManager:
-    """Spawn, message, and kill Claude CLI agent subprocesses."""
+    """Spawn, message, and kill local Grok-backed agent subprocesses."""
 
     def __init__(self) -> None:
         self.registry: dict[str, asyncio.subprocess.Process] = {}
@@ -33544,14 +40018,20 @@ class AgentProcessManager:
         agent_id: str,
         system_prompt: str,
         cwd: str,
-        model: str = "claude-opus-4-6",
+        model: str = DEFAULT_REASONING_MODEL,
     ) -> asyncio.subprocess.Process:
+        env = dict(os.environ)
+        existing_pythonpath = env.get("PYTHONPATH", "")
+        repo_root = str(APP_DIR)
+        env["PYTHONPATH"] = repo_root if not existing_pythonpath else f"{repo_root}{os.pathsep}{existing_pythonpath}"
         cmd = [
-            "claude",
-            "-p", system_prompt,
+            sys.executable,
+            "-m", "llm.agent_runner",
+            "--system-prompt", system_prompt,
             "--dangerously-skip-permissions",
             "--output-format", "stream-json",
             "--model", model,
+            "--task-hint", agent_id,
         ]
         proc = await asyncio.create_subprocess_exec(
             *cmd,
@@ -33559,6 +40039,7 @@ class AgentProcessManager:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=cwd,
+            env=env,
         )
         self.registry[agent_id] = proc
         log("AgentProcessManager", f"Spawned agent '{agent_id}' (pid={proc.pid})")
@@ -33699,7 +40180,7 @@ class SpawnAgentRequest(BaseModel):
     agent_id: str
     system_prompt: str
     cwd: str
-    model: str = "claude-opus-4-6"
+    model: str = DEFAULT_REASONING_MODEL
 
 
 class SendDirectiveRequest(BaseModel):
@@ -33859,6 +40340,7 @@ async def generate_image(req: GenerateImageRequest):
     handler = get_handler(
         "cast_image",
         replicate_token=REPLICATE_API_TOKEN,
+        xai_key=XAI_API_KEY,
         http_client=http_client,
     )
     try:
@@ -34088,6 +40570,7 @@ class GenerateFrameRequest(BaseModel):
     frame_id: Optional[str] = ""  # handler: identifies frame for output naming and ledger
     run_id: Optional[str] = None
     phase: str = ""
+    sensitive_context: bool = False
 
 
 @app.post("/internal/generate-frame")
@@ -34129,6 +40612,7 @@ async def generate_frame(req: GenerateFrameRequest):
     handler = get_handler(
         "frame",
         replicate_token=REPLICATE_API_TOKEN,
+        xai_key=XAI_API_KEY,
         http_client=http_client,
     )
     try:
@@ -34143,6 +40627,7 @@ async def generate_frame(req: GenerateFrameRequest):
                 output_format=req.output_format if req.output_format in ("jpg", "png") else "png",
                 run_id=req.run_id,
                 phase=req.phase,
+                sensitive_context=req.sensitive_context,
             ))
     finally:
         await handler.close()
@@ -34362,6 +40847,7 @@ async def generate_video(req: GenerateVideoRequest):
     handler = get_handler(
         "video_clip",
         replicate_token=REPLICATE_API_TOKEN,
+        xai_key=XAI_API_KEY,
         http_client=http_client,
     )
     try:
@@ -34391,6 +40877,12 @@ async def generate_video(req: GenerateVideoRequest):
             details={"error": result.error, "model": result.model_used},
         )
         error_detail = result.error_detail or {"error": result.error, "failure_type": "MODEL_ERROR"}
+        if isinstance(error_detail, dict):
+            error_detail = dict(error_detail)
+            if result.error:
+                error_detail.setdefault("error", result.error)
+            if result.model_used:
+                error_detail.setdefault("model", result.model_used)
         raise HTTPException(status_code=502, detail=error_detail)
 
     # Move handler output to the requested location if different
@@ -34430,6 +40922,7 @@ class GenerateLocationGridRequest(BaseModel):
     media_style: str = ""  # Optional style instructions for prompt
     run_id: Optional[str] = None
     phase: str = ""
+    sensitive_context: bool = False
 
 
 @app.post("/internal/generate-location-grid")
@@ -34440,6 +40933,7 @@ async def generate_location_grid(req: GenerateLocationGridRequest):
     handler = get_handler(
         "location_grid",
         replicate_token=REPLICATE_API_TOKEN,
+        xai_key=XAI_API_KEY,
         http_client=http_client,
     )
     try:
@@ -34454,6 +40948,7 @@ async def generate_location_grid(req: GenerateLocationGridRequest):
                 output_format=req.output_format,
                 run_id=req.run_id,
                 phase=req.phase,
+                sensitive_context=req.sensitive_context,
             ))
     finally:
         await handler.close()
@@ -34511,6 +41006,7 @@ class GenerateStoryboardRequest(BaseModel):
     output_format: str = "png"
     run_id: Optional[str] = None
     phase: str = ""
+    sensitive_context: bool = False
 
 
 @app.post("/internal/generate-storyboard")
@@ -34530,6 +41026,7 @@ async def generate_storyboard(req: GenerateStoryboardRequest):
     handler = get_handler(
         "storyboard",
         replicate_token=REPLICATE_API_TOKEN,
+        xai_key=XAI_API_KEY,
         http_client=http_client,
     )
     try:
@@ -34545,6 +41042,7 @@ async def generate_storyboard(req: GenerateStoryboardRequest):
                 output_format=req.output_format,
                 run_id=req.run_id,
                 phase=req.phase,
+                sensitive_context=req.sensitive_context,
             ))
     finally:
         await handler.close()
@@ -36021,6 +42519,12 @@ from pathlib import Path
 # Add project root to path for graph imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from graph.store import GraphStore
+from screenwire_contracts import (
+    derive_frame_range_from_budget,
+    derive_output_size_from_frame_budget,
+    derive_output_size_label_from_frame_budget,
+    normalize_frame_budget,
+)
 
 
 def main():
@@ -36044,15 +42548,26 @@ def main():
 
     if onboarding_path.exists():
         cfg = json.loads(onboarding_path.read_text(encoding="utf-8"))
+        frame_budget = normalize_frame_budget(
+            cfg.get("frameBudget", cfg.get("frame_budget"))
+        )
         project_kwargs.update({
             "title": cfg.get("projectName", args.title),
             "pipeline": cfg.get("pipeline", "story_upload"),
-            "stickiness_level": cfg.get("stickinessLevel", 3),
-            "stickiness_permission": cfg.get("stickinessPermission", ""),
-            "output_size": cfg.get("outputSize", "short"),
-            "output_size_label": cfg.get("outputSizeLabel", ""),
-            "frame_range": cfg.get("frameRange", [10, 20]),
-            "scene_range": cfg.get("sceneRange", [1, 3]),
+            "creative_freedom": cfg.get("creativeFreedom", "balanced"),
+            "creative_freedom_permission": cfg.get("creativeFreedomPermission", ""),
+            "creative_freedom_failure_modes": cfg.get("creativeFreedomFailureModes", ""),
+            "dialogue_policy": cfg.get("dialoguePolicy", ""),
+            "frame_budget": frame_budget,
+            "output_size": derive_output_size_from_frame_budget(
+                cfg.get("frameBudget", cfg.get("outputSize", "auto"))
+            ),
+            "output_size_label": derive_output_size_label_from_frame_budget(
+                cfg.get("frameBudget", cfg.get("outputSizeLabel", "auto"))
+            ),
+            "frame_range": derive_frame_range_from_budget(
+                cfg.get("frameBudget", cfg.get("frameRange"))
+            ),
             "media_style": cfg.get("mediaStyle", "live_clear"),
             "media_style_prefix": cfg.get("mediaStylePrefix", ""),
             "aspect_ratio": cfg.get("aspectRatio", "16:9"),
@@ -36065,8 +42580,9 @@ def main():
         print(f"  Seeded from onboarding_config.json:")
         print(f"    media_style: {project_kwargs['media_style']}")
         print(f"    media_style_prefix: {project_kwargs['media_style_prefix'][:60]}...")
+        print(f"    frame_budget: {project_kwargs['frame_budget'] if project_kwargs['frame_budget'] is not None else 'auto'}")
         print(f"    output_size: {project_kwargs['output_size']}")
-        print(f"    stickiness: {project_kwargs['stickiness_level']}")
+        print(f"    creative_freedom: {project_kwargs['creative_freedom']}")
     else:
         print(f"  WARNING: No onboarding_config.json at {onboarding_path}")
         print(f"  Graph initialized with defaults — media_style will need manual setting")
@@ -36627,6 +43143,23 @@ if __name__ == "__main__":
     main()
 ```
 
+## `skills/graph_validate_dialogue`
+
+```
+#!/usr/bin/env python3
+"""graph_validate_dialogue — Validate dialogue mapping and tier compliance."""
+
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from graph.dialogue_validator import main
+
+
+if __name__ == "__main__":
+    main()
+```
+
 ## `skills/graph_validate_video_direction`
 
 ```
@@ -36678,6 +43211,253 @@ DURATION_RANGES_BY_FAMILY = {
 
 REQUIRED_DIRECTING_FIELDS = ("dramatic_purpose", "beat_turn", "camera_motivation")
 REQUIRED_COMPOSITION_FIELDS = ("shot", "angle", "movement")
+HIGH_TENSION_MAX_POSE_RATIO = 0.40
+
+
+def _is_high_tension_scene(scene) -> bool:
+    title = (getattr(scene, "title", None) or "").lower()
+    arc = (getattr(scene, "emotional_arc", None) or "").lower()
+    pacing = (getattr(scene, "pacing", None) or "").lower()
+    mood = " ".join(getattr(scene, "mood_keywords", []) or []).lower()
+    tension_score = getattr(scene, "tension_score", None) or 0.0
+    if tension_score >= 0.65:
+        return True
+    combined = " ".join(part for part in (title, arc, pacing, mood) if part)
+    return any(
+        token in combined
+        for token in ("climax", "reveal", "ritual", "panic", "fight", "confront", "upgrade", "tense")
+    )
+
+
+def _primary_pose_signature(graph, frame) -> str:
+    visible_cast = [
+        cs for cs in get_frame_cast_state_models(graph, frame.frame_id)
+        if getattr(getattr(cs, "frame_role", None), "value", getattr(cs, "frame_role", None)) != "referenced"
+    ]
+    subject_states = [
+        cs for cs in visible_cast
+        if getattr(getattr(cs, "frame_role", None), "value", getattr(cs, "frame_role", None)) == "subject"
+    ]
+    primary = subject_states[0] if subject_states else (visible_cast[0] if visible_cast else None)
+    if primary is None:
+        return "no_subject"
+    posture = getattr(getattr(primary, "posture", None), "value", getattr(primary, "posture", None)) or "unset_posture"
+    facing = getattr(primary, "facing_direction", None) or "unset_facing"
+    return f"{posture}|{facing}"
+
+
+def _display_cast_name(graph, cast_id: str) -> str:
+    node = graph.cast.get(cast_id)
+    if node and getattr(node, "name", None):
+        return str(node.name)
+    return cast_id.replace("cast_", "").replace("_", " ").title()
+
+
+def _frame_role_value(state) -> str:
+    return getattr(getattr(state, "frame_role", None), "value", getattr(state, "frame_role", None)) or ""
+
+
+def _primary_visible_cast_state(graph, frame_id: str):
+    visible_cast = [
+        cs for cs in get_frame_cast_state_models(graph, frame_id)
+        if _frame_role_value(cs) != "referenced"
+    ]
+    subject_states = [cs for cs in visible_cast if _frame_role_value(cs) == "subject"]
+    return subject_states[0] if subject_states else (visible_cast[0] if visible_cast else None)
+
+
+def _infer_power_dynamic(graph, visible_cast: list) -> str:
+    subject_states = []
+    non_subject_states = []
+    for cs in visible_cast:
+        role = getattr(getattr(cs, "frame_role", None), "value", getattr(cs, "frame_role", None))
+        if role == "subject":
+            subject_states.append(cs)
+        else:
+            non_subject_states.append(cs)
+
+    subject_names = [_display_cast_name(graph, cs.cast_id) for cs in subject_states]
+    other_names = [_display_cast_name(graph, cs.cast_id) for cs in non_subject_states]
+
+    if len(subject_names) == 1 and other_names:
+        others = ", ".join(other_names)
+        return f"{subject_names[0]} holds the frame while {others} respond within the exchange."
+
+    if len(subject_names) >= 2:
+        if len(subject_names) == 2:
+            return f"{subject_names[0]} and {subject_names[1]} share a balanced exchange with no clear dominance."
+        leads = ", ".join(subject_names[:3])
+        return f"Power is distributed across the group as attention shifts among {leads}."
+
+    names = [_display_cast_name(graph, cs.cast_id) for cs in visible_cast]
+    if len(names) == 2:
+        return f"{names[0]} and {names[1]} occupy the frame as equals, holding a balanced dynamic."
+    leads = ", ".join(names[:3])
+    return f"The ensemble moment is shared across {leads}, with no single character dominating."
+
+
+def _ordered_unique(values: list[str]) -> list[str]:
+    seen = set()
+    result = []
+    for value in values:
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return result
+
+
+def _facing_alternatives(primary_state, occurrence_index: int) -> list[str]:
+    current = getattr(primary_state, "facing_direction", None) or "toward_camera"
+    screen_position = getattr(primary_state, "screen_position", None) or ""
+    position_hint: list[str]
+    if "left" in screen_position:
+        position_hint = ["profile_right", "three_quarter", "toward_camera", "away"]
+    elif "right" in screen_position:
+        position_hint = ["profile_left", "three_quarter", "toward_camera", "away"]
+    else:
+        position_hint = ["three_quarter", "profile_left", "profile_right", "toward_camera", "away"]
+
+    current_hint = {
+        "toward_camera": ["three_quarter", "profile_left", "profile_right", "away"],
+        "three_quarter": ["profile_left", "profile_right", "toward_camera", "away"],
+        "profile_left": ["three_quarter", "toward_camera", "away"],
+        "profile_right": ["three_quarter", "toward_camera", "away"],
+        "away": ["three_quarter", "profile_left", "profile_right", "toward_camera"],
+    }.get(current, ["three_quarter", "profile_left", "profile_right", "toward_camera", "away"])
+
+    ordered = _ordered_unique(position_hint + current_hint)
+    if not ordered:
+        return ["three_quarter"]
+    rotate = occurrence_index % len(ordered)
+    return ordered[rotate:] + ordered[:rotate]
+
+
+def _angle_alternative(current_angle: str | None, occurrence_index: int) -> str:
+    current = (current_angle or "eye_level").strip()
+    sequence = {
+        "eye_level": ["low", "high"],
+        "low": ["eye_level", "high"],
+        "high": ["eye_level", "low"],
+        "dutch": ["eye_level", "low"],
+    }.get(current, ["low", "high", "eye_level"])
+    return sequence[occurrence_index % len(sequence)]
+
+
+def _movement_alternative(frame, occurrence_index: int) -> str:
+    current = (frame.composition.movement or "static").strip().lower()
+    if current in {"tracking", "lateral_track"}:
+        return "tracking"
+    if current in {"subtle_drift", "slow_push"}:
+        return "slow_push" if current == "subtle_drift" else "subtle_drift"
+    if (frame.composition.shot or "").strip() in {"close_up", "medium_close_up"}:
+        return "slow_push" if occurrence_index % 2 else "subtle_drift"
+    return "subtle_drift"
+
+
+def _infer_reaction_target(graph, frame) -> str | None:
+    prev_id = getattr(frame, "previous_frame_id", None)
+    if not prev_id:
+        return None
+    prev = graph.frames.get(prev_id)
+    if not prev:
+        return None
+    for did in reversed(prev.dialogue_ids or []):
+        dnode = graph.dialogue.get(did)
+        if not dnode:
+            continue
+        line = (getattr(dnode, "raw_line", None) or getattr(dnode, "line", None) or "").strip()
+        if line:
+            speaker = (getattr(dnode, "speaker", None) or "").strip()
+            return f"{speaker}: {line}" if speaker else line
+    if prev.action_summary:
+        return prev.action_summary.strip()
+    return None
+
+
+def _infer_movement_path(graph, frame, primary_state) -> str | None:
+    movement = (frame.composition.movement or "").strip().lower()
+    actor = _display_cast_name(graph, primary_state.cast_id) if primary_state else "subject"
+    screen_position = (getattr(primary_state, "screen_position", None) or "frame_center").replace("_", " ")
+    if movement == "tracking":
+        return f"camera tracks {actor} as they carry momentum through {screen_position}"
+    if movement in {"subtle_drift", "slow_push"}:
+        return f"camera eases toward {actor} from the room into {screen_position}"
+    return None
+
+
+def _auto_diversify_high_tension_scene(graph, scene_id: str, frames: list) -> int:
+    pose_counts: dict[str, int] = {}
+    frame_signatures: list[tuple] = []
+    for frame in frames:
+        primary = _primary_visible_cast_state(graph, frame.frame_id)
+        pose_signature = _primary_pose_signature(graph, frame)
+        pose_counts[pose_signature] = pose_counts.get(pose_signature, 0) + 1
+        frame_signatures.append((frame, primary, pose_signature))
+
+    if not pose_counts:
+        return 0
+
+    dominant_pose, dominant_pose_count = max(pose_counts.items(), key=lambda item: item[1])
+    if dominant_pose in {"no_subject", "unset_posture|unset_facing"}:
+        return 0
+
+    total_frames = len(frames)
+    if total_frames <= 0:
+        return 0
+    if dominant_pose_count / total_frames <= HIGH_TENSION_MAX_POSE_RATIO:
+        return 0
+
+    allowed_occurrences = max(1, int(total_frames * HIGH_TENSION_MAX_POSE_RATIO))
+    dominant_occurrence = 0
+    fixes = 0
+
+    for frame, primary, pose_signature in frame_signatures:
+        if primary is None or pose_signature != dominant_pose:
+            continue
+        dominant_occurrence += 1
+        if dominant_occurrence <= allowed_occurrences:
+            continue
+
+        changed = False
+
+        for candidate in _facing_alternatives(primary, dominant_occurrence - allowed_occurrences - 1):
+            if candidate != getattr(primary, "facing_direction", None):
+                primary.facing_direction = candidate
+                changed = True
+                break
+
+        posture_value = getattr(getattr(primary, "posture", None), "value", getattr(primary, "posture", None))
+        if posture_value == "sitting":
+            if frame.visual_flow_element == "reaction":
+                primary.posture = "hunched" if dominant_occurrence % 2 else "leaning"
+                changed = True
+
+        if (frame.composition.angle or "").strip() == "eye_level":
+            frame.composition.angle = _angle_alternative(frame.composition.angle, dominant_occurrence)
+            changed = True
+
+        if (frame.composition.movement or "").strip().lower() in {"", "static"}:
+            frame.composition.movement = _movement_alternative(frame, dominant_occurrence)
+            changed = True
+
+        if frame.visual_flow_element == "reaction" and not getattr(frame.directing, "reaction_target", None):
+            inferred_target = _infer_reaction_target(graph, frame)
+            if inferred_target:
+                frame.directing.reaction_target = inferred_target
+                changed = True
+
+        if frame.composition.movement and (frame.composition.movement or "").strip().lower() not in {"", "static"}:
+            if not getattr(frame.directing, "movement_path", None):
+                inferred_path = _infer_movement_path(graph, frame, primary)
+                if inferred_path:
+                    frame.directing.movement_path = inferred_path
+                    changed = True
+
+        if changed:
+            fixes += 1
+
+    return fixes
 
 
 def main():
@@ -36693,7 +43473,10 @@ def main():
     errors = []
     warnings = []
     fixed = 0
+    duration_fixes = 0
+    power_dynamic_fixes = 0
     splits = 0
+    scene_diversity_fixes = 0
     total = len(graph.frame_order)
     scene_sequences = {}
     overlong_dialogue_ids = set()
@@ -36728,6 +43511,7 @@ def main():
             if args.fix:
                 frame.suggested_duration = minimum_dialogue_duration or DURATION_BY_CINEMATIC_FAMILY.get(family, 5)
                 fixed += 1
+                duration_fixes += 1
             else:
                 errors.append(f"{frame_id}: suggested_duration is missing")
         elif frame.suggested_duration < MIN_VIDEO_DURATION_SECONDS:
@@ -36738,6 +43522,7 @@ def main():
             if args.fix:
                 frame.suggested_duration = minimum_dialogue_duration
                 fixed += 1
+                duration_fixes += 1
             else:
                 errors.append(
                     f"{frame_id}: suggested_duration={frame.suggested_duration} too short for dialogue "
@@ -36868,9 +43653,20 @@ def main():
         if visible_cast and not getattr(directing, "pov_owner", None):
             errors.append(f"{frame_id}: directing.pov_owner is missing for character-driven frame")
         if len(visible_cast) >= 2 and not getattr(directing, "power_dynamic", None):
-            errors.append(f"{frame_id}: directing.power_dynamic is missing for multi-character frame")
+            if args.fix:
+                directing.power_dynamic = _infer_power_dynamic(graph, visible_cast)
+                fixed += 1
+                power_dynamic_fixes += 1
+            else:
+                errors.append(f"{frame_id}: directing.power_dynamic is missing for multi-character frame")
         if frame.visual_flow_element == "reaction" and not getattr(directing, "reaction_target", None):
-            warnings.append(f"{frame_id}: reaction frame missing directing.reaction_target")
+            if args.fix:
+                inferred_target = _infer_reaction_target(graph, frame)
+                if inferred_target:
+                    directing.reaction_target = inferred_target
+                    fixed += 1
+            else:
+                warnings.append(f"{frame_id}: reaction frame missing directing.reaction_target")
 
         comp = frame.composition
         for field_name in REQUIRED_COMPOSITION_FIELDS:
@@ -36879,7 +43675,13 @@ def main():
                 errors.append(f"{frame_id}: composition.{field_name} is missing")
         if comp.movement and comp.movement not in ("static", "Static"):
             if not getattr(directing, "movement_path", None):
-                warnings.append(f"{frame_id}: moving shot missing directing.movement_path")
+                if args.fix:
+                    inferred_path = _infer_movement_path(graph, frame, _primary_visible_cast_state(graph, frame_id))
+                    if inferred_path:
+                        directing.movement_path = inferred_path
+                        fixed += 1
+                else:
+                    warnings.append(f"{frame_id}: moving shot missing directing.movement_path")
 
         if family in ("E", "T"):
             has_bg_life = bool(getattr(directing, "background_life", None))
@@ -36890,17 +43692,31 @@ def main():
 
     # Scene-level monotony checks
     for scene_id, frames in scene_sequences.items():
+        scene = graph.scenes.get(scene_id)
+        high_tension = _is_high_tension_scene(scene) if scene else False
+        if args.fix and high_tension:
+            scene_diversity_fixes += _auto_diversify_high_tension_scene(graph, scene_id, frames)
         movement_streak = 1
         angle_streak = 1
         facing_streak = 1
         prev_movement = None
         prev_angle = None
         prev_facing = None
+        pose_counts = {}
+        facing_counts = {}
+        angle_counts = {}
+        location_counts = {}
 
         for frame in frames:
             movement = (frame.composition.movement or "unset").strip()
             angle = (frame.composition.angle or "unset").strip()
             facing = (frame.background.camera_facing or "unset").strip()
+            pose_signature = _primary_pose_signature(graph, frame)
+            location_id = (frame.location_id or "unset").strip()
+            pose_counts[pose_signature] = pose_counts.get(pose_signature, 0) + 1
+            facing_counts[facing] = facing_counts.get(facing, 0) + 1
+            angle_counts[angle] = angle_counts.get(angle, 0) + 1
+            location_counts[location_id] = location_counts.get(location_id, 0) + 1
 
             if prev_movement == movement:
                 movement_streak += 1
@@ -36933,11 +43749,58 @@ def main():
                     f"{scene_id}: {facing_streak} consecutive frames share camera_facing='{facing}' ending at {frame.frame_id}"
                 )
 
+        if frames:
+            total_frames = len(frames)
+            dominant_pose, dominant_pose_count = max(pose_counts.items(), key=lambda item: item[1])
+            dominant_facing, dominant_facing_count = max(facing_counts.items(), key=lambda item: item[1])
+            dominant_angle, dominant_angle_count = max(angle_counts.items(), key=lambda item: item[1])
+            dominant_location, dominant_location_count = max(location_counts.items(), key=lambda item: item[1])
+
+            if high_tension and dominant_pose not in {"no_subject", "unset_posture|unset_facing"}:
+                pose_ratio = dominant_pose_count / total_frames
+                if pose_ratio > HIGH_TENSION_MAX_POSE_RATIO:
+                    errors.append(
+                        f"{scene_id}: primary pose signature '{dominant_pose}' reused in "
+                        f"{dominant_pose_count}/{total_frames} frames ({pose_ratio:.0%})"
+                    )
+
+            if high_tension and total_frames >= 10:
+                location_ratio = dominant_location_count / total_frames
+                if location_ratio > 0.85 and len(location_counts) < 2 and len(facing_counts) < 2:
+                    warnings.append(
+                        f"{scene_id}: {dominant_location_count}/{total_frames} frames stay in location "
+                        f"'{dominant_location}' with no variant location relief"
+                    )
+
+                if len(facing_counts) < 2 or len(angle_counts) < 2:
+                    warnings.append(
+                        f"{scene_id}: visual rhythm is thin across {total_frames} frames "
+                        f"(camera facings={len(facing_counts)}, angles={len(angle_counts)})"
+                    )
+
+                facing_ratio = dominant_facing_count / total_frames
+                angle_ratio = dominant_angle_count / total_frames
+                if facing_ratio > 0.70:
+                    warnings.append(
+                        f"{scene_id}: camera_facing '{dominant_facing}' dominates "
+                        f"{dominant_facing_count}/{total_frames} frames ({facing_ratio:.0%})"
+                    )
+                if angle_ratio > 0.70:
+                    warnings.append(
+                        f"{scene_id}: angle '{dominant_angle}' dominates "
+                        f"{dominant_angle_count}/{total_frames} frames ({angle_ratio:.0%})"
+                    )
+
     # Save fixes if any
-    if args.fix and (fixed > 0 or splits > 0):
+    total_fix_count = fixed + scene_diversity_fixes
+    if args.fix and (total_fix_count > 0 or splits > 0):
         store.save(graph)
-        if fixed > 0:
-            print(f"FIXED: Auto-set suggested_duration on {fixed} frames using formula heuristics")
+        if duration_fixes > 0:
+            print(f"FIXED: Auto-set suggested_duration on {duration_fixes} frames using formula heuristics")
+        if power_dynamic_fixes > 0:
+            print(f"FIXED: Auto-filled directing.power_dynamic on {power_dynamic_fixes} multi-character frames")
+        if scene_diversity_fixes > 0:
+            print(f"FIXED: Auto-diversified {scene_diversity_fixes} high-tension frame(s) to break pose repetition")
         if splits > 0:
             print(f"FIXED: Auto-spanned {splits} overlong dialogue node(s) across multiple frames")
 
@@ -37508,6 +44371,7 @@ def main():
     parser.add_argument("--storyboard-image", default="", help="Path to storyboard cell image (PRIMARY composition reference)")
     parser.add_argument("--run-id", default=os.environ.get("SCREENWIRE_RUN_ID", ""), help="Pipeline run ID for telemetry correlation")
     parser.add_argument("--phase", default=os.environ.get("SCREENWIRE_PHASE", ""), help="Pipeline phase label for telemetry correlation")
+    parser.add_argument("--sensitive-context", action="store_true", help="Allow last-resort Seedream rescue with safety disabled")
     args = parser.parse_args()
 
     project_dir = os.environ.get("PROJECT_DIR", PROJECT_DIR_DEFAULT)
@@ -37546,6 +44410,7 @@ def main():
         "frame_id": args.frame_id or None,
         "run_id": args.run_id or None,
         "phase": args.phase,
+        "sensitive_context": args.sensitive_context,
     }
     if storyboard_image:
         body["storyboard_image"] = storyboard_image
@@ -37553,7 +44418,11 @@ def main():
         body["seed"] = args.seed
 
     try:
-        resp = httpx.post("http://localhost:8000/internal/generate-frame", json=body, timeout=180)
+        resp = httpx.post(
+            "http://localhost:8000/internal/generate-frame",
+            json=body,
+            timeout=httpx.Timeout(900.0, connect=30.0),
+        )
         if resp.status_code == 502:
             _handle_prediction_failure(resp, args.prompt, out_abs)
             return
@@ -37734,12 +44603,14 @@ import httpx
 
 
 PROJECT_DIR_DEFAULT = os.getcwd()
+HTTP_TIMEOUT_S = float(os.environ.get("SCREENWIRE_VIDEO_HTTP_TIMEOUT", "1800"))
 
 
 def main():
     parser = argparse.ArgumentParser(description="Generate a video via the ScreenWire internal API.")
     parser.add_argument("--image", default=None, help="Input image path (relative or absolute)")
     parser.add_argument("--prompt", required=True, help="Video generation prompt")
+    parser.add_argument("--dialogue-text", default="", help="Optional dialogue prefix for lip-sync")
     parser.add_argument("--out", required=True, help="Output file path (relative or absolute)")
     parser.add_argument("--frame-id", default="", help="Canonical frame ID for telemetry and output tracking")
     parser.add_argument("--duration", type=int, default=5, help="Duration in seconds (2-15, default: 5)")
@@ -37757,6 +44628,7 @@ def main():
 
     body = {
         "prompt": args.prompt,
+        "dialogue_text": args.dialogue_text or None,
         "output_path": out_abs,
         "duration": min(max(args.duration, 2), 15),
         "frame_id": args.frame_id or None,
@@ -37768,11 +44640,21 @@ def main():
         body["image_path"] = resolve(args.image)
 
     try:
-        resp = httpx.post("http://localhost:8000/internal/generate-video", json=body, timeout=300)
+        resp = httpx.post(
+            "http://localhost:8000/internal/generate-video",
+            json=body,
+            timeout=HTTP_TIMEOUT_S,
+        )
         resp.raise_for_status()
         data = resp.json()
     except httpx.HTTPError as e:
         print(f"ERROR: HTTP request failed: {e}")
+        response = getattr(e, "response", None)
+        if response is not None:
+            try:
+                print(response.text)
+            except Exception:
+                pass
         sys.exit(1)
     except Exception as e:
         print(f"ERROR: {e}")
@@ -38721,6 +45603,7 @@ if str(REPO_ROOT) not in sys.path:
 from __future__ import annotations
 
 import asyncio
+import base64
 import importlib
 import json
 import subprocess
@@ -38728,22 +45611,42 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import httpx
+from PIL import Image
+import pytest
 import graph.api
+import graph.cc_parser
 import graph.continuity_validator
+import graph.dialogue_validator
+import graph.prompt_pair_validator
 import graph.store
-from graph.api import get_frame_context
+from handlers.location_grid import build_grid_prompt
+from handlers.frame import FrameHandler
+from handlers.video_clip import VideoClipHandler
+from handlers.reference_pack import build_reference_pack
+from handlers.base import _is_retryable_http_error, adapt_input_for_model, classify_replicate_error
+from handlers.models import FrameInput, VideoClipInput
+from graph.api import build_shot_packet, build_storyboard_grids, get_frame_cast_state_models, get_frame_context
+from graph.cc_parser import extract_cast_tags, parse_cc_output, parse_creative_output, parse_skeleton
 from graph.continuity_validator import validate_continuity
+from graph.dialogue_validator import validate_dialogue_project
 from graph.frame_prompt_refiner import refine_video_prompt
+from graph.frame_enricher import apply_frame_enrichment
 from graph.materializer import materialize_manifest
-from graph.reference_collector import ReferenceImageCollector
+from graph.prompt_pair_validator import PromptPairCategory, PromptPairValidator
+from graph.reference_collector import ReferenceImageCollector, cast_bible_snapshot_for_frame
+from graph.schema import CastFrameRole, CastFrameState, CastIdentity, CastNode, CastVoice, FrameNode, NarrativeRole, PoseState, Posture, ProjectNode, Provenance, SceneNode, TimeOfDay
 from graph.store import GraphStore
 import run_pipeline
 from run_pipeline import (
+    _frame_prompt_requires_sensitive_context,
+    _agent_prompt_cache_key,
     _run_phase_2_postprocessing,
     _resolve_regen_image_size,
     phase_5_video,
     quality_gate_phase_1,
     quality_gate_phase_2,
+    quality_gate_phase_4,
     quality_gate_phase_5,
 )
 from tests.test_pipeline_smoke_e2e import build_live_smoke_graph
@@ -38756,6 +45659,10 @@ def _write_json(path: Path, data: dict) -> None:
 
 def test_materialize_manifest_preserves_runtime_frame_fields(tmp_path: Path) -> None:
     graph = build_live_smoke_graph(tmp_path)
+    graph.project.creative_freedom = "creative"
+    graph.project.creative_freedom_permission = "Permission sentence."
+    graph.project.creative_freedom_failure_modes = "Failure mode sentence."
+    graph.project.dialogue_policy = "Dialogue policy sentence."
     manifest_path = tmp_path / "project_manifest.json"
     _write_json(
         manifest_path,
@@ -38785,6 +45692,154 @@ def test_materialize_manifest_preserves_runtime_frame_fields(tmp_path: Path) -> 
     assert manifest["status"] == "phase_4_ready"
     assert manifest["phases"]["phase_4"]["status"] == "ready"
     assert manifest["castBible"]["characterCount"] == 1
+    assert manifest["creativeFreedom"] == "creative"
+    assert manifest["creativeFreedomPermission"] == "Permission sentence."
+    assert manifest["creativeFreedomFailureModes"] == "Failure mode sentence."
+    assert manifest["dialoguePolicy"] == "Dialogue policy sentence."
+    assert "stickinessLevel" not in manifest
+
+
+def test_build_context_seed_surfaces_creative_freedom_and_dialogue_workflow(tmp_path: Path) -> None:
+    _write_json(
+        tmp_path / "project_manifest.json",
+        {"projectId": "sw_test", "projectName": "Test"},
+    )
+    _write_json(
+        tmp_path / "source_files" / "onboarding_config.json",
+        {
+            "projectName": "Test",
+            "projectId": "sw_test",
+            "creativeFreedom": "creative",
+            "creativeFreedomPermission": "Permission sentence.",
+            "creativeFreedomFailureModes": "Failure mode sentence.",
+            "dialoguePolicy": "Dialogue policy sentence.",
+            "dialogueWorkflow": {
+                "enabled": True,
+                "version": "grok-4.2-recovery-universal",
+                "agents": [{"name": "extraction_recovery", "runsOn": "skeleton_load"}],
+            },
+        },
+    )
+
+    seed = run_pipeline.build_context_seed(tmp_path)
+
+    assert "## Creative Freedom (Extracted)" in seed
+    assert "- **Tier**: creative" in seed
+    assert "Permission sentence." in seed
+    assert "Failure mode sentence." in seed
+    assert "## Dialogue Workflow (Extracted)" in seed
+    assert "grok-4.2-recovery-universal" in seed
+    assert "`extraction_recovery`" in seed
+
+
+def test_cc_parser_extracts_per_frame_eyeline_and_facing_overrides() -> None:
+    creative_text = """///SCENE: id=scene_01 | title=Test | location=loc_room | time_of_day=dusk | int_ext=INT | cast=cast_mei_lin,cast_min_zhu
+/// cast:Mei Lin,Min Zhu | cam:north | looking_at:Mei Lin=Coin Pouch,Min Zhu=Room | facing_towards:Mei Lin=profile_left,Min Zhu=three_quarter_right
+Mei studies the pouch while Min Zhu watches the room.
+"""
+    scenes = {
+        "scene_01": SceneNode(
+            scene_id="scene_01",
+            scene_number=1,
+            title="Test",
+            location_id="loc_room",
+            cast_present=["cast_mei_lin", "cast_min_zhu"],
+        )
+    }
+    warnings: list[str] = []
+    frames, cast_states = graph.cc_parser.extract_frame_markers(
+        creative_text,
+        scenes,
+        {
+            "mei lin": "cast_mei_lin",
+            "min zhu": "cast_min_zhu",
+            "coin pouch": "prop_coin_pouch",
+            "room": "loc_room",
+        },
+        warnings,
+    )
+
+    assert len(frames) == 1
+    state_map = {state.cast_id: state for state in cast_states}
+    assert state_map["cast_mei_lin"].looking_at == "prop_coin_pouch"
+    assert state_map["cast_min_zhu"].looking_at == "loc_room"
+    assert state_map["cast_mei_lin"].facing_direction == "profile_left"
+    assert state_map["cast_min_zhu"].facing_direction == "three_quarter_right"
+
+
+def test_shot_packet_single_subject_focus_drops_offscreen_listener(tmp_path: Path) -> None:
+    graph = build_live_smoke_graph(tmp_path)
+    lyra = CastNode(
+        cast_id="cast_lyra",
+        name="Lyra",
+        identity=CastIdentity(
+            age_descriptor="30s",
+            physical_description="focused listener with a guarded stare",
+            wardrobe_description="dark jacket over a soft knit top",
+        ),
+        voice=CastVoice(),
+        provenance=Provenance(source_prose_chunk="Lyra remains offscreen during Nova's clean single."),
+    )
+    graph.cast[lyra.cast_id] = lyra
+    graph.cast_frame_states["cast_lyra@f_002"] = CastFrameState(
+        cast_id=lyra.cast_id,
+        frame_id="f_002",
+        frame_role=CastFrameRole.SUBJECT,
+        posture=Posture.STANDING,
+        screen_position="frame_right",
+        looking_at="cast_nova",
+        provenance=Provenance(source_prose_chunk="Lyra is present in the room but should stay offscreen."),
+    )
+    graph.frames["f_002"].cinematic_tag.ai_prompt_language = (
+        "Close-up of single person speaking, isolated framing, no other people visible, shallow depth of field, eye-level"
+    )
+    graph.frames["f_002"].cinematic_tag.definition = (
+        "Clean Single — Eye Level. CU or MCU, eye-level, shallow DOF, subject centered or rule-of-thirds."
+    )
+    graph.frames["f_002"].action_summary = "Nova delivers the line in a clean single while Lyra stays offscreen."
+
+    packet = build_shot_packet(graph, "f_002")
+
+    assert packet.subject_count == 1
+    assert packet.visible_cast_ids == ["cast_nova"]
+
+
+def test_dialogue_validator_strict_flags_rewritten_line(tmp_path: Path) -> None:
+    graph = build_live_smoke_graph(tmp_path)
+    graph.project.creative_freedom = "strict"
+    graph.project.creative_freedom_permission = "Strict permission."
+    graph.project.dialogue_policy = "Word for word only."
+    graph.dialogue["dlg_001"].raw_line = "They're early."
+    graph.dialogue["dlg_001"].line = "They are early."
+
+    store = GraphStore(tmp_path)
+    store.save(graph)
+
+    _write_json(
+        tmp_path / "source_files" / "onboarding_config.json",
+        {
+            "projectName": "Pipeline Smoke Live",
+            "projectId": "sw_pipeline_smoke_live",
+            "creativeFreedom": "strict",
+            "creativeFreedomPermission": "Strict permission.",
+            "creativeFreedomFailureModes": "No drift.",
+            "dialoguePolicy": "Word for word only.",
+            "dialogueWorkflow": {"enabled": True, "version": "grok-4.2-recovery-universal"},
+        },
+    )
+    _write_json(
+        tmp_path / "video" / "prompts" / "f_002_video.json",
+        {
+            "frame_id": "f_002",
+            "dialogue_present": True,
+            "dialogue_line": "They are early.",
+        },
+    )
+
+    report = validate_dialogue_project(tmp_path)
+
+    assert report["status"] == "fail"
+    assert any("Strict tier requires word-for-word dialogue." in issue["problem"] for issue in report["issues"])
 
 
 def test_graph_store_persists_versioned_cast_bible(tmp_path: Path) -> None:
@@ -38801,6 +45856,406 @@ def test_graph_store_persists_versioned_cast_bible(tmp_path: Path) -> None:
     assert loaded.characters["cast_nova"].pose_for_frame("f_002") is not None
     assert (tmp_path / "graph" / "cast_bible" / "latest.json").exists()
     assert list((tmp_path / "graph" / "cast_bible" / "versions").glob("cast_bible_*.json"))
+
+
+def test_cast_bible_snapshot_excludes_future_pose_leakage(tmp_path: Path) -> None:
+    graph = build_live_smoke_graph(tmp_path)
+    store = GraphStore(tmp_path)
+
+    collector = ReferenceImageCollector(graph, tmp_path)
+    collector.sync_cast_bible(store=store, sequence_id=graph.project.project_id)
+    bible = store.load_latest_cast_bible(sequence_id=graph.project.project_id)
+
+    assert bible is not None
+    sheet = bible.characters["cast_nova"]
+    early_pose = PoseState(
+        pose="sitting_profile_left",
+        frame_id="f_002",
+        modifiers=["hands_on_laptop"],
+    )
+    late_pose = PoseState(
+        pose="screams_unhinged_dialogue",
+        frame_id="f_999",
+        modifiers=["mouth_open", "leaning_forward"],
+    )
+    sheet.frame_poses["f_002"] = early_pose
+    sheet.pose_history = [early_pose, late_pose]
+    sheet.current_pose = late_pose
+
+    snapshot = cast_bible_snapshot_for_frame(
+        bible,
+        graph,
+        "f_002",
+        ["cast_nova"],
+    )
+
+    assert snapshot is not None
+    character = snapshot["characters"][0]
+    assert character["pose"]["pose"] == "sitting_profile_left"
+    history_frames = [entry["frame_id"] for entry in character["recent_pose_history"]]
+    assert "f_999" not in history_frames
+    assert all(int(frame.split("_")[-1]) <= 2 for frame in history_frames)
+
+
+def test_reference_collector_omits_storyboard_cell_when_guidance_disabled(tmp_path: Path) -> None:
+    graph = build_live_smoke_graph(tmp_path)
+    build_storyboard_grids(graph)
+
+    grid = graph.storyboard_grids["grid_01"]
+    grid.cell_image_dir = "frames/storyboards/grid_01/frames"
+    legacy_cell = tmp_path / "frames" / "storyboards" / "grid_01" / "frames" / "f_001_cell.png"
+    legacy_cell.parent.mkdir(parents=True, exist_ok=True)
+    legacy_cell.write_bytes(b"legacy-cell")
+
+    refs = ReferenceImageCollector(graph, tmp_path).get_frame_references("f_001")
+
+    assert refs.storyboard_cell is None
+
+
+def test_reference_collector_uses_shot_packet_visible_cast_when_frame_states_missing(tmp_path: Path) -> None:
+    graph = build_live_smoke_graph(tmp_path)
+    graph.cast_frame_states.clear()
+    graph.frames["f_002"].composed_image_path = "frames/composed/f_002_gen.png"
+    (tmp_path / "frames" / "composed").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "frames" / "composed" / "f_001_gen.png").write_bytes(b"prev")
+    (tmp_path / "cast" / "composites").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "cast" / "composites" / "cast_nova_ref.png").write_bytes(b"cast-ref")
+    (tmp_path / "locations" / "primary").mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (400, 300), color="white").save(
+        tmp_path / "locations" / "primary" / "loc_rooftop.png"
+    )
+
+    refs = ReferenceImageCollector(graph, tmp_path).get_flat_reference_list("f_002")
+    rels = [path.relative_to(tmp_path).as_posix() for path in refs]
+
+    assert "cast/composites/cast_nova_ref.png" in rels
+
+
+def test_reference_collector_extracts_location_variants_on_demand(tmp_path: Path) -> None:
+    graph = build_live_smoke_graph(tmp_path)
+    (tmp_path / "locations" / "primary").mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (800, 600), color="white").save(
+        tmp_path / "locations" / "primary" / "loc_rooftop.png"
+    )
+
+    refs = ReferenceImageCollector(graph, tmp_path).get_flat_reference_list("f_002")
+    rels = [path.relative_to(tmp_path).as_posix() for path in refs]
+
+    assert any(rel.startswith("locations/variants/loc_rooftop_") for rel in rels)
+    assert (tmp_path / "locations" / "variants" / "loc_rooftop_north.png").exists()
+
+
+def test_frame_enrichment_normalizes_list_ambient_motion(tmp_path: Path) -> None:
+    graph = build_live_smoke_graph(tmp_path)
+
+    apply_frame_enrichment(
+        graph,
+        {
+            "frame_id": "f_001",
+            "environment": {
+                "atmosphere": {
+                    "ambient_motion": ["floor_undulation", "candle_flicker"],
+                }
+            },
+        },
+    )
+
+    assert (
+        graph.frames["f_001"].environment.atmosphere.ambient_motion
+        == "floor_undulation, candle_flicker"
+    )
+
+
+def test_graph_store_save_coerces_legacy_list_ambient_motion(tmp_path: Path, recwarn) -> None:
+    graph = build_live_smoke_graph(tmp_path)
+    graph.frames["f_001"].environment.atmosphere.ambient_motion = [
+        "floor_undulation",
+        "candle_flicker",
+    ]
+
+    store = GraphStore(tmp_path)
+    graph_path = store.save(graph)
+    raw = json.loads(graph_path.read_text(encoding="utf-8"))
+    reloaded = store.load()
+
+    assert raw["frames"]["f_001"]["environment"]["atmosphere"]["ambient_motion"] == (
+        "floor_undulation, candle_flicker"
+    )
+    assert reloaded.frames["f_001"].environment.atmosphere.ambient_motion == (
+        "floor_undulation, candle_flicker"
+    )
+    assert not recwarn
+
+
+def test_replicate_502_is_retryable_and_transient() -> None:
+    request = httpx.Request("POST", "https://api.replicate.com/v1/models/demo/predictions")
+    response = httpx.Response(502, request=request)
+    exc = httpx.HTTPStatusError("502 Bad Gateway", request=request, response=response)
+
+    detail = classify_replicate_error("Server error '502 Bad Gateway'", "")
+
+    assert _is_retryable_http_error(exc) is True
+    assert detail["failure_type"] == "UPSTREAM_TRANSIENT"
+    assert detail["is_retryable"] is True
+
+
+def test_replicate_prediction_interrupted_is_transient() -> None:
+    detail = classify_replicate_error(
+        "Prediction interrupted; please retry (code: PA)",
+        "",
+    )
+
+    assert detail["failure_type"] == "UPSTREAM_TRANSIENT"
+    assert detail["is_retryable"] is True
+
+
+def test_xai_image_rescue_caps_reference_count_and_writes_output(tmp_path: Path) -> None:
+    ref_paths: list[Path] = []
+    for idx in range(7):
+        path = tmp_path / f"ref_{idx}.png"
+        Image.new("RGB", (1600, 900), color=(20 * idx, 40, 80)).save(path)
+        ref_paths.append(path)
+
+    called: dict[str, object] = {}
+
+    handler = FrameHandler(replicate_token="replicate-token", xai_key="xai-token")
+
+    async def _fake_upload_many(paths: list[Path]) -> list[str]:
+        called["uploaded_path"] = paths[0]
+        return ["data:image/jpeg;base64,rescue"]
+
+    class _FakeImageResponse:
+        @property
+        async def image(self) -> bytes:
+            return b"rescued-image"
+
+    class _FakeImageClient:
+        async def sample(self, **kwargs):
+            called["prompt"] = kwargs["prompt"]
+            called["model"] = kwargs["model"]
+            called["image_url"] = kwargs.get("image_url")
+            called["image_urls"] = kwargs.get("image_urls")
+            called["image_format"] = kwargs.get("image_format")
+            called["aspect_ratio"] = kwargs.get("aspect_ratio")
+            called["resolution"] = kwargs.get("resolution")
+            return _FakeImageResponse()
+
+    class _FakeXAIClient:
+        def __init__(self):
+            self.image = _FakeImageClient()
+
+        async def close(self):
+            return None
+
+    handler.upload_many = _fake_upload_many  # type: ignore[method-assign]
+    handler._xai_sdk_client = _FakeXAIClient()  # type: ignore[assignment]
+
+    output_path = tmp_path / "rescued.png"
+    prediction, model = asyncio.run(
+        handler._try_xai_image_rescue(
+            {
+                "prompt": "rescued prompt",
+                "aspect_ratio": "16:9",
+                "resolution": "4K",
+                "output_format": "png",
+            },
+            reference_paths=ref_paths,
+            output_path=output_path,
+            error_detail={"failure_type": "UPSTREAM_TRANSIENT"},
+        )
+    )
+
+    assert isinstance(called["uploaded_path"], Path)
+    assert called["uploaded_path"].name == "xai_rescue.jpg"
+    assert called["image_url"] == "data:image/jpeg;base64,rescue"
+    assert called["image_urls"] is None
+    assert called["model"] == "grok-imagine-image-pro"
+    assert called["image_format"] == "base64"
+    assert called["aspect_ratio"] == "16:9"
+    assert called["resolution"] == "2k"
+    assert output_path.read_bytes() == b"rescued-image"
+    assert prediction["status"] == "succeeded"
+    assert model == "grok-imagine-image-pro"
+
+
+def test_reference_pack_stitches_cast_and_props_and_resizes_location(tmp_path: Path) -> None:
+    cast_dir = tmp_path / "cast" / "composites"
+    prop_dir = tmp_path / "props" / "generated"
+    loc_dir = tmp_path / "locations" / "variants"
+    prev_dir = tmp_path / "frames" / "composed"
+    for directory in (cast_dir, prop_dir, loc_dir, prev_dir):
+        directory.mkdir(parents=True, exist_ok=True)
+
+    refs: list[Path] = []
+    for idx in range(2):
+        path = cast_dir / f"cast_{idx}_ref.png"
+        Image.new("RGB", (1600, 1600), color="white").save(path)
+        refs.append(path)
+    for idx in range(2):
+        path = prop_dir / f"prop_{idx}.png"
+        Image.new("RGB", (900, 900), color="gray").save(path)
+        refs.append(path)
+    location = loc_dir / "loc_room_north.png"
+    Image.new("RGB", (2048, 1152), color="blue").save(location)
+    refs.append(location)
+    previous = prev_dir / "f_001_gen.png"
+    Image.new("RGB", (3840, 2160), color="red").save(previous)
+    refs.append(previous)
+
+    packed = build_reference_pack(
+        pack_dir=tmp_path / "packed",
+        prompt_text="Prompt text",
+        reference_images=refs,
+    )
+
+    names = sorted(path.name for path in packed.reference_images)
+
+    assert packed.storyboard_image is None
+    assert names == ["cast_sheet.jpg", "location.jpg", "previous.jpg", "prop_sheet.jpg"]
+    assert packed.prompt_text == "Prompt text"
+    assert packed.prompt_sheet_image is None
+
+
+def test_reference_pack_splits_long_prompt_into_text_plus_prompt_sheet(tmp_path: Path) -> None:
+    cast_dir = tmp_path / "cast" / "composites"
+    cast_dir.mkdir(parents=True, exist_ok=True)
+    cast = cast_dir / "cast_ref.png"
+    Image.new("RGB", (1600, 1600), color="white").save(cast)
+    prompt = "\n".join(f"Line {idx} with dense prompt text for overflow handling." for idx in range(200))
+
+    packed = build_reference_pack(
+        pack_dir=tmp_path / "packed",
+        prompt_text=prompt,
+        reference_images=[cast],
+        include_prompt_image=True,
+    )
+
+    assert packed.prompt_sheet_image is not None
+    assert packed.prompt_sheet_image.exists()
+    assert "prompt_sheet.png" in [path.name for path in packed.reference_images]
+    assert 0 < len(packed.prompt_text) < len(prompt)
+
+
+def test_frame_input_supports_sensitive_context_flag(tmp_path: Path) -> None:
+    inp = FrameInput(
+        frame_id="f_001",
+        prompt="prompt",
+        output_dir=tmp_path,
+        sensitive_context=True,
+    )
+
+    assert inp.sensitive_context is True
+
+
+def test_parse_cc_output_reconciles_grok_cast_artifacts(tmp_path: Path) -> None:
+    creative_dir = tmp_path / "creative_output"
+    creative_dir.mkdir(parents=True, exist_ok=True)
+
+    skeleton_text = """
+///CAST: id=cast_monday | name=Monday
+///CAST: id=cast_blaire | name=Blaire
+///CAST: id=cast_sedona | name=Sedona
+///LOCATION: id=loc_apartment | name=Apartment
+///LOCATION: id=loc_retreat | name=Retreat Hall
+///LOCATION: id=loc_fire_street | name=Fire Street
+///SCENE: id=scene_01 | title=Apartment Call | location=loc_apartment | time_of_day=night | int_ext=INT | cast=cast_monday,cast_blaire | props=
+///SCENE: id=scene_02 | title=Retreat Dose | location=loc_retreat | time_of_day=afternoon | int_ext=INT | cast=cast_monday,cast_sedona | props=
+///SCENE: id=scene_03 | title=Fire Memory | location=loc_fire_street | time_of_day=night | int_ext=EXT | cast=cast_monday | props=
+""".strip()
+    creative_text = """
+///SCENE: id=scene_01 | title=Apartment Call | location=loc_apartment | time_of_day=night | int_ext=INT | cast=cast_monday,cast_blaire | props=
+/// cast:Mond ay | cam:north
+Monday answers the call from Blaire, staring into the dark apartment.
+
+/// cast:Monday,Blaire | cam:north | dlg
+                    MONDAY
+          (shocked)
+    You knew?
+
+///SCENE: id=scene_02 | title=Retreat Dose | location=loc_retreat | time_of_day=afternoon | int_ext=INT | cast=cast_monday,cast_sedona | props=
+/// cast:All | cam:east
+Monday and Sedona pass the drops around the room.
+
+///SCENE: id=scene_03 | title=Fire Memory | location=loc_fire_street | time_of_day=night | int_ext=EXT | cast=cast_monday | props=
+/// cast:Monday,SecondFirefighter | cam:south | dlg
+A second firefighter steps into view beside Monday.
+
+                    SECOND FIREFIGHTER
+          (solemn)
+    Stay back.
+""".strip()
+
+    (creative_dir / "outline_skeleton.md").write_text(skeleton_text, encoding="utf-8")
+    (creative_dir / "creative_output.md").write_text(creative_text, encoding="utf-8")
+
+    parsed_graph = parse_cc_output(
+        tmp_path,
+        ProjectNode(project_id="sw_test_parser_reconcile", title="Parser Reconcile"),
+    )
+
+    frame_1_states = {
+        state.cast_id: state
+        for state in get_frame_cast_state_models(parsed_graph, "f_001")
+    }
+    assert "cast_monday" in frame_1_states
+    assert "cast_mond_ay" not in frame_1_states
+
+    frame_2_states = {
+        state.cast_id: state
+        for state in get_frame_cast_state_models(parsed_graph, "f_002")
+    }
+    assert frame_2_states["cast_blaire"].frame_role == CastFrameRole.REFERENCED
+
+    frame_3_cast_ids = {
+        state.cast_id
+        for state in get_frame_cast_state_models(parsed_graph, "f_003")
+        if state.frame_role != CastFrameRole.REFERENCED
+    }
+    assert frame_3_cast_ids == {"cast_monday", "cast_sedona"}
+    assert all(not key.startswith("group@") for key in parsed_graph.cast_frame_states)
+
+    assert "cast_second_firefighter" in parsed_graph.cast
+    assert "cast_second_firefighter" in parsed_graph.scenes["scene_03"].cast_present
+    assert parsed_graph.dialogue["dlg_002"].cast_id == "cast_second_firefighter"
+
+
+def test_parse_cc_output_recovers_inline_dialogue_from_untagged_frames(tmp_path: Path) -> None:
+    creative_dir = tmp_path / "creative_output"
+    creative_dir.mkdir(parents=True, exist_ok=True)
+
+    skeleton_text = """
+///CAST: id=cast_monday | name=Monday
+///CAST: id=cast_rowan | name=Rowan
+///LOCATION: id=loc_house | name=House
+///SCENE: id=scene_01 | title=House Intro | location=loc_house | time_of_day=day | int_ext=INT | cast=cast_monday,cast_rowan | props=
+    """.strip()
+    creative_text = """
+///SCENE: id=scene_01 | title=House Intro | location=loc_house | time_of_day=day | int_ext=INT | cast=cast_monday,cast_rowan | props=
+/// cast:Monday | cam:north | dlg
+                    MONDAY
+          (guarded)
+    I'm Monday.
+
+/// cast:Monday,Rowan | cam:north
+                    ROWAN
+          (accusing)
+    You're not supposed to be here.
+    """.strip()
+
+    (creative_dir / "outline_skeleton.md").write_text(skeleton_text, encoding="utf-8")
+    (creative_dir / "creative_output.md").write_text(creative_text, encoding="utf-8")
+
+    parsed_graph = parse_cc_output(
+        tmp_path,
+        ProjectNode(project_id="sw_test_inline_dialogue_recovery", title="Inline Dialogue Recovery"),
+    )
+
+    assert len(parsed_graph.dialogue) == 2
+    recovered = next(node for node in parsed_graph.dialogue.values() if node.raw_line == "You're not supposed to be here.")
+    assert recovered.cast_id == "cast_rowan"
+    assert recovered.primary_visual_frame == "f_002"
+    assert parsed_graph.frames["f_002"].dialogue_ids == [recovered.dialogue_id]
+    assert parsed_graph.frames["f_002"].is_dialogue is True
 
 
 def test_validate_continuity_uses_registry_backed_cast_states(tmp_path: Path) -> None:
@@ -38914,6 +46369,44 @@ def test_phase_1_resume_skips_agents_when_scene_drafts_already_exist(
     assert checkpoint["missing_scene_count"] == 0
 
 
+def test_parse_creative_output_inline_dialogue_fallback_handles_alias_and_bad_dlg_flag() -> None:
+    skeleton_text = """
+///CAST: id=cast_monday | name=Monday | role=protagonist | gender=female | age=30s | build=slender | hair=medium,messy,brown | skin=pale | clothing=hoodie | personality=guarded | wardrobe=oversized hoodie | state_tags=base
+///CAST: id=cast_sedona | name=Sedona | role=catalyst | gender=female | age=30s | build=petite | hair=long,wavy,blonde | skin=light | clothing=robes | personality=performative | wardrobe=flowing robes | state_tags=base
+///LOCATION: id=loc_room | name=Room | type=interior | atmosphere=quiet | description=A simple room
+///LOCATION_DIR: id=loc_room | direction=south | description=Door and hallway | features=door | depth=foreground chair, hallway beyond
+///LOCATION_DIR: id=loc_room | direction=north | description=Blank wall | features=wall | depth=foreground table, wall behind
+///SCENE: id=scene_01 | title=Test Scene | location=loc_room | time_of_day=night | int_ext=INT | cast=cast_monday,cast_sedona | mood=tense | pacing=measured | cast_states=cast_monday:base,cast_sedona:base | props=
+""".strip()
+
+    creative_text = """
+///SCENE: id=scene_01 | title=Test Scene | location=loc_room | time_of_day=night | int_ext=INT | cast=cast_monday,cast_sedona | mood=tense | pacing=measured | cast_states=cast_monday:base,cast_sedona:base | props=
+
+/// cast:Monday | cam:south | dlg
+The worn couch creaks under Monday as she sits across from the glowing screen.
+
+/// cast:Sedona | cam:north | dlg
+                    SEDONA (NINA)
+          (shouting, unhinged)
+    This is unacceptable! Do you have any idea what you've done?
+""".strip()
+
+    warnings: list[str] = []
+    name_map = parse_skeleton(skeleton_text, warnings)["name_map"]
+    parsed = parse_creative_output(creative_text, skeleton_text, name_map, warnings)
+
+    frames = {frame.frame_id: frame for frame in parsed["frames"]}
+    dialogue = parsed["dialogue"]
+
+    assert frames["f_001"].is_dialogue is False
+    assert frames["f_001"].dialogue_ids == []
+    assert frames["f_002"].dialogue_ids == ["dlg_001"]
+    assert len(dialogue) == 1
+    assert dialogue[0].speaker == "Sedona"
+    assert dialogue[0].cast_id == "cast_sedona"
+    assert dialogue[0].raw_line == "This is unacceptable! Do you have any idea what you've done?"
+
+
 def test_parse_args_accepts_live_flag(monkeypatch) -> None:
     monkeypatch.setattr(
         sys,
@@ -38927,7 +46420,7 @@ def test_parse_args_accepts_live_flag(monkeypatch) -> None:
     assert args.live is True
 
 
-def test_haiku_cli_worker_uses_unlimited_agent_timeout(tmp_path: Path, monkeypatch) -> None:
+def test_frame_enricher_cli_worker_uses_unlimited_agent_timeout(tmp_path: Path, monkeypatch) -> None:
     timeout_seen: list[object] = []
     stream_output_seen: list[object] = []
 
@@ -38940,7 +46433,7 @@ def test_haiku_cli_worker_uses_unlimited_agent_timeout(tmp_path: Path, monkeypat
     monkeypatch.setattr(run_pipeline, "run_agent", fake_run_agent)
     monkeypatch.setattr(run_pipeline, "check_agent_result", lambda *_args, **_kwargs: None)
 
-    result = run_pipeline._run_haiku_cli_worker({"frame_id": "f_001"}, dry_run=False)
+    result = run_pipeline._run_frame_enricher_cli_worker({"frame_id": "f_001"}, dry_run=False)
 
     assert result["frame_id"] == "f_001"
     assert timeout_seen == [None]
@@ -38978,6 +46471,139 @@ def test_quality_gate_phase_2_allows_single_protagonist_short_project(
     issues = quality_gate_phase_2(tmp_path)
 
     assert not any("cast profile" in issue for issue in issues)
+
+
+def test_quality_gate_phase_2_flags_low_dialogue_density(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    frames = [
+        {"frameId": f"f_{idx:03d}", "castIds": ["cast_001"], "locationId": "loc_001"}
+        for idx in range(1, 11)
+    ]
+    _write_json(
+        tmp_path / "project_manifest.json",
+        {"frames": frames, "cast": [{"castId": "cast_001", "role": "protagonist"}]},
+    )
+    _write_json(tmp_path / "source_files" / "onboarding_config.json", {"outputSize": "short"})
+    _write_json(tmp_path / "dialogue.json", {"lines": ["a", "b", "c", "d", "e"]})
+    _write_json(tmp_path / "cast" / "cast_001.json", {"role": "protagonist"})
+    _write_json(tmp_path / "locations" / "loc_001.json", {"name": "Roof"})
+    _write_json(tmp_path / "graph" / "narrative_graph.json", {"version": 1})
+
+    frame_order = [frame["frameId"] for frame in frames]
+    fake_frames = {
+        frame_id: SimpleNamespace(
+            frame_id=frame_id,
+            scene_id="scene_01",
+            is_dialogue=idx < 2,
+            dialogue_ids=["dlg_001"] if idx < 2 else [],
+        )
+        for idx, frame_id in enumerate(frame_order)
+    }
+
+    class FakeStore:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def load(self):
+            return SimpleNamespace(
+                frame_order=frame_order,
+                frames=fake_frames,
+                scenes={"scene_01": SimpleNamespace(cast_present=["cast_001"])},
+                dialogue={},
+                cast={"cast_001": SimpleNamespace(name="Monday", display_name="Monday")},
+            )
+
+    monkeypatch.setattr(graph.store, "GraphStore", FakeStore)
+    monkeypatch.setattr(
+        graph.api,
+        "get_frame_cast_state_models",
+        lambda *_args, **_kwargs: [SimpleNamespace(cast_id="cast_001", frame_role="subject")],
+    )
+
+    issues = quality_gate_phase_2(tmp_path)
+
+    assert any("Dialogue density too low" in issue for issue in issues)
+
+
+def test_quality_gate_phase_2_exempts_voice_over_primary_speaker_visibility(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _write_json(
+        tmp_path / "project_manifest.json",
+        {
+            "frames": [{"frameId": "f_001", "castIds": [], "locationId": "loc_001"}],
+            "cast": [{"castId": "cast_female_voice_over", "role": "supporting"}],
+        },
+    )
+    _write_json(tmp_path / "source_files" / "onboarding_config.json", {"outputSize": "short"})
+    _write_json(tmp_path / "dialogue.json", {"lines": ["a", "b", "c"]})
+    _write_json(tmp_path / "cast" / "cast_female_voice_over.json", {"role": "supporting"})
+    _write_json(tmp_path / "locations" / "loc_001.json", {"name": "Void"})
+    _write_json(tmp_path / "graph" / "narrative_graph.json", {"version": 1})
+
+    class FakeStore:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def load(self):
+            return SimpleNamespace(
+                frame_order=["f_001"],
+                frames={
+                    "f_001": SimpleNamespace(
+                        frame_id="f_001",
+                        scene_id="scene_01",
+                        is_dialogue=True,
+                        dialogue_ids=["dlg_001"],
+                    )
+                },
+                scenes={"scene_01": SimpleNamespace(cast_present=[])},
+                dialogue={
+                    "dlg_001": SimpleNamespace(
+                        primary_visual_frame="f_001",
+                        cast_id="cast_female_voice_over",
+                        speaker="Female Voice Over",
+                    )
+                },
+                cast={
+                    "cast_female_voice_over": SimpleNamespace(
+                        name="Female Voice Over",
+                        display_name="Female Voice Over",
+                    )
+                },
+            )
+
+    monkeypatch.setattr(graph.store, "GraphStore", FakeStore)
+    monkeypatch.setattr(graph.api, "get_frame_cast_state_models", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(
+        graph.api,
+        "build_shot_packet",
+        lambda *_args, **_kwargs: SimpleNamespace(visible_cast_ids=[]),
+    )
+
+    issues = quality_gate_phase_2(tmp_path)
+
+    assert not any("omit the speaker from visible cast" in issue for issue in issues)
+
+
+def test_extract_cast_tags_normalizes_display_names_and_flags_duplicates() -> None:
+    warnings: list[str] = []
+    nodes = extract_cast_tags(
+        """
+///CAST: id=cast_monday | name=Mondy
+///CAST: id=cast_sedona | name=Sedona Arizona
+///CAST: id=cast_mondy | name=Monday
+        """.strip(),
+        warnings,
+    )
+
+    by_id = {node.cast_id: node for node in nodes}
+    assert by_id["cast_monday"].display_name == "Monday"
+    assert by_id["cast_monday"].source_name == "Mondy"
+    assert by_id["cast_sedona"].display_name == "Sedona"
+    assert any("near-duplicates" in warning for warning in warnings)
 
 
 def test_resolve_regen_image_size_prefers_current_key_and_rejects_conflicts(tmp_path: Path) -> None:
@@ -39038,7 +46664,102 @@ def test_phase_5_video_skips_refinement_without_xai_key(tmp_path: Path, monkeypa
     assert prompt_data["prompt"] == "graph prompt"
 
 
-def test_refine_video_prompt_preserves_graph_prompt_on_overflow(tmp_path: Path, monkeypatch) -> None:
+def test_generate_video_clip_retries_retryable_upstream_failures(tmp_path: Path, monkeypatch) -> None:
+    image_path = tmp_path / "frames" / "composed" / "f_001_gen.png"
+    image_path.parent.mkdir(parents=True, exist_ok=True)
+    image_path.write_bytes(b"png")
+    out_path = tmp_path / "video" / "clips" / "f_001.mp4"
+
+    attempts: list[int] = []
+
+    def fake_stream(*_args, **_kwargs):
+        attempts.append(len(attempts) + 1)
+        if len(attempts) == 1:
+            return SimpleNamespace(returncode=1, stdout="Server error '502 Bad Gateway'", stderr="")
+        return SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(run_pipeline, "PROJECT_DIR", tmp_path)
+    monkeypatch.setattr(run_pipeline, "SKILLS_DIR", tmp_path)
+    monkeypatch.setattr(run_pipeline, "_stream_subprocess", fake_stream)
+    monkeypatch.setattr(run_pipeline.time, "sleep", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(run_pipeline, "VIDEO_GEN_RETRIES", 3)
+
+    result = run_pipeline._generate_video_clip(
+        "f_001",
+        image_path,
+        "prompt",
+        5,
+        out_path,
+        dry_run=False,
+    )
+
+    assert result.returncode == 0
+    assert attempts == [1, 2]
+
+
+def test_video_clip_handler_uses_prepared_frame_for_replicate(tmp_path: Path, monkeypatch) -> None:
+    image_path = tmp_path / "frames" / "composed" / "f_001_gen.png"
+    image_path.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (3840, 2160), color=(12, 34, 56)).save(image_path, format="PNG")
+
+    recorded: dict[str, object] = {}
+
+    handler = VideoClipHandler(replicate_token="replicate")
+
+    async def fake_upload(path: Path) -> str:
+        recorded["uploaded_path"] = str(path)
+        recorded["uploaded_size"] = path.stat().st_size
+        return "data:image/jpeg;base64,AAAA"
+
+    async def fake_download(url: str, output_path: Path) -> Path:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(b"video")
+        recorded["url"] = url
+        return output_path
+
+    async def fake_predict(model: str, pred_input: dict, *, extra_headers=None):
+        recorded["model"] = model
+        recorded["pred_input"] = pred_input
+        recorded["headers"] = extra_headers or {}
+        return {"status": "starting", "id": "pred_123"}
+
+    async def fake_resolve(prediction: dict, *, extra_headers=None):
+        recorded["resolve_headers"] = extra_headers or {}
+        return {
+            "status": "succeeded",
+            "output": "https://example.test/video.mp4",
+        }
+
+    monkeypatch.setattr(handler, "upload_to_replicate", fake_upload)
+    monkeypatch.setattr(handler, "download_output", fake_download)
+    monkeypatch.setattr(handler, "_replicate_predict", fake_predict)
+    monkeypatch.setattr(handler, "_resolve_prediction", fake_resolve)
+
+    result = asyncio.run(
+        handler.generate(
+            VideoClipInput(
+                frame_id="f_001",
+                dialogue_text="",
+                motion_prompt="Test video prompt",
+                frame_image_path=image_path,
+                suggested_duration=5,
+                output_dir=tmp_path,
+                run_id="test",
+                phase="phase_5",
+            )
+        )
+    )
+
+    assert result.success is True
+    assert result.model_used == "xai/grok-imagine-video"
+    assert recorded["url"] == "https://example.test/video.mp4"
+    assert recorded["pred_input"]["image"].startswith("data:image/jpeg;base64,")
+    assert recorded["pred_input"]["resolution"] == "720p"
+    assert recorded["uploaded_path"].endswith("_video_input.jpg")
+    assert recorded["uploaded_size"] < image_path.stat().st_size
+
+
+def test_refine_video_prompt_accepts_long_refined_prompt(tmp_path: Path, monkeypatch) -> None:
     image_path = tmp_path / "frames" / "composed" / "f_001_gen.png"
     image_path.parent.mkdir(parents=True, exist_ok=True)
     image_path.write_bytes(b"png")
@@ -39060,8 +46781,35 @@ def test_refine_video_prompt_preserves_graph_prompt_on_overflow(tmp_path: Path, 
         )
     )
 
-    assert result["refined_by"] == "failed:PromptOverflow"
-    assert result["prompt"] == "graph prompt"
+    assert result["refined_by"] == "grok-vision"
+    assert result["original_graph_prompt"] == "graph prompt"
+    assert result["prompt"] == "x" * 5000
+
+
+def test_frame_prompt_requires_sensitive_context_for_vial_administration() -> None:
+    assert _frame_prompt_requires_sensitive_context(
+        {
+            "prompt": "Hudson administers vial drops while Sedona opens her mouth under peer pressure.",
+        }
+    ) is True
+
+
+def test_frame_prompt_sensitive_context_stays_false_for_normal_dialogue() -> None:
+    assert _frame_prompt_requires_sensitive_context(
+        {
+            "prompt": "Blaire gestures earnestly with the glass while speaking persuasively in the apartment.",
+        }
+    ) is False
+
+
+def test_location_grid_prompt_includes_fixed_directional_label_layout() -> None:
+    prompt = build_grid_prompt("Test room with four directional views.", template_type="interior")
+
+    assert "Directional label layout is fixed and must be followed exactly:" in prompt
+    assert "NORTH = top-left panel, label in the bottom-right inner corner;" in prompt
+    assert "EAST = top-right panel, label in the bottom-left inner corner;" in prompt
+    assert "WEST = bottom-left panel, label in the top-right inner corner;" in prompt
+    assert "SOUTH = bottom-right panel, label in the top-left inner corner." in prompt
 
 
 def test_prompt_size_migration_skill_audits_and_applies(tmp_path: Path) -> None:
@@ -39127,6 +46875,7 @@ def test_run_phase_2_postprocessing_halts_on_validator_failure(tmp_path: Path, m
         return SimpleNamespace(returncode=1 if "graph_validate_video_direction" in cmd[1] else 0)
 
     monkeypatch.setattr(run_pipeline, "_stream_subprocess", fake_stream)
+    monkeypatch.setattr(run_pipeline, "_reconcile_scene_cast_presence", lambda _project_dir: None)
 
     try:
         _run_phase_2_postprocessing(tmp_path)
@@ -39137,9 +46886,314 @@ def test_run_phase_2_postprocessing_halts_on_validator_failure(tmp_path: Path, m
 
     assert calls == [
         "graph_assemble_prompts",
+        "concatenate_project_snapshot.py",
+        "graph_validate_dialogue",
+        "prompt_pair_validator.py",
         "graph_materialize",
         "graph_validate_video_direction",
     ]
+
+
+def test_detect_resume_phase_reruns_phase_1_when_manifest_complete_but_artifacts_incomplete(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _write_json(
+        tmp_path / "project_manifest.json",
+        {
+            "phases": {
+                "phase_0": {"status": "complete"},
+                "phase_1": {"status": "complete"},
+                "phase_2": {"status": "ready"},
+            }
+        },
+    )
+
+    monkeypatch.setattr(run_pipeline, "MANIFEST_PATH", tmp_path / "project_manifest.json")
+    monkeypatch.setattr(run_pipeline, "PROJECT_DIR", tmp_path)
+    monkeypatch.setattr(
+        run_pipeline,
+        "_phase_reuse_status",
+        lambda phase_num, _project_dir: (False, ["outline_skeleton.md missing"]) if phase_num == 1 else (True, []),
+    )
+
+    assert run_pipeline.detect_resume_phase() == 1
+
+
+def test_verify_prerequisites_rejects_incomplete_phase_artifacts_even_if_manifest_is_complete(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _write_json(
+        tmp_path / "project_manifest.json",
+        {
+            "phases": {
+                "phase_0": {"status": "complete"},
+                "phase_1": {"status": "complete"},
+                "phase_2": {"status": "ready"},
+            }
+        },
+    )
+
+    monkeypatch.setattr(run_pipeline, "MANIFEST_PATH", tmp_path / "project_manifest.json")
+    monkeypatch.setattr(run_pipeline, "PROJECT_DIR", tmp_path)
+    monkeypatch.setattr(
+        run_pipeline,
+        "_phase_reuse_status",
+        lambda phase_num, _project_dir: (False, ["graph/narrative_graph.json missing"]) if phase_num == 1 else (True, []),
+    )
+
+    with pytest.raises(SystemExit):
+        run_pipeline.verify_prerequisites(2)
+
+
+def test_prompt_pair_validator_rejects_subject_count_contradiction(tmp_path: Path) -> None:
+    graph = build_live_smoke_graph(tmp_path)
+    shot_packet = build_shot_packet(graph, "f_001").model_copy(
+        update={
+            "subject_count": 0,
+            "visible_cast_ids": [],
+            "current_beat": "The group of nine locks together and chants in unison.",
+            "video_optimized_prompt_block": "A diverse group of nine tightens into an intimate cluster.",
+        }
+    )
+    image_prompt = {
+        "frame_id": "f_001",
+        "scene_id": "scene_01",
+        "prompt": "CONTINUITY:\n- The group of nine locks together.\nSUBJECT COUNT:\n- Exactly 0 visible subject(s).",
+    }
+    video_prompt = {
+        "frame_id": "f_001",
+        "scene_id": "scene_01",
+        "prompt": "A diverse group of nine chants together.\nNEGATIVE CONSTRAINTS:\n- Do not exceed 0 visible subject(s).",
+        "dialogue_present": False,
+        "dialogue_fit_status": "no_dialogue",
+        "dialogue_turn_count": 0,
+    }
+
+    issues = PromptPairValidator().validate(image_prompt, video_prompt, shot_packet)
+
+    assert any(issue.category == PromptPairCategory.SUBJECT_COUNT_CONSISTENCY for issue in issues)
+
+
+def test_prompt_pair_validator_ignores_neighboring_group_mentions_for_single_subject(tmp_path: Path) -> None:
+    graph = build_live_smoke_graph(tmp_path)
+    shot_packet = build_shot_packet(graph, "f_001").model_copy(
+        update={
+            "subject_count": 1,
+            "visible_cast_ids": ["cast_nova"],
+            "current_beat": "Nova stands alone on the rooftop, listening.",
+            "video_optimized_prompt_block": "Single-subject close coverage on Nova.",
+            "continuity_deltas": [
+                "Previous beat: the group of nine locks together and chants in unison.",
+                "Next beat: the group of nine spills into the hallway.",
+            ],
+        }
+    )
+    image_prompt = {
+        "frame_id": "f_001",
+        "scene_id": "scene_01",
+        "prompt": "Nova alone in frame.\nSUBJECT COUNT:\n- Exactly 1 visible subject(s).",
+    }
+    video_prompt = {
+        "frame_id": "f_001",
+        "scene_id": "scene_01",
+        "prompt": "Single-subject coverage of Nova only.\nNEGATIVE CONSTRAINTS:\n- Do not exceed 1 visible subject(s).",
+        "dialogue_present": False,
+        "dialogue_fit_status": "no_dialogue",
+        "dialogue_turn_count": 0,
+    }
+
+    issues = PromptPairValidator().validate(image_prompt, video_prompt, shot_packet)
+
+    assert not any(issue.category == PromptPairCategory.SUBJECT_COUNT_CONSISTENCY for issue in issues)
+
+
+def test_build_shot_packet_inferrs_collective_subjects_from_neighboring_group_beats(tmp_path: Path) -> None:
+    graph = build_live_smoke_graph(tmp_path)
+    graph.cast["cast_orin"] = CastNode(
+        cast_id="cast_orin",
+        name="Orin",
+        display_name="Orin",
+        source_name="Orin",
+        identity=CastIdentity(physical_description="tall man with a shaved head"),
+        role=NarrativeRole.SUPPORTING,
+    )
+    graph.scenes["scene_01"].cast_present.append("cast_orin")
+    graph.scenes["scene_01"].frame_ids.append("f_003")
+    graph.scenes["scene_01"].frame_count = 3
+
+    graph.frames["f_001"].next_frame_id = "f_002"
+    graph.frames["f_002"].previous_frame_id = "f_001"
+    graph.frames["f_002"].next_frame_id = "f_003"
+    graph.frames["f_002"].narrative_beat = "The group of two tightens together in unison."
+    graph.frames["f_002"].action_summary = "The group of two tightens together in unison."
+
+    graph.frames["f_003"] = graph.frames["f_002"].model_copy(
+        update={
+            "frame_id": "f_003",
+            "sequence_index": 3,
+            "previous_frame_id": "f_002",
+            "next_frame_id": None,
+            "narrative_beat": "Nova and Orin lock eyes and hold the roofline together.",
+            "action_summary": "Nova and Orin hold the roofline together.",
+            "is_dialogue": False,
+            "dialogue_ids": [],
+        }
+    )
+    graph.frame_order.append("f_003")
+
+    graph.cast_frame_states["cast_orin@f_001"] = CastFrameState(
+        cast_id="cast_orin",
+        frame_id="f_001",
+        frame_role=CastFrameRole.SUBJECT,
+        posture=Posture.STANDING,
+        facing_direction="toward_camera",
+        screen_position="frame_right",
+    )
+    graph.cast_frame_states["cast_orin@f_003"] = CastFrameState(
+        cast_id="cast_orin",
+        frame_id="f_003",
+        frame_role=CastFrameRole.SUBJECT,
+        posture=Posture.STANDING,
+        facing_direction="toward_camera",
+        screen_position="frame_right",
+    )
+    graph.cast_frame_states["cast_nova@f_003"] = CastFrameState(
+        cast_id="cast_nova",
+        frame_id="f_003",
+        frame_role=CastFrameRole.SUBJECT,
+        posture=Posture.STANDING,
+        facing_direction="toward_camera",
+        screen_position="frame_left",
+    )
+    del graph.cast_frame_states["cast_nova@f_002"]
+
+    shot_packet = build_shot_packet(graph, "f_002")
+
+    assert shot_packet.visible_cast_ids == ["cast_nova", "cast_orin"]
+    assert shot_packet.subject_count == 2
+
+
+def test_build_shot_packet_inferrs_named_dialogue_pair_without_frame_states(tmp_path: Path) -> None:
+    graph = build_live_smoke_graph(tmp_path)
+    graph.cast["cast_orin"] = CastNode(
+        cast_id="cast_orin",
+        name="Orin",
+        display_name="Orin",
+        source_name="Orin",
+        identity=CastIdentity(physical_description="lean man with tired eyes"),
+        role=NarrativeRole.SUPPORTING,
+    )
+    graph.scenes["scene_01"].cast_present.append("cast_orin")
+    frame = graph.frames["f_002"]
+    frame.composition.shot = "two_shot"
+    frame.narrative_beat = "Nova tells Orin the signal changed while they hold eye contact."
+    frame.action_summary = "Nova and Orin share a tense exchange."
+    frame.source_text = """NOVA\n          (urgent)\n    They're early, Orin."""
+    graph.cast_frame_states = {
+        key: value
+        for key, value in graph.cast_frame_states.items()
+        if not key.endswith("@f_002")
+    }
+
+    shot_packet = build_shot_packet(graph, "f_002")
+
+    assert shot_packet.visible_cast_ids[:2] == ["cast_nova", "cast_orin"]
+    assert shot_packet.subject_count == 2
+
+
+def test_build_shot_packet_expands_single_explicit_state_for_collective_named_beat(tmp_path: Path) -> None:
+    graph = build_live_smoke_graph(tmp_path)
+    graph.cast["cast_orin"] = CastNode(
+        cast_id="cast_orin",
+        name="Orin",
+        display_name="Orin",
+        source_name="Orin",
+        identity=CastIdentity(physical_description="lean man with tired eyes"),
+        role=NarrativeRole.SUPPORTING,
+    )
+    graph.scenes["scene_01"].cast_present.append("cast_orin")
+
+    frame = graph.frames["f_002"]
+    frame.narrative_beat = "Nova greets the group with a nod, handing the signal chip to Orin and Blaire."
+    frame.action_summary = "Nova greets Orin and Blaire while the group crowds in."
+    graph.cast["cast_blaire"] = CastNode(
+        cast_id="cast_blaire",
+        name="Blaire",
+        display_name="Blaire",
+        source_name="Blaire",
+        identity=CastIdentity(physical_description="short woman with cropped hair"),
+        role=NarrativeRole.SUPPORTING,
+    )
+    graph.scenes["scene_01"].cast_present.append("cast_blaire")
+    graph.cast_frame_states = {
+        "cast_nova@f_002": CastFrameState(
+            cast_id="cast_nova",
+            frame_id="f_002",
+            frame_role=CastFrameRole.SUBJECT,
+            posture=Posture.STANDING,
+            facing_direction="toward_camera",
+            screen_position="frame_left",
+        )
+    }
+
+    shot_packet = build_shot_packet(graph, "f_002")
+
+    assert shot_packet.subject_count >= 3
+    assert shot_packet.visible_cast_ids[:3] == ["cast_nova", "cast_orin", "cast_blaire"]
+
+
+def test_quality_gate_phase_4_flags_prompt_subject_count_contradictions(tmp_path: Path) -> None:
+    graph = build_live_smoke_graph(tmp_path)
+    graph.frames["f_001"].narrative_beat = "The group of nine tightens together in the room."
+    graph.frames["f_001"].action_summary = "The group of nine tightens together in the room."
+    GraphStore(str(tmp_path)).save(graph)
+
+    _write_json(
+        tmp_path / "project_manifest.json",
+        {"frames": [{"frameId": "f_001"}, {"frameId": "f_002"}]},
+    )
+    (tmp_path / "frames" / "composed").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "frames" / "composed" / "f_001_gen.png").write_bytes(b"x" * 20000)
+    (tmp_path / "frames" / "composed" / "f_002_gen.png").write_bytes(b"x" * 20000)
+    _write_json(
+        tmp_path / "frames" / "prompts" / "f_001_image.json",
+        {
+            "frame_id": "f_001",
+            "scene_id": "scene_01",
+            "prompt": "The group of nine tightens together.\nSUBJECT COUNT:\n- Exactly 0 visible subject(s).",
+        },
+    )
+    _write_json(
+        tmp_path / "video" / "prompts" / "f_001_video.json",
+        {
+            "frame_id": "f_001",
+            "scene_id": "scene_01",
+            "prompt": "A diverse group of nine tightens together.\nNEGATIVE CONSTRAINTS:\n- Do not exceed 0 visible subject(s).",
+            "dialogue_present": False,
+            "dialogue_fit_status": "no_dialogue",
+            "dialogue_turn_count": 0,
+        },
+    )
+    _write_json(
+        tmp_path / "frames" / "prompts" / "f_002_image.json",
+        {"frame_id": "f_002", "scene_id": "scene_01", "prompt": "Nova watches the skyline."},
+    )
+    _write_json(
+        tmp_path / "video" / "prompts" / "f_002_video.json",
+        {
+            "frame_id": "f_002",
+            "scene_id": "scene_01",
+            "prompt": "Nova watches the skyline.",
+            "dialogue_present": True,
+            "dialogue_fit_status": "fits",
+            "dialogue_turn_count": 1,
+            "dialogue_line": "Keep moving.",
+        },
+    )
+
+    issues = quality_gate_phase_4(tmp_path)
+
+    assert any("prompt subject-count contradiction" in issue for issue in issues)
 
 
 def test_graph_validate_video_direction_rejects_sparse_composition_payload(tmp_path: Path) -> None:
@@ -39179,6 +47233,141 @@ def test_graph_validate_video_direction_halts_on_overlong_dialogue(tmp_path: Pat
     assert "exceeds Grok model maximum of 15s" in result.stdout
 
 
+def test_graph_validate_video_direction_fix_breaks_high_tension_pose_repetition(tmp_path: Path) -> None:
+    graph = build_live_smoke_graph(tmp_path)
+    scene = graph.scenes["scene_01"]
+    scene.title = "Confrontation in the Safehouse"
+    scene.pacing = "tense"
+    scene.mood_keywords = ["tense", "confrontational"]
+    scene.frame_ids = []
+    scene.frame_count = 5
+
+    template_frame = graph.frames["f_002"].model_copy(deep=True)
+    template_state = graph.cast_frame_states["cast_nova@f_002"].model_copy(deep=True)
+    graph.frames.clear()
+    graph.frame_order.clear()
+    graph.cast_frame_states.clear()
+    graph.dialogue.clear()
+    graph.dialogue_order.clear()
+
+    frame_ids = [f"f_{idx:03d}" for idx in range(1, 6)]
+    for idx, frame_id in enumerate(frame_ids, start=1):
+        frame = template_frame.model_copy(deep=True)
+        frame.frame_id = frame_id
+        frame.sequence_index = idx
+        frame.scene_id = scene.scene_id
+        frame.previous_frame_id = frame_ids[idx - 2] if idx > 1 else None
+        frame.next_frame_id = frame_ids[idx] if idx < len(frame_ids) else None
+        frame.action_summary = f"Nova holds the argument beat {idx}"
+        frame.source_text = f"NOVA confronts the room on beat {idx}."
+        frame.visual_flow_element = "reaction" if idx >= 3 else "dialogue"
+        frame.composition.angle = "eye_level"
+        frame.composition.movement = "static"
+        graph.frames[frame_id] = frame
+        graph.frame_order.append(frame_id)
+        scene.frame_ids.append(frame_id)
+
+        state = template_state.model_copy(deep=True)
+        state.frame_id = frame_id
+        state.posture = Posture.STANDING
+        state.facing_direction = "toward_camera"
+        state.screen_position = "frame_center"
+        graph.cast_frame_states[f"cast_nova@{frame_id}"] = state
+
+    GraphStore(str(tmp_path)).save(graph)
+
+    skill_path = Path(__file__).resolve().parents[1] / "skills" / "graph_validate_video_direction"
+    result = subprocess.run(
+        [sys.executable, str(skill_path), "--project-dir", str(tmp_path), "--fix"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "Auto-diversified" in result.stdout
+
+    reloaded = GraphStore(str(tmp_path)).load()
+    signatures = []
+    for frame_id in frame_ids:
+        state = get_frame_cast_state_models(reloaded, frame_id)[0]
+        posture = getattr(getattr(state, "posture", None), "value", getattr(state, "posture", None))
+        signatures.append(f"{posture}|{state.facing_direction}")
+
+    dominant_count = max(signatures.count(sig) for sig in set(signatures))
+    assert dominant_count <= 2
+
+
+def test_frame_handler_locally_renders_loading_spinner_without_remote_call(tmp_path: Path) -> None:
+    handler = FrameHandler(replicate_token="test-token")
+
+    async def _forbidden_remote(*args, **kwargs):
+        raise AssertionError("remote model chain should not be called for loading-wheel inserts")
+
+    handler._run_model_chain = _forbidden_remote  # type: ignore[method-assign]
+    inp = FrameInput(
+        frame_id="f_012",
+        prompt="Generate one final finished frame.\nOutput a simple white loading spinner centered on pure black.",
+        output_dir=tmp_path,
+    )
+
+    result = asyncio.run(handler.generate(inp))
+
+    assert result.success is True
+    assert result.model_used == "local/loading_wheel"
+    assert result.image_path and result.image_path.exists()
+
+
+def test_frame_handler_retries_long_prompt_with_prompt_sheet_overflow(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("SCREENWIRE_PROMPT_IMAGE_TRIGGER_CHARS", "50")
+
+    cast_dir = tmp_path / "cast" / "composites"
+    cast_dir.mkdir(parents=True, exist_ok=True)
+    cast_ref = cast_dir / "cast_ref.png"
+    Image.new("RGB", (1200, 1200), color="white").save(cast_ref)
+
+    handler = FrameHandler(replicate_token="test-token")
+    seen_inputs: list[dict] = []
+    output_path = tmp_path / "rescued.png"
+
+    async def _fake_upload_many(paths: list[Path]) -> list[str]:
+        return [f"uri:{path.name}" for path in paths]
+
+    async def _fake_run_model_chain(handler_name: str, base_input: dict, **kwargs):
+        seen_inputs.append(dict(base_input))
+        if len(seen_inputs) == 1:
+            return {"status": "failed", "error": "code: PA", "logs": "heartbeat interrupted"}, "google/nano-banana-2"
+        output_path.write_bytes(b"frame-bytes")
+        return {"status": "succeeded", "local_output_path": str(output_path)}, "google/nano-banana-pro"
+
+    async def _forbidden_capacity(*args, **kwargs):
+        raise AssertionError("capacity rescue should not run when prompt-sheet retry succeeds")
+
+    async def _forbidden_xai(*args, **kwargs):
+        raise AssertionError("xai rescue should not run when prompt-sheet retry succeeds")
+
+    handler.upload_many = _fake_upload_many  # type: ignore[method-assign]
+    handler._run_model_chain = _fake_run_model_chain  # type: ignore[method-assign]
+    handler._try_capacity_rescue = _forbidden_capacity  # type: ignore[method-assign]
+    handler._try_xai_image_rescue = _forbidden_xai  # type: ignore[method-assign]
+
+    inp = FrameInput(
+        frame_id="f_099",
+        prompt="\n".join(f"Long prompt line {idx} with extra detail for overflow retry." for idx in range(50)),
+        output_dir=tmp_path,
+        reference_images=[cast_ref],
+    )
+
+    result = asyncio.run(handler.generate(inp))
+
+    assert result.success is True
+    assert len(seen_inputs) == 2
+    assert len(seen_inputs[1]["prompt"]) < len(inp.prompt)
+    assert any("prompt_sheet.png" in uri for uri in seen_inputs[1].get("image_input", []))
+
+
 def test_server_project_api_reads_manifest_from_disk(tmp_path: Path, monkeypatch) -> None:
     manifest_path = tmp_path / "project_manifest.json"
     _write_json(manifest_path, {"version": 1, "status": "fresh", "frames": [{"frameId": "f_001"}]})
@@ -39193,6 +47382,33 @@ def test_server_project_api_reads_manifest_from_disk(tmp_path: Path, monkeypatch
     assert data["status"] == "fresh"
     assert data["version"] == 1
     assert len(data["frames"]) == 1
+
+
+def test_phase1_agent_cache_key_is_stable_across_parallel_workers(tmp_path: Path) -> None:
+    creative_key = _agent_prompt_cache_key(
+        agent_id="creative_coordinator",
+        project_dir=tmp_path,
+        model="grok-4.20-reasoning",
+        cacheable_system_prompt="base prompt body",
+        trigger_msg="Execute the CRITICAL OVERRIDE at the end of your system prompt. Follow ONLY those instructions. Do not stop or wait for input.",
+    )
+    prose_key = _agent_prompt_cache_key(
+        agent_id="prose_worker_scene_07",
+        project_dir=tmp_path,
+        model="grok-4.20-reasoning",
+        cacheable_system_prompt="base prompt body",
+        trigger_msg="Execute the CRITICAL OVERRIDE at the end of your system prompt. Follow ONLY those instructions. Do not stop or wait for input.",
+    )
+    frame_enricher_key = _agent_prompt_cache_key(
+        agent_id="frame_enricher_worker_f_007",
+        project_dir=tmp_path,
+        model="grok-4-1-fast-reasoning",
+        cacheable_system_prompt="base prompt body",
+        trigger_msg="Execute your instructions now. Work autonomously through all steps in your system prompt. Do not stop or wait for input.",
+    )
+
+    assert creative_key == prose_key
+    assert creative_key != frame_enricher_key
 ```
 
 ## `tests/test_api_reference_builder.py`
@@ -39619,7 +47835,7 @@ class TestRefineStatusKind:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Task 5 — _serialize_video_prompt_sections Tier 1 preservation
+# Task 5 — _serialize_video_prompt_sections preservation
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TestSerializeVideoPromptTier1:
@@ -39634,29 +47850,28 @@ class TestSerializeVideoPromptTier1:
         ]
 
     def test_short_prompt_passes_through(self):
-        """A prompt well under 4096 chars should be returned unchanged."""
+        """A prompt should be returned unchanged."""
         sections = self._make_sections()
         result = _serialize_video_prompt_sections(sections)
         assert "AUDIO:" in result
         assert "MOTION CONTINUITY:" in result
 
-    def test_tier3_dropped_before_tier1(self):
-        """When over the limit, Tier 3 blocks are dropped before Tier 1 blocks."""
-        # Generate enough BACKGROUND bloat to push over 4096 chars
+    def test_tier3_is_preserved_when_prompt_is_large(self):
+        """Large prompts should preserve Tier 3 blocks too."""
         sections = self._make_sections(bloat_chars=4000)
-        # Should not raise — Tier 3 BACKGROUND is dropped to fit
         result = _serialize_video_prompt_sections(sections)
+        assert "BACKGROUND:" in result
         assert "AUDIO:" in result, "Tier 1 AUDIO block was dropped — must not happen"
         assert "MOTION CONTINUITY:" in result, "Tier 1 MOTION CONTINUITY was dropped — must not happen"
 
-    def test_raises_when_tier1_alone_exceeds_limit(self):
-        """If Tier 1 blocks alone exceed the char limit, a ValueError must be raised."""
-        from graph.prompt_assembler import MAX_VIDEO_PROMPT_CHARS
-        huge_audio = "AUDIO:\n" + ("dialogue words " * (MAX_VIDEO_PROMPT_CHARS // 10))
-        huge_continuity = "MOTION CONTINUITY:\n" + ("carry forward " * (MAX_VIDEO_PROMPT_CHARS // 10))
+    def test_tier1_can_exceed_legacy_limit_without_raising(self):
+        """Large Tier 1 blocks should no longer trigger overflow errors."""
+        huge_audio = "AUDIO:\n" + ("dialogue words " * 500)
+        huge_continuity = "MOTION CONTINUITY:\n" + ("carry forward " * 500)
         sections = [huge_audio, huge_continuity]
-        with pytest.raises(ValueError, match="tier1_block_sizes"):
-            _serialize_video_prompt_sections(sections)
+        result = _serialize_video_prompt_sections(sections)
+        assert "AUDIO:" in result
+        assert "MOTION CONTINUITY:" in result
 ```
 
 ## `tests/test_pipeline_smoke_e2e.py`
@@ -40373,6 +48588,196 @@ if __name__ == "__main__":
     unittest.main()
 ```
 
+## `tests/test_project_report.py`
+
+```python
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from project_report import generate_project_report
+from video_prompt_projection import build_video_request_projection
+
+
+def _write(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+
+
+def _make_project(tmp_path: Path) -> Path:
+    project_dir = tmp_path / "project"
+    _write(
+        project_dir / "project_manifest.json",
+        json.dumps({"project": {"id": "p1"}, "phases": {"phase_0": {"status": "complete"}}}, indent=2),
+    )
+    _write(project_dir / "creative_output" / "outline_skeleton.md", "# Outline\n")
+    _write(project_dir / "creative_output" / "creative_output.md", "# Creative Output\n")
+    _write(
+        project_dir / "graph" / "narrative_graph.json",
+        json.dumps(
+            {
+                "project": {"project_id": "p1"},
+                "cast": {"cast_001": {"cast_id": "cast_001", "name": "Monday"}},
+                "locations": {"loc_001": {"location_id": "loc_001", "name": "Apartment"}},
+                "props": {},
+                "scenes": {"scene_01": {"scene_id": "scene_01"}},
+                "frames": {
+                    "f_001": {
+                        "frame_id": "f_001",
+                        "scene_id": "scene_01",
+                        "location_id": "loc_001",
+                        "formula_tag": "F01",
+                    },
+                    "f_002": {
+                        "frame_id": "f_002",
+                        "scene_id": "scene_01",
+                        "location_id": "loc_001",
+                        "formula_tag": "F01",
+                    },
+                },
+                "dialogue": {},
+                "storyboard_grids": {},
+                "cast_frame_states": {},
+                "prop_frame_states": {},
+                "location_frame_states": {},
+                "edges": [
+                    {
+                        "edge_id": "cast_001__appears_in__f_001",
+                        "source_id": "cast_001",
+                        "target_id": "f_001",
+                        "edge_type": "appears_in",
+                    }
+                ],
+            },
+            indent=2,
+        ),
+    )
+    _write(
+        project_dir / "frames" / "prompts" / "f_001_image.json",
+        json.dumps({"frame_id": "f_001", "prompt": "image prompt", "reference_images": ["locations/primary/loc_001.png"]}, indent=2),
+    )
+    _write(
+        project_dir / "frames" / "prompts" / "f_002_image.json",
+        json.dumps({"frame_id": "f_002", "prompt": "image prompt 2", "reference_images": ["locations/primary/loc_001.png"]}, indent=2),
+    )
+    _write(
+        project_dir / "video" / "prompts" / "f_001_video.json",
+        json.dumps(
+            {
+                "frame_id": "f_001",
+                "scene_id": "scene_01",
+                "prompt": (
+                    "Generate a cinematic motion clip with native audio.\n\n"
+                    "AUDIO:\n"
+                    "- Native spoken dialogue is required in this clip.\n"
+                    '- Monday: "I can do this." | delivery steady\n'
+                    "- Ambient layers: room tone"
+                ),
+                "dialogue_present": True,
+                "dialogue_line": "I can do this.",
+                "dialogue_turn_count": 1,
+                "dialogue_fit_status": "fits",
+                "camera_motion": "static",
+                "shot_type": "medium_close_up",
+                "input_image_path": "frames/composed/f_001_gen.png",
+                "cast_bible_snapshot": {
+                    "characters": [
+                        {
+                            "character_id": "cast_001",
+                            "name": "Monday",
+                            "pose": {
+                                "modifiers": [
+                                    "screen_position:frame_center",
+                                    "facing_direction:toward_camera",
+                                    "looking_at:camera",
+                                ]
+                            },
+                        }
+                    ]
+                },
+                "directing": {"camera_motivation": "Stay intimate on the turn."},
+            },
+            indent=2,
+        ),
+    )
+    _write(project_dir / "scripts" / "custom.py", "print('hi')\n")
+    composed = project_dir / "frames" / "composed" / "f_001_gen.png"
+    composed.parent.mkdir(parents=True, exist_ok=True)
+    composed.write_bytes(b"png")
+    return project_dir
+
+
+def test_generate_project_report_includes_snapshot_and_excludes_media(tmp_path: Path) -> None:
+    project_dir = _make_project(tmp_path)
+
+    report_path = generate_project_report(project_dir)
+    report = report_path.read_text(encoding="utf-8")
+
+    assert report_path == project_dir / "reports" / "project_report.md"
+    assert "## Snapshot Tree" in report
+    assert "## Video Prompt Projection" in report
+    assert "reports/video_prompt_projection.md" in report
+    assert "creative_output/outline_skeleton.md" in report
+    assert "frames/prompts/f_001_image.json" in report
+    assert "video/prompts/f_001_video.json" in report
+    assert "graph/narrative_graph.json" in report
+    assert "└── composed" not in report
+    assert "## Output Coverage" in report
+    assert "- Planned graph frames: `2`" in report
+    assert "- Composed frames generated: `1`" in report
+    assert "- Missing composed frames: `1`" in report
+    assert "`f_002`" in report
+    assert "`loc_001`: `1/2` (`50.0%`)" in report
+    assert "## Graph Edge Usage" in report
+    assert "`appears_in`: `1`" in report
+    assert (project_dir / "reports" / "video_prompt_projection.md").exists()
+    projection = (project_dir / "reports" / "video_prompt_projection.md").read_text(encoding="utf-8")
+    assert "#### Dialogue Prefix" in projection
+    assert "I can do this." in projection
+
+
+def test_build_video_request_projection_splits_dialogue_prefix_from_motion_prompt() -> None:
+    payload = build_video_request_projection(
+        {
+            "frame_id": "f_001",
+            "prompt": (
+                "Generate a cinematic motion clip with native audio.\n\n"
+                "AUDIO:\n"
+                "- Native spoken dialogue is required in this clip.\n"
+                '- Monday: "I can do this." | delivery steady\n'
+                "- Ambient layers: room tone"
+            ),
+            "dialogue_present": True,
+            "dialogue_line": "I can do this.",
+            "dialogue_turn_count": 1,
+            "camera_motion": "static",
+            "shot_type": "medium_close_up",
+            "cast_bible_snapshot": {"characters": []},
+            "directing": {"camera_motivation": "Stay intimate."},
+        }
+    )
+
+    assert payload["dialogue_text"] == "I can do this."
+    assert 'Monday: "I can do this."' not in payload["motion_prompt"]
+    assert payload["full_prompt"].startswith("I can do this.")
+
+
+def test_generate_project_report_archives_previous_report(tmp_path: Path) -> None:
+    project_dir = _make_project(tmp_path)
+
+    first_report = generate_project_report(project_dir)
+    assert first_report.exists()
+
+    _write(project_dir / "creative_output" / "creative_output.md", "# Creative Output\nUpdated\n")
+    second_report = generate_project_report(project_dir)
+
+    archive_reports = sorted((project_dir / "reports" / "archive").glob("*/project_report.md"))
+    assert second_report.exists()
+    assert archive_reports
+    assert "# Project Report" in archive_reports[-1].read_text(encoding="utf-8")
+```
+
 ## `tests/test_prompt_refactor_unit.py`
 
 ```python
@@ -40382,10 +48787,10 @@ import json
 from pathlib import Path
 
 import pytest
+from PIL import Image
 
-from graph.api import build_storyboard_grids
+from graph.api import build_shot_packet, build_storyboard_grids
 from graph.prompt_assembler import (
-    MAX_VIDEO_PROMPT_CHARS,
     _serialize_video_prompt_sections,
     assemble_all_prompts,
     assemble_image_prompt,
@@ -40531,14 +48936,14 @@ def _span_graph(tmp_path: Path):
     return graph
 
 
-def test_storyboard_grids_split_on_dialogue_turn(tmp_path: Path) -> None:
+def test_storyboard_grids_keep_small_sequential_beats_together(tmp_path: Path) -> None:
     graph = build_live_smoke_graph(tmp_path)
 
     grids = build_storyboard_grids(graph)
 
-    assert [grid.frame_ids for grid in grids] == [["f_001"], ["f_002"]]
-    assert [grid.break_reason for grid in grids] == ["dialogue_turn_change", "end"]
-    assert [(grid.rows, grid.cols) for grid in grids] == [(1, 1), (1, 1)]
+    assert [grid.frame_ids for grid in grids] == [["f_001", "f_002"]]
+    assert [grid.break_reason for grid in grids] == ["end"]
+    assert [(grid.rows, grid.cols) for grid in grids] == [(1, 2)]
 
 
 def test_structured_image_prompt_uses_shot_packet_and_no_dialogue_text(tmp_path: Path) -> None:
@@ -40556,6 +48961,7 @@ def test_structured_image_prompt_uses_shot_packet_and_no_dialogue_text(tmp_path:
     assert "NEGATIVE CONSTRAINTS:" in prompt["prompt"]
     assert "They're early." not in prompt["prompt"]
     assert "Do not render subtitles" in prompt["prompt"]
+    assert "Recent transition trail:" not in prompt["prompt"]
     assert prompt["cast_bible_snapshot"]["frame_id"] == "f_002"
 
 
@@ -40572,6 +48978,166 @@ def test_cast_bible_sync_produces_frame_scoped_pose_lock(tmp_path: Path) -> None
     assert pose.frame_id == "f_002"
     assert pose.pose.startswith("standing")
     assert any(mod.startswith("screen_position:") for mod in pose.modifiers)
+
+
+def test_reference_collector_stitches_three_plus_cast_refs(tmp_path: Path) -> None:
+    graph = build_live_smoke_graph(tmp_path)
+
+    additions = [
+        ("cast_blaire", "Blaire", "frame_left", (220, 120, 120, 255)),
+        ("cast_hudson", "Hudson", "frame_center", (120, 180, 220, 255)),
+        ("cast_sedona", "Sedona", "frame_right", (180, 140, 220, 255)),
+    ]
+    for cast_id, name, screen_position, color in additions:
+        graph.cast[cast_id] = CastNode(
+            cast_id=cast_id,
+            name=name,
+            identity=CastIdentity(
+                age_descriptor="30s",
+                physical_description=f"{name} reference portrait",
+                wardrobe_description=f"{name} wardrobe",
+            ),
+            voice=CastVoice(),
+            provenance=Provenance(source_prose_chunk=f"{name} added for stitched ref test."),
+            composite_path=f"cast/composites/{cast_id}_ref.png",
+        )
+        graph.cast_frame_states[f"{cast_id}@f_002"] = CastFrameState(
+            cast_id=cast_id,
+            frame_id="f_002",
+            frame_role=CastFrameRole.SUBJECT,
+            screen_position=screen_position,
+            posture=Posture.STANDING,
+            looking_at="cast_nova",
+            provenance=Provenance(source_prose_chunk=f"{name} visible in frame."),
+        )
+        ref_path = tmp_path / "cast" / "composites" / f"{cast_id}_ref.png"
+        ref_path.parent.mkdir(parents=True, exist_ok=True)
+        Image.new("RGBA", (512, 768), color).save(ref_path)
+
+    collector = ReferenceImageCollector(graph, tmp_path)
+    refs = collector.get_flat_reference_list("f_002")
+    stitched = [path for path in refs if "group_refs" in str(path)]
+
+    assert len(stitched) == 1
+    assert stitched[0].exists()
+    assert not any(path.name == "cast_blaire_ref.png" for path in refs)
+    with Image.open(stitched[0]) as image:
+        assert image.width > image.height
+
+
+def test_group_cast_image_prompt_uses_stitched_group_guidance(tmp_path: Path) -> None:
+    graph = build_live_smoke_graph(tmp_path)
+
+    additions = [
+        ("cast_blaire", "Blaire", "frame_left"),
+        ("cast_hudson", "Hudson", "frame_center"),
+        ("cast_sedona", "Sedona", "frame_right"),
+    ]
+    for cast_id, name, screen_position in additions:
+        graph.cast[cast_id] = CastNode(
+            cast_id=cast_id,
+            name=name,
+            identity=CastIdentity(
+                age_descriptor="30s",
+                physical_description=f"{name} reference portrait",
+                wardrobe_description=f"{name} wardrobe",
+            ),
+            voice=CastVoice(),
+            provenance=Provenance(source_prose_chunk=f"{name} added for group prompt test."),
+        )
+        graph.cast_frame_states[f"{cast_id}@f_002"] = CastFrameState(
+            cast_id=cast_id,
+            frame_id="f_002",
+            frame_role=CastFrameRole.SUBJECT,
+            posture=Posture.STANDING,
+            screen_position=screen_position,
+            looking_at="cast_nova",
+            provenance=Provenance(source_prose_chunk=f"{name} visible in frame."),
+        )
+
+    graph.frames["f_002"].action_summary = "The group crowds together as Nova absorbs the warning."
+    prompt = assemble_image_prompt(graph, "f_002", project_dir=tmp_path)
+
+    assert "POSE LOCK:" not in prompt["prompt"]
+    assert "Use the stitched group cast reference as the authority" in prompt["prompt"]
+    assert "Visible cast left-to-right in the frame:" in prompt["prompt"]
+    assert "Use the stitched group cast reference as the authoritative left-to-right blocking map." in prompt["prompt"]
+
+
+def test_large_group_prompt_uses_tableau_guidance_and_drops_roster_delta(tmp_path: Path) -> None:
+    graph = build_live_smoke_graph(tmp_path)
+
+    additions = [
+        ("cast_blaire", "Blaire", "frame_left"),
+        ("cast_hudson", "Hudson", "frame_center_left"),
+        ("cast_sedona", "Sedona", "frame_center"),
+        ("cast_rowan", "Rowan", "frame_center_right"),
+        ("cast_monday", "Monday", "frame_right"),
+    ]
+    for cast_id, name, screen_position in additions:
+        graph.cast[cast_id] = CastNode(
+            cast_id=cast_id,
+            name=name,
+            identity=CastIdentity(
+                age_descriptor="30s",
+                physical_description=f"{name} reference portrait",
+                wardrobe_description=f"{name} wardrobe",
+            ),
+            voice=CastVoice(),
+            provenance=Provenance(source_prose_chunk=f"{name} added for large group prompt test."),
+        )
+        graph.cast_frame_states[f"{cast_id}@f_002"] = CastFrameState(
+            cast_id=cast_id,
+            frame_id="f_002",
+            frame_role=CastFrameRole.SUBJECT,
+            posture=Posture.STANDING,
+            screen_position=screen_position,
+            looking_at="cast_nova",
+            provenance=Provenance(source_prose_chunk=f"{name} visible in frame."),
+        )
+
+    graph.frames["f_002"].action_summary = "The full group surges into frame around Nova in one chaotic welcoming tableau."
+    prompt = assemble_image_prompt(graph, "f_002", project_dir=tmp_path)
+
+    assert "Preserve the full visible ensemble as one coherent group tableau with 6 people." in prompt["prompt"]
+    assert "Treat the remaining visible cast as one coherent moving cluster rather than isolated hero poses." in prompt["prompt"]
+    assert "Cast entering frame:" not in prompt["prompt"]
+
+
+def test_profile_two_shot_prompt_rewrites_blocking_and_drops_pose_lock(tmp_path: Path) -> None:
+    graph = build_live_smoke_graph(tmp_path)
+    lyra = CastNode(
+        cast_id="cast_lyra",
+        name="Lyra",
+        identity=CastIdentity(
+            age_descriptor="30s",
+            physical_description="focused woman with a guarded stare",
+            wardrobe_description="dark jacket over a soft knit top",
+        ),
+        voice=CastVoice(),
+        provenance=Provenance(source_prose_chunk="Lyra challenges Nova in a profile faceoff."),
+    )
+    graph.cast[lyra.cast_id] = lyra
+    graph.cast_frame_states["cast_lyra@f_002"] = CastFrameState(
+        cast_id=lyra.cast_id,
+        frame_id="f_002",
+        frame_role=CastFrameRole.SUBJECT,
+        posture=Posture.STANDING,
+        action="holds the accusation",
+        screen_position="frame_right",
+        looking_at="cast_nova",
+        provenance=Provenance(source_prose_chunk="Lyra faces Nova directly."),
+    )
+    graph.frames["f_002"].cinematic_tag.ai_prompt_language = (
+        "Profile 50/50. Both in profile, facing each other, frame split down the middle."
+    )
+    graph.frames["f_002"].action_summary = "Nova and Lyra square off in a profile confrontation."
+
+    prompt = assemble_image_prompt(graph, "f_002", project_dir=tmp_path)
+
+    assert "POSE LOCK:" not in prompt["prompt"]
+    assert "- Nova | at frame_left | facing profile_right" in prompt["prompt"]
+    assert "- Lyra | at frame_right | facing profile_left" in prompt["prompt"]
 
 
 def test_structured_video_prompt_keeps_dialogue_in_audio_section(tmp_path: Path) -> None:
@@ -40617,6 +49183,20 @@ def test_assemble_all_prompts_writes_shot_packets(tmp_path: Path) -> None:
     assert video_prompt["shot_packet_path"] == "frames/shot_packets/f_002.json"
 
 
+def test_assemble_all_prompts_clears_stale_storyboard_prompt_files(tmp_path: Path) -> None:
+    graph = build_live_smoke_graph(tmp_path)
+    build_storyboard_grids(graph)
+
+    stale = tmp_path / "frames" / "storyboard_prompts" / "grid_stale_grid.json"
+    stale.parent.mkdir(parents=True, exist_ok=True)
+    stale.write_text("{}", encoding="utf-8")
+
+    counts = assemble_all_prompts(graph, tmp_path)
+
+    assert counts["storyboard_prompts"] == 0
+    assert not stale.exists()
+
+
 def test_dialogue_span_roles_surface_in_prompt_metadata_and_sections(tmp_path: Path) -> None:
     graph = _span_graph(tmp_path)
 
@@ -40657,7 +49237,7 @@ def test_dialogue_span_duration_is_distributed_across_frames(tmp_path: Path) -> 
     assert allocation["allocated_seconds"] >= 2
 
 
-def test_video_prompt_serializer_drops_background_before_tier1_blocks() -> None:
+def test_video_prompt_serializer_preserves_background_and_tier1_blocks() -> None:
     sections = [
         "Generate a cinematic motion clip.\nKeep the beat intact.\nMatch the previous framing.",
         "SHOT INTENT:\nHold the speaker in a medium close-up.\nKeep the listener soft in frame.",
@@ -40668,20 +49248,22 @@ def test_video_prompt_serializer_drops_background_before_tier1_blocks() -> None:
 
     prompt = _serialize_video_prompt_sections(sections)
 
-    assert len(prompt) <= MAX_VIDEO_PROMPT_CHARS
-    assert "BACKGROUND:" not in prompt
+    assert "BACKGROUND:" in prompt
     assert "MOTION CONTINUITY:" in prompt
     assert "AUDIO:" in prompt
 
 
-def test_video_prompt_serializer_raises_when_tier1_alone_exceeds_limit() -> None:
+def test_video_prompt_serializer_preserves_very_large_tier1_blocks() -> None:
     sections = [
         "MOTION CONTINUITY:\n" + "\n".join("x" * 220 for _ in range(12)),
         "AUDIO:\n" + "\n".join("y" * 220 for _ in range(12)),
     ]
 
-    with pytest.raises(ValueError, match="tier1_block_sizes"):
-        _serialize_video_prompt_sections(sections)
+    prompt = _serialize_video_prompt_sections(sections)
+
+    assert "MOTION CONTINUITY:" in prompt
+    assert "AUDIO:" in prompt
+    assert len(prompt) > 4096
 
 
 def test_assemble_video_prompt_rejects_sparse_shot_packet(tmp_path: Path) -> None:
@@ -40690,6 +49272,185 @@ def test_assemble_video_prompt_rejects_sparse_shot_packet(tmp_path: Path) -> Non
 
     with pytest.raises(ValueError, match="incomplete shot packet"):
         assemble_video_prompt(graph, "f_002")
+
+
+def test_screen_presence_prompt_counts_on_screen_subject(tmp_path: Path) -> None:
+    graph = build_live_smoke_graph(tmp_path)
+    graph.frames["f_002"].action_summary = (
+        "Nova smiles serenely on the laptop screen while the group chat erupts with excited confirmations."
+    )
+    graph.frames["f_002"].narrative_beat = graph.frames["f_002"].action_summary
+    graph.frames["f_002"].is_dialogue = False
+    graph.frames["f_002"].dialogue_ids = []
+    graph.cast_frame_states = {
+        key: value for key, value in graph.cast_frame_states.items()
+        if not key.endswith("@f_002")
+    }
+
+    packet = build_shot_packet(graph, "f_002")
+    prompt = assemble_image_prompt(graph, "f_002", project_dir=tmp_path)
+
+    assert packet.subject_count == 1
+    assert packet.visible_cast_ids == ["cast_nova"]
+    assert "Exactly 1 visible subject(s), counted within the laptop or video-call screen." in prompt["prompt"]
+    assert "Treat the on-screen caller or listener as the visible subject" in prompt["prompt"]
+    assert "LOCATION INVARIANTS:" not in prompt["prompt"]
+    assert "POSE LOCK:" not in prompt["prompt"]
+    assert "DIALOGUE COVERAGE:" not in prompt["prompt"]
+    assert "BLOCKING:" not in prompt["prompt"]
+
+
+def test_pure_black_prompt_drops_cinematic_scene_baggage(tmp_path: Path) -> None:
+    graph = build_live_smoke_graph(tmp_path)
+    frame = graph.frames["f_001"]
+    frame.action_summary = "The screen cuts abruptly to pure black."
+    frame.narrative_beat = frame.action_summary
+    frame.source_text = frame.action_summary
+    frame.dialogue_ids = []
+    frame.is_dialogue = False
+    graph.cast_frame_states = {
+        key: value for key, value in graph.cast_frame_states.items()
+        if not key.endswith("@f_001")
+    }
+
+    prompt = assemble_image_prompt(graph, "f_001", project_dir=tmp_path)
+
+    assert "Output clean pure black only." in prompt["prompt"]
+    assert "LOCATION INVARIANTS:" not in prompt["prompt"]
+    assert "POSE LOCK:" not in prompt["prompt"]
+    assert "Exactly 0 visible human subject(s)." in prompt["prompt"]
+    assert "Render pure black only." in prompt["prompt"]
+
+
+def test_fade_to_black_transition_is_classified_as_pure_black(tmp_path: Path) -> None:
+    graph = build_live_smoke_graph(tmp_path)
+    frame = graph.frames["f_001"]
+    frame.action_summary = "The image fades to black. After a beat, the screen lights up again for the post-credits scene."
+    frame.narrative_beat = frame.action_summary
+    frame.source_text = frame.action_summary
+    frame.dialogue_ids = []
+    frame.is_dialogue = False
+    graph.cast_frame_states = {
+        key: value for key, value in graph.cast_frame_states.items()
+        if not key.endswith("@f_001")
+    }
+
+    image_prompt = assemble_image_prompt(graph, "f_001", project_dir=tmp_path)
+    video_prompt = assemble_video_prompt(graph, "f_001")
+
+    assert "Output clean pure black only." in image_prompt["prompt"]
+    assert "LOCATION INVARIANTS:" not in image_prompt["prompt"]
+    assert "Hold on full-frame pure black with no visible imagery." in video_prompt["prompt"]
+    assert "LOCATION INVARIANTS:" not in video_prompt["prompt"]
+
+
+def test_hand_object_prompt_keeps_anonymous_hand_constraint(tmp_path: Path) -> None:
+    graph = build_live_smoke_graph(tmp_path)
+    frame = graph.frames["f_001"]
+    frame.action_summary = "A single hand lowers into frame and crushes the pager against the tabletop."
+    frame.narrative_beat = frame.action_summary
+    frame.source_text = frame.action_summary
+    frame.dialogue_ids = []
+    frame.is_dialogue = False
+    graph.cast_frame_states = {
+        key: value for key, value in graph.cast_frame_states.items()
+        if not key.endswith("@f_001")
+    }
+
+    packet = build_shot_packet(graph, "f_001")
+    prompt = assemble_image_prompt(graph, "f_001", project_dir=tmp_path)
+
+    assert packet.subject_count == 1
+    assert "Exactly 1 visible human subject(s), expressed only as anonymous hands if present." in prompt["prompt"]
+    assert "Do not invent a face, torso, or additional people around the hand-driven action." in prompt["prompt"]
+
+
+def test_object_macro_prompt_drops_room_level_baggage(tmp_path: Path) -> None:
+    graph = build_live_smoke_graph(tmp_path)
+    frame = graph.frames["f_001"]
+    frame.action_summary = "Extreme close-up of a mortar and pestle grinding bright red cherry pulp into coarse powder."
+    frame.narrative_beat = frame.action_summary
+    frame.source_text = frame.action_summary
+    frame.dialogue_ids = []
+    frame.is_dialogue = False
+    graph.cast_frame_states = {
+        key: value for key, value in graph.cast_frame_states.items()
+        if not key.endswith("@f_001")
+    }
+
+    prompt = assemble_image_prompt(graph, "f_001", project_dir=tmp_path)
+
+    assert "SPECIAL HANDLING:" in prompt["prompt"]
+    assert "LOCATION INVARIANTS:" not in prompt["prompt"]
+    assert "BACKGROUND:" not in prompt["prompt"]
+    assert "BLOCKING:" not in prompt["prompt"]
+
+
+def test_environment_transition_prompt_drops_prior_location_baggage(tmp_path: Path) -> None:
+    graph = build_live_smoke_graph(tmp_path)
+    frame = graph.frames["f_001"]
+    frame.action_summary = "The screen emerges from black into a psychedelic sunset exploding over Topanga Canyon."
+    frame.narrative_beat = frame.action_summary
+    frame.source_text = frame.action_summary
+    frame.dialogue_ids = []
+    frame.is_dialogue = False
+    graph.cast_frame_states = {
+        key: value for key, value in graph.cast_frame_states.items()
+        if not key.endswith("@f_001")
+    }
+
+    prompt = assemble_image_prompt(graph, "f_001", project_dir=tmp_path)
+
+    assert "SPECIAL HANDLING:" in prompt["prompt"]
+    assert "landscape or environmental transition" in prompt["prompt"]
+    assert "LOCATION INVARIANTS:" not in prompt["prompt"]
+    assert "BLOCKING:" not in prompt["prompt"]
+
+
+def test_title_card_prompt_allows_authored_text_and_drops_room_baggage(tmp_path: Path) -> None:
+    graph = build_live_smoke_graph(tmp_path)
+    frame = graph.frames["f_001"]
+    frame.action_summary = "Screen suddenly flashes with bold title card 'THIS IS NOT A CULT!' burning brightly"
+    frame.narrative_beat = frame.action_summary
+    frame.source_text = frame.action_summary
+    frame.dialogue_ids = []
+    frame.is_dialogue = False
+    graph.cast_frame_states = {
+        key: value for key, value in graph.cast_frame_states.items()
+        if not key.endswith("@f_001")
+    }
+
+    prompt = assemble_image_prompt(graph, "f_001", project_dir=tmp_path)
+
+    assert "authored title-card insert" in prompt["prompt"]
+    assert "Render a bold authored title-card insert" in prompt["prompt"]
+    assert "LOCATION INVARIANTS:" not in prompt["prompt"]
+    assert "BLOCKING:" not in prompt["prompt"]
+    assert (
+        "Do not add captions, subtitles, browser chrome, logos, or any extra UI beyond the authored title text."
+        in prompt["prompt"]
+    )
+
+
+def test_hand_tool_manipulation_uses_hand_mode_and_drops_room_baggage(tmp_path: Path) -> None:
+    graph = build_live_smoke_graph(tmp_path)
+    frame = graph.frames["f_001"]
+    frame.action_summary = "Pestle driven rhythmically into mortar, grinding cherry pits into coarse red powder"
+    frame.narrative_beat = frame.action_summary
+    frame.source_text = frame.action_summary
+    frame.dialogue_ids = []
+    frame.is_dialogue = False
+    graph.cast_frame_states = {
+        key: value for key, value in graph.cast_frame_states.items()
+        if not key.endswith("@f_001")
+    }
+
+    prompt = assemble_image_prompt(graph, "f_001", project_dir=tmp_path)
+
+    assert "hand-driven action" in prompt["prompt"]
+    assert "Exactly 1 visible human subject(s), expressed only as anonymous hands if present." in prompt["prompt"]
+    assert "LOCATION INVARIANTS:" not in prompt["prompt"]
+    assert "BLOCKING:" not in prompt["prompt"]
 ```
 
 ## `train_agent.py`
@@ -40698,7 +49459,7 @@ def test_assemble_video_prompt_rejects_sparse_shot_packet(tmp_path: Path) -> Non
 #!/usr/bin/env python3
 """ScreenWire AI — Agent Training Mode
 
-Spawns individual pipeline agents as interactive Claude CLI sessions so you
+Spawns individual pipeline agents as interactive Grok-backed sessions so you
 can talk to them directly, see their full terminal output, and iterate on
 their behavior in real time.
 
@@ -40716,6 +49477,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from llm.xai_client import DEFAULT_REASONING_MODEL
+
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
@@ -40725,7 +49488,7 @@ PROMPTS_DIR = APP_DIR / "agent_prompts"
 SKILLS_DIR = APP_DIR / "skills"
 PROJECTS_DIR = APP_DIR / "projects"
 
-DEFAULT_MODEL = "claude-opus-4-6"
+DEFAULT_MODEL = DEFAULT_REASONING_MODEL
 
 _INCLUDE_RE = re.compile(r'\{\{include:(.+?)\}\}')
 
@@ -40893,12 +49656,17 @@ def spawn_session(agent_id: str, project_dir: Path, model: str) -> int:
     }
     # Prevent nested-session detection
     env.pop("CLAUDECODE", None)
+    existing_pythonpath = env.get("PYTHONPATH", "")
+    repo_root = str(APP_DIR)
+    env["PYTHONPATH"] = repo_root if not existing_pythonpath else f"{repo_root}{os.pathsep}{existing_pythonpath}"
 
     cmd = [
-        "claude",
+        sys.executable,
+        "-m", "llm.agent_runner",
         "--system-prompt", system_prompt,
         "--model", model,
         "--dangerously-skip-permissions",
+        "--task-hint", agent_id,
     ]
 
     desc = dict(AGENTS).get(agent_id, agent_id)
@@ -40932,7 +49700,7 @@ def main():
     )
     parser.add_argument(
         "--model", default=DEFAULT_MODEL,
-        help=f"Claude model to use (default: {DEFAULT_MODEL})",
+        help=f"Model to use (default: {DEFAULT_MODEL})",
     )
     parser.add_argument(
         "--project", default=None,
@@ -40987,6 +49755,279 @@ def main():
             break
 
     print(f"\n{DIM}Training mode complete.{RESET}\n")
+
+
+if __name__ == "__main__":
+    main()
+```
+
+## `video_prompt_projection.py`
+
+```python
+#!/usr/bin/env python3
+"""Project the exact outbound video request payloads and render a report."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+from collections import Counter
+from pathlib import Path
+from typing import Any
+
+
+_SECTION_RE = re.compile(r"(?m)^([A-Z][A-Z /_-]+):\n")
+
+
+def _frame_sort_key(frame_id: str) -> tuple[int, str]:
+    try:
+        return int(frame_id.split("_")[1]), frame_id
+    except Exception:
+        return 10**9, frame_id
+
+
+def _split_sections(prompt: str) -> list[tuple[str | None, str]]:
+    if not prompt.strip():
+        return []
+    sections: list[tuple[str | None, str]] = []
+    matches = list(_SECTION_RE.finditer(prompt))
+    if not matches:
+        return [(None, prompt.strip())]
+
+    lead = prompt[:matches[0].start()].strip()
+    if lead:
+        sections.append((None, lead))
+
+    for index, match in enumerate(matches):
+        title = match.group(1).strip()
+        start = match.end()
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(prompt)
+        body = prompt[start:end].strip()
+        if body:
+            sections.append((title, body))
+    return sections
+
+
+def _strip_audio_dialogue_lines(prompt: str, dialogue_text: str) -> str:
+    if not prompt.strip():
+        return prompt
+
+    rebuilt: list[str] = []
+    for title, body in _split_sections(prompt):
+        if title == "AUDIO":
+            kept_lines: list[str] = []
+            for line in body.splitlines():
+                stripped = line.strip()
+                if stripped.startswith("- "):
+                    bullet = stripped[2:].strip()
+                    if "\"" in bullet and ":" in bullet:
+                        continue
+                    if dialogue_text and dialogue_text.strip() and dialogue_text.strip() in bullet:
+                        continue
+                kept_lines.append(line.rstrip())
+            body = "\n".join(line for line in kept_lines if line.strip()).strip()
+            if not body:
+                continue
+
+        if title is None:
+            rebuilt.append(body.strip())
+        else:
+            rebuilt.append(f"{title}:\n{body}")
+    return "\n\n".join(chunk for chunk in rebuilt if chunk.strip())
+
+
+def _extract_pose_signal(character: dict[str, Any], prefix: str) -> str:
+    pose = character.get("pose") or {}
+    for modifier in pose.get("modifiers") or []:
+        text = str(modifier).strip()
+        if text.startswith(prefix):
+            return text.split(":", 1)[1].strip()
+    return ""
+
+
+def build_video_request_projection(prompt_data: dict[str, Any]) -> dict[str, Any]:
+    dialogue_text = (prompt_data.get("dialogue_line") or "").strip()
+    original_prompt = str(prompt_data.get("prompt") or "")
+    motion_prompt = _strip_audio_dialogue_lines(original_prompt, dialogue_text)
+    full_prompt = (
+        f"{dialogue_text}\n\n{motion_prompt}".strip()
+        if dialogue_text
+        else motion_prompt.strip()
+    )
+
+    direction_signals: list[dict[str, str]] = []
+    for character in (prompt_data.get("cast_bible_snapshot") or {}).get("characters") or []:
+        direction_signals.append(
+            {
+                "character_id": str(character.get("character_id") or ""),
+                "name": str(character.get("name") or ""),
+                "screen_position": _extract_pose_signal(character, "screen_position:"),
+                "facing_direction": _extract_pose_signal(character, "facing_direction:"),
+                "looking_at": _extract_pose_signal(character, "looking_at:"),
+                "eye_direction": _extract_pose_signal(character, "eye_direction:"),
+                "action": _extract_pose_signal(character, "action:"),
+                "emotion": _extract_pose_signal(character, "emotion:"),
+            }
+        )
+
+    directing = prompt_data.get("directing") or {}
+    issues: list[str] = []
+    if prompt_data.get("dialogue_present") and not dialogue_text:
+        issues.append("dialogue_present=true but dialogue_text is empty")
+    if not str(prompt_data.get("shot_type") or "").strip():
+        issues.append("shot_type missing")
+    if not str(prompt_data.get("camera_motion") or "").strip():
+        issues.append("camera_motion missing")
+    if direction_signals and not any(item["facing_direction"] for item in direction_signals):
+        issues.append("cast direction missing: no facing_direction in cast_bible_snapshot")
+    if direction_signals and not any(item["looking_at"] or item["eye_direction"] for item in direction_signals):
+        issues.append("eyeline missing: no looking_at or eye_direction in cast_bible_snapshot")
+    if prompt_data.get("dialogue_present") and not str(directing.get("camera_motivation") or "").strip():
+        issues.append("dialogue beat missing camera_motivation")
+
+    return {
+        "frame_id": prompt_data.get("frame_id"),
+        "scene_id": prompt_data.get("scene_id"),
+        "input_image_path": prompt_data.get("input_image_path"),
+        "duration": prompt_data.get("duration"),
+        "dialogue_present": bool(prompt_data.get("dialogue_present")),
+        "dialogue_turn_count": int(prompt_data.get("dialogue_turn_count") or 0),
+        "dialogue_fit_status": prompt_data.get("dialogue_fit_status"),
+        "dialogue_text": dialogue_text,
+        "motion_prompt": motion_prompt,
+        "full_prompt": full_prompt,
+        "shot_type": prompt_data.get("shot_type"),
+        "camera_motion": prompt_data.get("camera_motion"),
+        "voice_delivery": prompt_data.get("voice_delivery"),
+        "direction_signals": direction_signals,
+        "directing": directing,
+        "issues": issues,
+    }
+
+
+def _render_projection_markdown(project_dir: Path, payloads: list[dict[str, Any]]) -> str:
+    issue_counts: Counter[str] = Counter()
+    fit_counts: Counter[str] = Counter()
+    dialogue_frames = 0
+    with_facing = 0
+    with_eyeline = 0
+    with_camera_motivation = 0
+
+    for payload in payloads:
+        fit_counts[str(payload.get("dialogue_fit_status") or "unknown")] += 1
+        if payload.get("dialogue_present"):
+            dialogue_frames += 1
+        if any(item.get("facing_direction") for item in payload.get("direction_signals", [])):
+            with_facing += 1
+        if any(item.get("looking_at") or item.get("eye_direction") for item in payload.get("direction_signals", [])):
+            with_eyeline += 1
+        if str((payload.get("directing") or {}).get("camera_motivation") or "").strip():
+            with_camera_motivation += 1
+        for issue in payload.get("issues", []):
+            issue_counts[issue] += 1
+
+    lines: list[str] = []
+    lines.append("# Video Prompt Projection")
+    lines.append("")
+    lines.append(f"- Project: `{project_dir.name}`")
+    lines.append("- Scope: exact outbound payloads as Phase 5 would send them to `/internal/generate-video`")
+    lines.append(f"- Projected frame count: `{len(payloads)}`")
+    lines.append(f"- Dialogue-bearing frames: `{dialogue_frames}`")
+    lines.append(f"- Frames with facing signals in cast snapshot: `{with_facing}`")
+    lines.append(f"- Frames with eyeline signals in cast snapshot: `{with_eyeline}`")
+    lines.append(f"- Frames with camera motivation in directing: `{with_camera_motivation}`")
+    lines.append("")
+
+    lines.append("## Dialogue Fit Status")
+    lines.append("")
+    for key, count in fit_counts.most_common():
+        lines.append(f"- `{key}`: `{count}`")
+    if not fit_counts:
+        lines.append("- No projected video payloads found")
+    lines.append("")
+
+    lines.append("## Projection Issues")
+    lines.append("")
+    for issue, count in issue_counts.most_common():
+        lines.append(f"- `{issue}`: `{count}`")
+    if not issue_counts:
+        lines.append("- No projection issues detected")
+    lines.append("")
+
+    lines.append("## Per-Frame Payloads")
+    lines.append("")
+    for payload in payloads:
+        frame_id = payload.get("frame_id") or "unknown"
+        lines.append(f"### `{frame_id}`")
+        lines.append("")
+        lines.append(f"- Scene: `{payload.get('scene_id')}`")
+        lines.append(f"- Image path: `{payload.get('input_image_path')}`")
+        lines.append(f"- Duration: `{payload.get('duration')}`")
+        lines.append(f"- Shot type: `{payload.get('shot_type')}`")
+        lines.append(f"- Camera motion: `{payload.get('camera_motion')}`")
+        lines.append(f"- Dialogue present: `{payload.get('dialogue_present')}`")
+        lines.append(f"- Dialogue turns: `{payload.get('dialogue_turn_count')}`")
+        lines.append(f"- Dialogue fit: `{payload.get('dialogue_fit_status')}`")
+        if payload.get("issues"):
+            lines.append("- Issues:")
+            for issue in payload["issues"]:
+                lines.append(f"  - {issue}")
+        lines.append("")
+        lines.append("#### Dialogue Prefix")
+        lines.append("")
+        lines.append("```text")
+        lines.append(payload.get("dialogue_text") or "")
+        lines.append("```")
+        lines.append("")
+        lines.append("#### Motion Prompt")
+        lines.append("")
+        lines.append("```text")
+        lines.append(payload.get("motion_prompt") or "")
+        lines.append("```")
+        lines.append("")
+        lines.append("#### Direction Signals")
+        lines.append("")
+        for signal in payload.get("direction_signals", []):
+            lines.append(
+                "- "
+                + ", ".join(
+                    f"{key}={value!r}"
+                    for key, value in signal.items()
+                    if value
+                )
+            )
+        if not payload.get("direction_signals"):
+            lines.append("- No cast direction signals")
+        lines.append("")
+    return "\n".join(lines)
+
+
+def generate_video_prompt_projection(project_dir: Path) -> tuple[Path, Path]:
+    project_dir = project_dir.resolve()
+    reports_dir = project_dir / "reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    prompt_dir = project_dir / "video" / "prompts"
+    payloads: list[dict[str, Any]] = []
+    for path in sorted(prompt_dir.glob("*_video.json")):
+        data = json.loads(path.read_text(encoding="utf-8"))
+        payloads.append(build_video_request_projection(data))
+    payloads.sort(key=lambda item: _frame_sort_key(str(item.get("frame_id") or "")))
+
+    json_path = reports_dir / "video_prompt_projection.json"
+    md_path = reports_dir / "video_prompt_projection.md"
+    json_path.write_text(json.dumps(payloads, indent=2, ensure_ascii=False), encoding="utf-8")
+    md_path.write_text(_render_projection_markdown(project_dir, payloads), encoding="utf-8")
+    return md_path, json_path
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Generate video prompt projection reports.")
+    parser.add_argument("--project-dir", required=True, help="Project directory")
+    args = parser.parse_args()
+    md_path, json_path = generate_video_prompt_projection(Path(args.project_dir))
+    print(md_path)
+    print(json_path)
 
 
 if __name__ == "__main__":

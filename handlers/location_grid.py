@@ -26,6 +26,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from PIL import Image
+
 from .base import BaseHandler, adapt_input_for_model, classify_replicate_error
 from .models import (
     MODEL_ROUTES,
@@ -35,6 +37,51 @@ from .models import (
 )
 
 logger = logging.getLogger("handlers.location_grid")
+
+_DIRECTION_PANEL_ORDER: dict[str, tuple[int, int]] = {
+    "north": (0, 0),
+    "east": (1, 0),
+    "west": (0, 1),
+    "south": (1, 1),
+}
+
+
+def extract_directional_location_variants(grid_path: Path, location_id: str) -> dict[str, Path]:
+    """Extract north/east/west/south crops from a generated 2x2 location grid.
+
+    The location grid includes labels and a title banner near the panel edges.
+    We crop inward on all sides so the downstream frame pipeline gets clean
+    direction-specific environmental refs instead of the full labeled grid.
+    """
+    variants_dir = grid_path.parent.parent / "variants"
+    variants_dir.mkdir(parents=True, exist_ok=True)
+
+    out: dict[str, Path] = {}
+    with Image.open(grid_path) as grid:
+        width, height = grid.size
+        half_w = width // 2
+        half_h = height // 2
+        pad_x = max(24, half_w // 12)
+        pad_y = max(24, half_h // 10)
+        top_row_extra = max(pad_y, half_h // 8)
+
+        for direction, (col, row) in _DIRECTION_PANEL_ORDER.items():
+            left = col * half_w
+            top = row * half_h
+            right = left + half_w
+            bottom = top + half_h
+
+            inner_left = left + pad_x
+            inner_right = right - pad_x
+            inner_top = top + (top_row_extra if row == 0 else pad_y)
+            inner_bottom = bottom - pad_y
+
+            crop = grid.crop((inner_left, inner_top, inner_right, inner_bottom))
+            out_path = variants_dir / f"{location_id}_{direction}.png"
+            crop.save(out_path)
+            out[direction] = out_path
+
+    return out
 
 
 # ── Panel Descriptor ──────────────────────────────────────────────
@@ -151,6 +198,15 @@ def build_grid_prompt(
         "",
         *panel_lines,
         "",
+        (
+            "Directional label layout is fixed and must be followed exactly: "
+            "NORTH = top-left panel, label in the bottom-right inner corner; "
+            "EAST = top-right panel, label in the bottom-left inner corner; "
+            "WEST = bottom-left panel, label in the top-right inner corner; "
+            "SOUTH = bottom-right panel, label in the top-left inner corner. "
+            "Do not swap panel positions or move the labels."
+        ),
+        "",
     ]
     if media_style:
         parts.append(media_style)
@@ -242,27 +298,45 @@ class LocationGridHandler(BaseHandler):
 
         if prediction.get("status") != "succeeded":
             error_msg = prediction.get("error", "Generation failed")
-            return LocationGridOutput(
-                success=False,
-                location_id=inp.location_id,
-                model_used=model,
-                error=error_msg,
-                error_detail=classify_replicate_error(error_msg),
-                elapsed_s=time.monotonic() - t0,
+            logs = prediction.get("logs", "") or ""
+            detail = classify_replicate_error(error_msg, logs)
+            xai_rescue = await self._try_xai_image_rescue(
+                pred_input,
+                reference_paths=[],
+                output_path=output_path,
+                error_detail=detail,
+                sensitive_context=inp.sensitive_context,
+                extra_headers=request_headers,
             )
+            if xai_rescue:
+                prediction, model = xai_rescue
+            else:
+                return LocationGridOutput(
+                    success=False,
+                    location_id=inp.location_id,
+                    model_used=model,
+                    error=error_msg,
+                    error_detail=detail,
+                    elapsed_s=time.monotonic() - t0,
+                )
 
-        output_url = self.extract_output_url(prediction)
-        if not output_url:
-            return LocationGridOutput(
-                success=False,
-                location_id=inp.location_id,
-                model_used=model,
-                error="No output URL in prediction response",
-                elapsed_s=time.monotonic() - t0,
-            )
+        local_output_path = prediction.get("local_output_path")
+        if local_output_path:
+            output_path = Path(local_output_path)
+        else:
+            output_url = self.extract_output_url(prediction)
+            if not output_url:
+                return LocationGridOutput(
+                    success=False,
+                    location_id=inp.location_id,
+                    model_used=model,
+                    error="No output URL in prediction response",
+                    elapsed_s=time.monotonic() - t0,
+                )
 
-        # ── Download result ───────────────────────────────────
-        await self.download_output(output_url, output_path)
+            # ── Download result ───────────────────────────────────
+            await self.download_output(output_url, output_path)
+        extract_directional_location_variants(output_path, inp.location_id)
         logger.info(
             "Location grid generated for %s [%s] at %s %s",
             inp.location_id,

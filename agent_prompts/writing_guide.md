@@ -8,7 +8,9 @@ This guide governs ALL prose output from the Creative Coordinator. Every spawned
 
 Your prose tells a linear story of **motion, dialogue, reaction, action, weight, and establishment.** These are the six elements every scene is built from. Not plot — visual flow. Every paragraph should be doing at least one, and the sequence should cycle through them naturally, never stacking any single one.
 
-**Dialogue is the heartbeat of the story.** At stickiness level 3 and above, dialogue should be the most frequent element in any scene with two or more characters. Characters who are together talk — about what's happening, what they feel, what they want. A scene where two characters are present but never speak to each other is almost always wrong. When in doubt, add dialogue. A line of speech does more for character, pacing, and audience connection than a paragraph of visual description.
+**Dialogue is the heartbeat of the story.** At `creative` and `unbounded`, dialogue should be one of the dominant elements in any scene with two or more characters. Characters who are together usually talk — about what's happening, what they feel, what they want. At `balanced`, preserve dialogue closely to the source and only smooth delivery lightly. At `strict`, never add dialogue that is not already explicit in the source.
+
+**For `strict` and `balanced`, dialogue is source-locked.** If the source scene contains spoken exchanges, your prose must carry those exchanges forward as dialogue rather than converting them into summary narration. Do not compress a dialogue-heavy script by trimming speech. Compress by trimming repeated atmosphere, redundant physical business, or silent connective tissue. Build the rest of the frames around the dialogue, not the other way around.
 
 | Element | What it means | What it produces downstream |
 |---|---|---|
@@ -86,16 +88,16 @@ This means your prose should naturally write in pairs: a visual beat, then the l
 
 ### Frame Density Targets
 
-Based on project size and stickiness level:
+Based on project size and `creativeFreedom`:
 
-| Scale | Scenes | Stickiness | Frames/Scene | Total Range |
+| Scale | Scenes | Creative Freedom | Frames/Scene | Total Range |
 |---|---|---|---|---|
-| Micro | 1-2 | 1-2 | 8-14 | 8-28 |
-| Small | 3 | 3 | 14-20 | 42-60 |
-| Medium | 4-6 | 3-4 | 18-30 | 72-180 |
-| Large | 6-8 | 4-5 | 25-40 | 150-320 |
+| Micro | 1-2 | `strict` / `balanced` | 8-14 | 8-28 |
+| Small | 3 | `balanced` / `creative` | 14-20 | 42-60 |
+| Medium | 4-6 | `creative` | 18-30 | 72-180 |
+| Large | 6-8 | `creative` / `unbounded` | 25-40 | 150-320 |
 
-If you write a 3-scene project at stickiness 3 and your prose only implies ~8 frames per scene, you are under-writing. The visual flow will feel rushed and thin.
+If you write a 3-scene project at `creative` and your prose only implies ~8 frames per scene, you are under-writing. The visual flow will feel rushed and thin. At `balanced`, do not inflate scenes just to chase density; only include what the source materially supports. At `strict`, preserve source density even if it feels sparse. In both `strict` and `balanced`, if the source is dialogue-heavy, the prose should stay dialogue-heavy even when the overall frame budget is tight.
 
 ### The narrativeBeat Priority Order
 

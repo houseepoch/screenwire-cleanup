@@ -24,12 +24,14 @@ import asyncio
 import base64
 import logging
 import mimetypes
+import os
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any
 
 import httpx
+import xai_sdk
 from tenacity import (
     RetryError,
     retry,
@@ -38,9 +40,11 @@ from tenacity import (
     wait_exponential,
 )
 
+from llm.xai_client import XAI_BASE_URL
 from telemetry import build_request_headers
 
 from .models import MODEL_ROUTES, ModelRoute
+from .reference_pack import build_xai_rescue_sheet
 
 logger = logging.getLogger("handlers")
 
@@ -49,6 +53,8 @@ logger = logging.getLogger("handlers")
 REPLICATE_API_BASE = "https://api.replicate.com/v1"
 POLL_INTERVAL_S = 5
 POLL_MAX_ATTEMPTS = 120  # 10 minutes max
+XAI_IMAGE_RESCUE_MODEL = "grok-imagine-image-pro"
+XAI_IMAGE_MAX_INPUTS = 1
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -57,9 +63,9 @@ POLL_MAX_ATTEMPTS = 120  # 10 minutes max
 
 
 def _is_retryable_http_error(exc: BaseException) -> bool:
-    """Retry on 429 (rate-limit), 500 (server error), 503 (unavailable)."""
+    """Retry on 429/500/502/503 upstream HTTP failures."""
     if isinstance(exc, httpx.HTTPStatusError):
-        return exc.response.status_code in (429, 500, 503)
+        return exc.response.status_code in (429, 500, 502, 503)
     return False
 
 
@@ -104,7 +110,19 @@ def classify_replicate_error(error_msg: str, logs: str = "") -> dict[str, Any]:
         }
     if any(
         kw in combined
-        for kw in ("capacity", "unavailable", "503", "e003", "overloaded")
+        for kw in (
+            "capacity",
+            "unavailable",
+            "overloaded",
+            "503",
+            "502",
+            "bad gateway",
+            "please retry",
+            "interrupted",
+            "retries exhausted",
+            "code: pa",
+            "e003",
+        )
     ):
         return {
             "failure_type": "UPSTREAM_TRANSIENT",
@@ -217,9 +235,10 @@ class BaseHandler(ABC):
         http_client: httpx.AsyncClient | None = None,
     ):
         self.replicate_token = replicate_token
-        self.xai_key = xai_key
+        self.xai_key = xai_key or os.getenv("XAI_API_KEY", "")
         self._client = http_client
         self._owns_client = http_client is None
+        self._xai_sdk_client: xai_sdk.AsyncClient | None = None
 
     # ── Lifecycle ──────────────────────────────────────────────
 
@@ -233,11 +252,21 @@ class BaseHandler(ABC):
             self._owns_client = True
         return self._client
 
+    @property
+    def xai_sdk_client(self) -> xai_sdk.AsyncClient:
+        """Lazy async xAI SDK client for image rescue."""
+        if self._xai_sdk_client is None:
+            self._xai_sdk_client = xai_sdk.AsyncClient(api_key=self.xai_key)
+        return self._xai_sdk_client
+
     async def close(self) -> None:
         """Close the HTTP client if we own it."""
         if self._owns_client and self._client is not None:
             await self._client.aclose()
             self._client = None
+        if self._xai_sdk_client is not None:
+            await self._xai_sdk_client.close()
+            self._xai_sdk_client = None
 
     async def __aenter__(self) -> "BaseHandler":
         return self
@@ -262,6 +291,18 @@ class BaseHandler(ABC):
             "Authorization": f"Bearer {self.replicate_token}",
             "Content-Type": "application/json",
             "Prefer": "wait",  # Synchronous mode
+        }
+        if extra_headers:
+            headers.update(extra_headers)
+        return headers
+
+    def _xai_headers(
+        self,
+        extra_headers: dict[str, str] | None = None,
+    ) -> dict[str, str]:
+        headers = {
+            "Authorization": f"Bearer {self.xai_key}",
+            "Content-Type": "application/json",
         }
         if extra_headers:
             headers.update(extra_headers)
@@ -432,7 +473,7 @@ class BaseHandler(ABC):
                 continue
 
             except httpx.HTTPStatusError as exc:
-                if exc.response.status_code in (429, 503):
+                if exc.response.status_code in (429, 502, 503):
                     logger.warning(
                         "Model %s HTTP %d after retries, trying next",
                         model,
@@ -484,6 +525,133 @@ class BaseHandler(ABC):
                 return prediction, model
         except Exception:
             logger.warning("4K capacity rescue also failed for nano-banana-pro")
+
+        return None
+
+    @staticmethod
+    def _xai_resolution_for_resolution(resolution: str | None) -> str:
+        resolution = (resolution or "").upper()
+        return "2k" if resolution in {"2K", "4K"} else "1k"
+
+    @staticmethod
+    def _xai_image_files(reference_paths: list[Path]) -> list[Path]:
+        """Prepare a single compact local ref for xAI image-edit requests."""
+        return reference_paths[:XAI_IMAGE_MAX_INPUTS]
+
+    async def _write_xai_image_response(self, response: Any, output_path: Path) -> bool:
+        """Persist the first xAI image response item to *output_path*."""
+        if isinstance(response, dict):
+            data = response.get("data") or []
+        else:
+            data = getattr(response, "data", None) or []
+        if not data:
+            return False
+        item = data[0]
+        if isinstance(item, dict):
+            b64_json = item.get("b64_json")
+            url = item.get("url")
+        else:
+            b64_json = getattr(item, "b64_json", None)
+            url = getattr(item, "url", None)
+        if b64_json:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_bytes(base64.b64decode(b64_json))
+            return True
+        if isinstance(url, str) and url:
+            await self.download_output(url, output_path)
+            return True
+        return False
+
+    async def _xai_image_request(
+        self,
+        *,
+        endpoint: str,
+        payload: dict[str, Any],
+        extra_headers: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        if not self.xai_key:
+            raise ValueError("XAI_API_KEY environment variable is required for xAI image rescue")
+        resp = await self.client.post(
+            f"{XAI_BASE_URL}{endpoint}",
+            json=payload,
+            headers=self._xai_headers(extra_headers),
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return data if isinstance(data, dict) else {}
+
+    async def _try_xai_image_rescue(
+        self,
+        pred_input: dict,
+        *,
+        reference_paths: list[Path],
+        output_path: Path,
+        error_detail: dict[str, Any],
+        sensitive_context: bool = False,
+        extra_headers: dict[str, str] | None = None,
+    ) -> tuple[dict, str] | None:
+        """Last-resort direct xAI image rescue after Banana-family failures."""
+        if error_detail.get("failure_type") not in {
+            "UPSTREAM_TRANSIENT",
+            "SAFETY_FILTER",
+            "MODEL_ERROR",
+            "TIMEOUT",
+        } and not sensitive_context:
+            return None
+
+        try:
+            request: dict[str, Any] = {
+                "model": XAI_IMAGE_RESCUE_MODEL,
+                "prompt": pred_input.get("prompt", ""),
+                "response_format": "b64_json",
+                "output_format": pred_input.get("output_format", "png"),
+                "n": 1,
+                "aspect_ratio": pred_input.get("aspect_ratio", "16:9"),
+                "resolution": self._xai_resolution_for_resolution(
+                    pred_input.get("resolution")
+                ),
+            }
+
+            existing_refs = [path for path in reference_paths if path.exists()]
+            if existing_refs:
+                rescue_sheet = build_xai_rescue_sheet(
+                    pack_dir=output_path.parent / f"{output_path.stem}_xai_rescue_pack",
+                    reference_images=existing_refs,
+                )
+                if rescue_sheet is None or not rescue_sheet.exists():
+                    return None
+                image_uri = (await self.upload_many([rescue_sheet]))[0]
+                aspect_ratio = pred_input.get("aspect_ratio") or None
+                resolution = self._xai_resolution_for_resolution(pred_input.get("resolution"))
+                response = await self.xai_sdk_client.image.sample(
+                    prompt=pred_input.get("prompt", ""),
+                    model=XAI_IMAGE_RESCUE_MODEL,
+                    image_url=image_uri,
+                    image_format="base64",
+                    aspect_ratio=aspect_ratio,
+                    resolution=resolution,
+                )
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                output_path.write_bytes(await response.image)
+                return {
+                    "status": "succeeded",
+                    "local_output_path": str(output_path),
+                }, XAI_IMAGE_RESCUE_MODEL
+            else:
+                response = await self._xai_image_request(
+                    endpoint="/images/generations",
+                    payload=request,
+                    extra_headers=extra_headers,
+                )
+
+            wrote_output = await self._write_xai_image_response(response, output_path)
+            if wrote_output:
+                return {
+                    "status": "succeeded",
+                    "local_output_path": str(output_path),
+                }, XAI_IMAGE_RESCUE_MODEL
+        except Exception:
+            logger.warning("Grok Imagine image rescue failed", exc_info=True)
 
         return None
 

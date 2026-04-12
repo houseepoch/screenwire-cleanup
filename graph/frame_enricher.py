@@ -1,10 +1,10 @@
 """
-Haiku Enricher — Parallel per-frame enrichment via Claude Haiku
-===============================================================
+Frame Enricher — Parallel per-frame enrichment via Grok reasoning
+=================================================================
 
 Step 2b of the CC-First pipeline. Receives the base NarrativeGraph
-(already seeded by cc_parser.py) and dispatches parallel Haiku API
-calls to fill in:
+(already seeded by cc_parser.py) and dispatches parallel frame-enricher
+API calls to fill in:
 
   - CastFrameState: screen_position, looking_at, emotion, posture, ...
   - FrameComposition: shot, angle, movement, focus
@@ -14,7 +14,7 @@ calls to fill in:
   - FrameNode: action_summary, emotional_arc, visual_flow_element
 
 Usage:
-    python3 graph/haiku_enricher.py --project-dir ./projects/test
+    python3 graph/frame_enricher.py --project-dir ./projects/test
 """
 
 from __future__ import annotations
@@ -24,10 +24,11 @@ import json
 import logging
 import os
 import sys
+from functools import lru_cache
 from pathlib import Path
 from typing import Optional
 
-import anthropic
+from llm.xai_client import XAIClient, build_prompt_cache_key
 
 from .schema import (
     CastFrameState,
@@ -46,13 +47,62 @@ logger = logging.getLogger(__name__)
 
 # ─── Constants ───────────────────────────────────────────────────────────────
 
-HAIKU_MODEL = "claude-haiku-4-5-20251001"
-HAIKU_TEMPERATURE = 0.3
-HAIKU_MAX_TOKENS = 1500
+FRAME_ENRICHER_MODEL = "grok-4-1-fast-reasoning"
+FRAME_ENRICHER_TEMPERATURE = 0.3
+FRAME_ENRICHER_MAX_TOKENS = 1500
+
+
+def _coerce_text_scalar(value: object) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        cleaned = value.strip()
+        return cleaned or None
+    if isinstance(value, (list, tuple, set)):
+        parts: list[str] = []
+        for item in value:
+            normalized = _coerce_text_scalar(item)
+            if normalized:
+                parts.append(normalized)
+        if not parts:
+            return None
+        return ", ".join(dict.fromkeys(parts))
+    if isinstance(value, (int, float, bool)):
+        return str(value)
+    return None
+
+
+def _coerce_enum_token(value: object) -> Optional[str]:
+    if isinstance(value, (list, tuple, set)):
+        for item in value:
+            normalized = _coerce_enum_token(item)
+            if normalized:
+                return normalized
+        return None
+    return _coerce_text_scalar(value)
+
+
+def _coerce_float_scalar(value: object) -> Optional[float]:
+    if value is None:
+        return None
+    if isinstance(value, (list, tuple, set)):
+        for item in value:
+            normalized = _coerce_float_scalar(item)
+            if normalized is not None:
+                return normalized
+        return None
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value.strip())
+        except ValueError:
+            return None
+    return None
 
 # ─── System Prompt ───────────────────────────────────────────────────────────
 
-HAIKU_SYSTEM_PROMPT = """You are a cinematic enrichment worker for a screenplay-to-visual pipeline.
+FRAME_ENRICHER_SYSTEM_PROMPT = """You are a cinematic enrichment worker for a screenplay-to-visual pipeline.
 
 You receive a single frame's context and must fill out a structured enrichment form. Your output
 drives image generation, video direction, and continuity tracking. Be precise and visual — every
@@ -247,6 +297,135 @@ Return exactly this JSON structure (add only the fields you are populating):
 """
 
 
+def _nullable_string_schema() -> dict:
+    return {"type": ["string", "null"]}
+
+
+def _nullable_number_schema() -> dict:
+    return {"type": ["number", "null"]}
+
+
+_STRING_LIST_SCHEMA = {"type": "array", "items": {"type": "string"}}
+
+FRAME_ENRICHER_RESPONSE_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "frame_id": {"type": "string"},
+        "action_summary": _nullable_string_schema(),
+        "video_optimized_prompt_block": _nullable_string_schema(),
+        "emotional_arc": _nullable_string_schema(),
+        "visual_flow_element": _nullable_string_schema(),
+        "composition": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "shot": _nullable_string_schema(),
+                "angle": _nullable_string_schema(),
+                "movement": _nullable_string_schema(),
+                "focus": _nullable_string_schema(),
+                "placement": _nullable_string_schema(),
+                "grouping": _nullable_string_schema(),
+                "blocking": _nullable_string_schema(),
+                "transition": _nullable_string_schema(),
+                "rule": _nullable_string_schema(),
+            },
+        },
+        "environment": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "lighting": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "direction": _nullable_string_schema(),
+                        "quality": _nullable_string_schema(),
+                        "color_temp": _nullable_string_schema(),
+                        "motivated_source": _nullable_string_schema(),
+                        "shadow_behavior": _nullable_string_schema(),
+                    },
+                },
+                "atmosphere": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "particles": _nullable_string_schema(),
+                        "weather": _nullable_string_schema(),
+                        "ambient_motion": _nullable_string_schema(),
+                        "temperature_feel": _nullable_string_schema(),
+                    },
+                },
+                "materials_present": _STRING_LIST_SCHEMA,
+                "foreground_objects": _STRING_LIST_SCHEMA,
+                "midground_detail": _nullable_string_schema(),
+                "background_depth": _nullable_string_schema(),
+            },
+        },
+        "background": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "camera_facing": _nullable_string_schema(),
+                "background_action": _nullable_string_schema(),
+                "background_sound": _nullable_string_schema(),
+                "background_music": _nullable_string_schema(),
+                "depth_layers": _STRING_LIST_SCHEMA,
+            },
+        },
+        "directing": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "dramatic_purpose": _nullable_string_schema(),
+                "beat_turn": _nullable_string_schema(),
+                "pov_owner": _nullable_string_schema(),
+                "camera_motivation": _nullable_string_schema(),
+                "viewer_knowledge_delta": _nullable_string_schema(),
+                "power_dynamic": _nullable_string_schema(),
+                "tension_source": _nullable_string_schema(),
+                "movement_motivation": _nullable_string_schema(),
+                "movement_path": _nullable_string_schema(),
+                "reaction_target": _nullable_string_schema(),
+                "background_life": _nullable_string_schema(),
+            },
+        },
+        "cast_states": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "cast_id": {"type": "string"},
+                    "screen_position": _nullable_string_schema(),
+                    "looking_at": _nullable_string_schema(),
+                    "facing_direction": _nullable_string_schema(),
+                    "emotion": _nullable_string_schema(),
+                    "emotion_intensity": _nullable_number_schema(),
+                    "posture": _nullable_string_schema(),
+                    "action": _nullable_string_schema(),
+                    "frame_role": _nullable_string_schema(),
+                    "props_held": _STRING_LIST_SCHEMA,
+                    "props_interacted": _STRING_LIST_SCHEMA,
+                    "delta_fields": _STRING_LIST_SCHEMA,
+                    "clothing_state": _nullable_string_schema(),
+                    "hair_state": _nullable_string_schema(),
+                    "injury": _nullable_string_schema(),
+                    "eye_direction": _nullable_string_schema(),
+                },
+                "required": ["cast_id"],
+            },
+        },
+    },
+    "required": ["frame_id"],
+}
+
+FRAME_ENRICHER_CACHE_KEY = build_prompt_cache_key(
+    "frame-enricher",
+    FRAME_ENRICHER_SYSTEM_PROMPT,
+)
+
+
 # ─── Input Builder ────────────────────────────────────────────────────────────
 
 
@@ -353,8 +532,8 @@ def _previous_frame_context(graph: NarrativeGraph, prev_frame_id: Optional[str])
     }
 
 
-def build_haiku_inputs(graph: NarrativeGraph) -> list[dict]:
-    """Build one Haiku input dict per frame, following Section 3.1 format.
+def build_frame_enricher_inputs(graph: NarrativeGraph) -> list[dict]:
+    """Build one frame-enricher input dict per frame, following Section 3.1 format.
 
     Returns a list ordered by frame_order.
     """
@@ -493,55 +672,49 @@ def build_haiku_inputs(graph: NarrativeGraph) -> list[dict]:
     return inputs
 
 
-# ─── Haiku API Calls ──────────────────────────────────────────────────────────
+# ─── Frame Enricher API Calls ────────────────────────────────────────────────
+
+
+@lru_cache(maxsize=4)
+def _get_xai_client(api_key: str) -> XAIClient:
+    return XAIClient(api_key=api_key)
 
 
 async def enrich_single_frame(input_dict: dict, api_key: str) -> dict:
-    """Send one frame to Haiku and parse the JSON response.
+    """Send one frame to the frame enricher and parse the JSON response.
 
     On API failure: logs error and returns a minimal dict with the
     frame_id and an 'error' field so the caller can continue.
     """
     frame_id = input_dict.get("frame_id", "unknown")
-    client = anthropic.AsyncAnthropic(api_key=api_key)
+    client = _get_xai_client(api_key or os.environ.get("XAI_API_KEY", ""))
 
     user_message = json.dumps(input_dict, indent=2, ensure_ascii=False)
 
     try:
-        response = await client.messages.create(
-            model=HAIKU_MODEL,
-            max_tokens=HAIKU_MAX_TOKENS,
-            temperature=HAIKU_TEMPERATURE,
-            system=HAIKU_SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": user_message}],
+        result = await client.generate_json(
+            system_prompt=FRAME_ENRICHER_SYSTEM_PROMPT,
+            prompt=user_message,
+            schema=FRAME_ENRICHER_RESPONSE_SCHEMA,
+            model=FRAME_ENRICHER_MODEL,
+            temperature=FRAME_ENRICHER_TEMPERATURE,
+            max_tokens=FRAME_ENRICHER_MAX_TOKENS,
+            cache_key=FRAME_ENRICHER_CACHE_KEY,
+            task_hint="frame_enrichment",
+            schema_name="frame_enrichment",
         )
-        raw_text = response.content[0].text.strip()
-
-        # Strip markdown code fences if present
-        if raw_text.startswith("```"):
-            lines = raw_text.splitlines()
-            # Remove first and last fence lines
-            raw_text = "\n".join(
-                line for line in lines
-                if not line.strip().startswith("```")
-            ).strip()
-
-        result = json.loads(raw_text)
         result["frame_id"] = frame_id  # Ensure frame_id is always present
         return result
 
     except json.JSONDecodeError as e:
-        logger.error("Frame %s: Haiku returned invalid JSON — %s", frame_id, e)
+        logger.error("Frame %s: frame enricher returned invalid JSON — %s", frame_id, e)
         return {"frame_id": frame_id, "error": f"json_parse_error: {e}"}
-    except anthropic.APIError as e:
-        logger.error("Frame %s: Haiku API error — %s", frame_id, e)
-        return {"frame_id": frame_id, "error": f"api_error: {e}"}
     except Exception as e:
-        logger.error("Frame %s: Unexpected error — %s", frame_id, e)
-        return {"frame_id": frame_id, "error": f"unexpected: {e}"}
+        logger.error("Frame %s: frame enricher API error — %s", frame_id, e)
+        return {"frame_id": frame_id, "error": f"api_error: {e}"}
 
 
-async def haiku_batch_enrich(
+async def frame_enricher_batch_enrich(
     inputs: list[dict],
     api_key: str,
     max_concurrent: int = 20,
@@ -565,8 +738,8 @@ async def haiku_batch_enrich(
 # ─── Apply Enrichment ─────────────────────────────────────────────────────────
 
 
-def apply_haiku_enrichment(graph: NarrativeGraph, result: dict) -> None:
-    """Apply one Haiku worker result to the graph in-place.
+def apply_frame_enrichment(graph: NarrativeGraph, result: dict) -> None:
+    """Apply one frame enricher worker result to the graph in-place.
 
     Updates:
       - FrameNode: composition, environment, background, directing,
@@ -575,7 +748,7 @@ def apply_haiku_enrichment(graph: NarrativeGraph, result: dict) -> None:
     """
     frame_id = result.get("frame_id")
     if not frame_id:
-        logger.warning("Haiku result missing frame_id — skipping")
+        logger.warning("Frame enricher result missing frame_id — skipping")
         return
 
     if "error" in result:
@@ -584,23 +757,27 @@ def apply_haiku_enrichment(graph: NarrativeGraph, result: dict) -> None:
 
     frame = graph.frames.get(frame_id)
     if frame is None:
-        logger.warning("Haiku result references unknown frame %s — skipping", frame_id)
+        logger.warning("Frame enricher result references unknown frame %s — skipping", frame_id)
         return
 
     # ── Frame-level fields ─────────────────────────────────────────────────
-    if result.get("action_summary"):
-        frame.action_summary = result["action_summary"]
-    if result.get("video_optimized_prompt_block"):
-        frame.video_optimized_prompt_block = result["video_optimized_prompt_block"]
+    action_summary = _coerce_text_scalar(result.get("action_summary"))
+    if action_summary:
+        frame.action_summary = action_summary
+    prompt_block = _coerce_text_scalar(result.get("video_optimized_prompt_block"))
+    if prompt_block:
+        frame.video_optimized_prompt_block = prompt_block
 
-    if result.get("emotional_arc"):
+    emotional_arc = _coerce_enum_token(result.get("emotional_arc"))
+    if emotional_arc:
         try:
-            frame.emotional_arc = EmotionalArc(result["emotional_arc"])
+            frame.emotional_arc = EmotionalArc(emotional_arc)
         except ValueError:
-            logger.warning("Frame %s: invalid emotional_arc value '%s'", frame_id, result["emotional_arc"])
+            logger.warning("Frame %s: invalid emotional_arc value '%s'", frame_id, emotional_arc)
 
-    if result.get("visual_flow_element"):
-        frame.visual_flow_element = result["visual_flow_element"]
+    visual_flow_element = _coerce_text_scalar(result.get("visual_flow_element"))
+    if visual_flow_element:
+        frame.visual_flow_element = visual_flow_element
 
     # ── Composition ────────────────────────────────────────────────────────
     comp_data = result.get("composition")
@@ -608,7 +785,7 @@ def apply_haiku_enrichment(graph: NarrativeGraph, result: dict) -> None:
         comp = frame.composition
         for field in ("shot", "angle", "movement", "focus", "placement",
                       "grouping", "blocking", "transition", "rule"):
-            val = comp_data.get(field)
+            val = _coerce_text_scalar(comp_data.get(field))
             if val:
                 setattr(comp, field, val)
 
@@ -621,18 +798,20 @@ def apply_haiku_enrichment(graph: NarrativeGraph, result: dict) -> None:
         if lighting_data and isinstance(lighting_data, dict):
             from .schema import LightingDirection, LightingQuality
             lt = env.lighting
-            if lighting_data.get("direction"):
+            direction = _coerce_enum_token(lighting_data.get("direction"))
+            if direction:
                 try:
-                    lt.direction = LightingDirection(lighting_data["direction"])
+                    lt.direction = LightingDirection(direction)
                 except ValueError:
-                    logger.debug("Frame %s: unknown lighting direction '%s'", frame_id, lighting_data["direction"])
-            if lighting_data.get("quality"):
+                    logger.debug("Frame %s: unknown lighting direction '%s'", frame_id, direction)
+            quality = _coerce_enum_token(lighting_data.get("quality"))
+            if quality:
                 try:
-                    lt.quality = LightingQuality(lighting_data["quality"])
+                    lt.quality = LightingQuality(quality)
                 except ValueError:
-                    logger.debug("Frame %s: unknown lighting quality '%s'", frame_id, lighting_data["quality"])
+                    logger.debug("Frame %s: unknown lighting quality '%s'", frame_id, quality)
             for field in ("color_temp", "motivated_source", "shadow_behavior"):
-                val = lighting_data.get(field)
+                val = _coerce_text_scalar(lighting_data.get(field))
                 if val:
                     setattr(lt, field, val)
 
@@ -640,7 +819,7 @@ def apply_haiku_enrichment(graph: NarrativeGraph, result: dict) -> None:
         if atmo_data and isinstance(atmo_data, dict):
             atmo = env.atmosphere
             for field in ("particles", "weather", "ambient_motion", "temperature_feel"):
-                val = atmo_data.get(field)
+                val = _coerce_text_scalar(atmo_data.get(field))
                 if val:
                     setattr(atmo, field, val)
 
@@ -652,18 +831,20 @@ def apply_haiku_enrichment(graph: NarrativeGraph, result: dict) -> None:
         if fg_objects and isinstance(fg_objects, list):
             env.foreground_objects = fg_objects
 
-        if env_data.get("midground_detail"):
-            env.midground_detail = env_data["midground_detail"]
+        midground_detail = _coerce_text_scalar(env_data.get("midground_detail"))
+        if midground_detail:
+            env.midground_detail = midground_detail
 
-        if env_data.get("background_depth"):
-            env.background_depth = env_data["background_depth"]
+        background_depth = _coerce_text_scalar(env_data.get("background_depth"))
+        if background_depth:
+            env.background_depth = background_depth
 
     # ── Background ─────────────────────────────────────────────────────────
     bg_data = result.get("background")
     if bg_data and isinstance(bg_data, dict):
         bg = frame.background
         for field in ("background_action", "background_sound", "background_music"):
-            val = bg_data.get(field)
+            val = _coerce_text_scalar(bg_data.get(field))
             if val:
                 setattr(bg, field, val)
         depth_layers = bg_data.get("depth_layers")
@@ -679,7 +860,7 @@ def apply_haiku_enrichment(graph: NarrativeGraph, result: dict) -> None:
             "viewer_knowledge_delta", "power_dynamic", "tension_source",
             "movement_motivation", "movement_path", "reaction_target", "background_life",
         ):
-            val = dir_data.get(field)
+            val = _coerce_text_scalar(dir_data.get(field))
             if val:
                 setattr(dr, field, val)
 
@@ -699,29 +880,35 @@ def apply_haiku_enrichment(graph: NarrativeGraph, result: dict) -> None:
 
         # Scalar fields
         for field in (
-            "screen_position", "looking_at", "emotion", "emotion_intensity",
+            "screen_position", "looking_at", "emotion",
             "facing_direction", "action", "eye_direction",
             "clothing_state", "hair_state", "injury",
         ):
-            val = cs_data.get(field)
+            val = _coerce_text_scalar(cs_data.get(field))
             if val is not None:
                 setattr(state, field, val)
 
+        emotion_intensity = _coerce_float_scalar(cs_data.get("emotion_intensity"))
+        if emotion_intensity is not None:
+            state.emotion_intensity = emotion_intensity
+
         # Posture (enum)
-        if cs_data.get("posture"):
+        posture = _coerce_enum_token(cs_data.get("posture"))
+        if posture:
             from .schema import Posture
             try:
-                state.posture = Posture(cs_data["posture"])
+                state.posture = Posture(posture)
             except ValueError:
-                logger.debug("Frame %s / %s: unknown posture '%s'", frame_id, cast_id, cs_data["posture"])
+                logger.debug("Frame %s / %s: unknown posture '%s'", frame_id, cast_id, posture)
 
         # CastFrameRole (enum)
-        if cs_data.get("frame_role"):
+        frame_role = _coerce_enum_token(cs_data.get("frame_role"))
+        if frame_role:
             from .schema import CastFrameRole
             try:
-                state.frame_role = CastFrameRole(cs_data["frame_role"])
+                state.frame_role = CastFrameRole(frame_role)
             except ValueError:
-                logger.debug("Frame %s / %s: unknown frame_role '%s'", frame_id, cast_id, cs_data["frame_role"])
+                logger.debug("Frame %s / %s: unknown frame_role '%s'", frame_id, cast_id, frame_role)
 
         # List fields
         if isinstance(cs_data.get("props_held"), list):
@@ -762,43 +949,41 @@ async def re_enrich_single_frame(
     corrections: list[dict],
     api_key: str,
 ) -> dict:
-    """Send one frame to Haiku with correction context injected into the system prompt."""
+    """Send one frame to the frame enricher with correction context injected into the system prompt."""
     frame_id = input_dict.get("frame_id", "unknown")
-    client = anthropic.AsyncAnthropic(api_key=api_key)
+    client = _get_xai_client(api_key or os.environ.get("XAI_API_KEY", ""))
 
     correction_block = _build_correction_block(corrections)
-    correction_system = HAIKU_SYSTEM_PROMPT + _CORRECTION_SYSTEM_PROMPT_SUFFIX.format(
+    correction_system = FRAME_ENRICHER_SYSTEM_PROMPT + _CORRECTION_SYSTEM_PROMPT_SUFFIX.format(
         corrections=correction_block
+    )
+    correction_cache_key = build_prompt_cache_key(
+        "frame-enricher-correction",
+        correction_system,
     )
 
     user_message = json.dumps(input_dict, indent=2, ensure_ascii=False)
 
     try:
-        response = await client.messages.create(
-            model=HAIKU_MODEL,
-            max_tokens=HAIKU_MAX_TOKENS,
-            temperature=HAIKU_TEMPERATURE,
-            system=correction_system,
-            messages=[{"role": "user", "content": user_message}],
+        result = await client.generate_json(
+            system_prompt=correction_system,
+            prompt=user_message,
+            schema=FRAME_ENRICHER_RESPONSE_SCHEMA,
+            model=FRAME_ENRICHER_MODEL,
+            temperature=FRAME_ENRICHER_TEMPERATURE,
+            max_tokens=FRAME_ENRICHER_MAX_TOKENS,
+            cache_key=correction_cache_key,
+            task_hint="frame_enricher_correction",
+            schema_name="frame_enrichment_correction",
         )
-        raw_text = response.content[0].text.strip()
-        if raw_text.startswith("```"):
-            lines = raw_text.splitlines()
-            raw_text = "\n".join(
-                line for line in lines if not line.strip().startswith("```")
-            ).strip()
-        result = json.loads(raw_text)
         result["frame_id"] = frame_id
         return result
     except json.JSONDecodeError as e:
-        logger.error("Re-enrich frame %s: Haiku returned invalid JSON — %s", frame_id, e)
+        logger.error("Re-enrich frame %s: frame enricher returned invalid JSON — %s", frame_id, e)
         return {"frame_id": frame_id, "error": f"json_parse_error: {e}"}
-    except anthropic.APIError as e:
-        logger.error("Re-enrich frame %s: Haiku API error — %s", frame_id, e)
-        return {"frame_id": frame_id, "error": f"api_error: {e}"}
     except Exception as e:
-        logger.error("Re-enrich frame %s: Unexpected error — %s", frame_id, e)
-        return {"frame_id": frame_id, "error": f"unexpected: {e}"}
+        logger.error("Re-enrich frame %s: frame enricher API error — %s", frame_id, e)
+        return {"frame_id": frame_id, "error": f"api_error: {e}"}
 
 
 async def re_enrich_frames(
@@ -809,8 +994,8 @@ async def re_enrich_frames(
 ) -> list[dict]:
     """Re-enrich specific frames with correction context.
 
-    For each frame_issue, builds a Haiku input that INCLUDES the issue
-    description so Haiku knows what to correct:
+    For each frame_issue, builds a frame-enricher input that INCLUDES the issue
+    description so the enricher knows what to correct:
 
         'CORRECTION REQUIRED: Previous enrichment placed cast_rafe at
          frame_right but staging anchor requires frame_left. Fix
@@ -821,14 +1006,14 @@ async def re_enrich_frames(
         frame_issues: List of issue dicts from validate_continuity() that have
                       needs_re_enrichment=True. Each dict must have at minimum:
                       {frame_id, check_name, what} (or 'message' as fallback).
-        api_key:      Anthropic API key. Falls back to ANTHROPIC_API_KEY env var.
-        max_concurrent: Max parallel Haiku calls.
+        api_key:      XAI API key. Falls back to XAI_API_KEY env var.
+        max_concurrent: Max parallel frame enricher calls.
 
     Returns:
-        List of enrichment result dicts (same format as haiku_batch_enrich).
+        List of enrichment result dicts (same format as frame_enricher_batch_enrich).
     """
     if not api_key:
-        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        api_key = os.environ.get("XAI_API_KEY", "")
 
     # Group issues by frame_id
     issues_by_frame: dict[str, list[dict]] = {}
@@ -841,7 +1026,7 @@ async def re_enrich_frames(
         return []
 
     # Build full inputs for all frames, then filter to only frames needing correction
-    all_inputs = build_haiku_inputs(graph)
+    all_inputs = build_frame_enricher_inputs(graph)
     inputs_by_frame = {inp["frame_id"]: inp for inp in all_inputs}
 
     semaphore = asyncio.Semaphore(max_concurrent)
@@ -866,11 +1051,11 @@ async def re_enrich_frames(
 
 
 def run_phase_2b(graph: NarrativeGraph, project_dir: Path, api_key: str) -> NarrativeGraph:
-    """Dispatch parallel Haiku workers for per-frame enrichment and save."""
-    inputs = build_haiku_inputs(graph)
-    logger.info("Dispatching %d Haiku workers (max_concurrent=20)...", len(inputs))
+    """Dispatch parallel frame enricher workers for per-frame enrichment and save."""
+    inputs = build_frame_enricher_inputs(graph)
+    logger.info("Dispatching %d frame enricher workers (max_concurrent=20)...", len(inputs))
 
-    results = asyncio.run(haiku_batch_enrich(inputs, api_key, max_concurrent=20))
+    results = asyncio.run(frame_enricher_batch_enrich(inputs, api_key, max_concurrent=20))
 
     successes = 0
     failures = 0
@@ -878,10 +1063,10 @@ def run_phase_2b(graph: NarrativeGraph, project_dir: Path, api_key: str) -> Narr
         if "error" in result:
             failures += 1
         else:
-            apply_haiku_enrichment(graph, result)
+            apply_frame_enrichment(graph, result)
             successes += 1
 
-    logger.info("Haiku enrichment complete: %d succeeded, %d failed", successes, failures)
+    logger.info("Frame enrichment complete: %d succeeded, %d failed", successes, failures)
 
     store = GraphStore(project_dir)
     store.save(graph)
@@ -901,7 +1086,7 @@ def main() -> None:
     )
 
     parser = argparse.ArgumentParser(
-        description="Run Haiku per-frame enrichment (Step 2b) on an existing NarrativeGraph."
+        description="Run frame-enricher per-frame enrichment (Step 2b) on an existing NarrativeGraph."
     )
     parser.add_argument(
         "--project-dir",
@@ -911,13 +1096,13 @@ def main() -> None:
     parser.add_argument(
         "--api-key",
         default=None,
-        help="Anthropic API key. Defaults to ANTHROPIC_API_KEY env var.",
+        help="xAI API key. Defaults to XAI_API_KEY env var.",
     )
     parser.add_argument(
         "--max-concurrent",
         type=int,
         default=20,
-        help="Max concurrent Haiku API calls (default: 20)",
+        help="Max concurrent frame enricher API calls (default: 20)",
     )
     parser.add_argument(
         "--dry-run",
@@ -927,10 +1112,10 @@ def main() -> None:
     args = parser.parse_args()
 
     project_dir = Path(args.project_dir).resolve()
-    api_key = args.api_key or os.environ.get("ANTHROPIC_API_KEY", "")
+    api_key = args.api_key or os.environ.get("XAI_API_KEY", "")
 
     if not api_key and not args.dry_run:
-        logger.error("No API key provided. Set ANTHROPIC_API_KEY or pass --api-key")
+        logger.error("No API key provided. Set XAI_API_KEY or pass --api-key")
         sys.exit(1)
 
     store = GraphStore(project_dir)
@@ -941,7 +1126,7 @@ def main() -> None:
     graph = store.load()
     logger.info("Loaded graph: %d frames, %d cast members", len(graph.frames), len(graph.cast))
 
-    inputs = build_haiku_inputs(graph)
+    inputs = build_frame_enricher_inputs(graph)
     logger.info("Built %d frame inputs", len(inputs))
 
     if args.dry_run:
@@ -949,7 +1134,7 @@ def main() -> None:
         return
 
     results = asyncio.run(
-        haiku_batch_enrich(inputs, api_key, max_concurrent=args.max_concurrent)
+        frame_enricher_batch_enrich(inputs, api_key, max_concurrent=args.max_concurrent)
     )
 
     successes = 0
@@ -959,7 +1144,7 @@ def main() -> None:
             logger.warning("Frame %s failed: %s", result.get("frame_id"), result["error"])
             failures += 1
         else:
-            apply_haiku_enrichment(graph, result)
+            apply_frame_enrichment(graph, result)
             successes += 1
 
     logger.info("Enrichment complete: %d/%d frames succeeded", successes, len(inputs))
@@ -969,7 +1154,6 @@ def main() -> None:
 
     if failures:
         sys.exit(1)
-
 
 if __name__ == "__main__":
     main()

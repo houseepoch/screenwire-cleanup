@@ -33,7 +33,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-import httpx
+from llm.xai_client import XAIClient, build_prompt_cache_key
 
 from .api import get_frame_cast_state_models
 from .schema import CinematicTag, NarrativeGraph
@@ -44,8 +44,7 @@ from .store import GraphStore
 # ---------------------------------------------------------------------------
 
 XAI_API_KEY = os.getenv("XAI_API_KEY", "")
-XAI_BASE_URL = "https://api.x.ai/v1"
-GROK_TAGGER_MODEL = "grok-4-1-fast-non-reasoning"
+GROK_TAGGER_MODEL = "grok-4-1-fast-reasoning"
 TAGGER_MAX_TOKENS = 50  # Response is just a tag string
 
 
@@ -74,6 +73,7 @@ def _load_taxonomy_text() -> str:
 
 
 TAXONOMY_TEXT: str = _load_taxonomy_text()
+TAGGER_CACHE_KEY = build_prompt_cache_key("grok-tagger", TAXONOMY_TEXT)
 
 
 # ---------------------------------------------------------------------------
@@ -1124,7 +1124,7 @@ async def tag_single_frame(
     frame_context: str,
     *,
     api_key: str = "",
-    client: Optional[httpx.AsyncClient] = None,
+    client: Optional[XAIClient] = None,
 ) -> CinematicTag:
     """Send one frame's context to Grok and return a populated CinematicTag."""
     key = api_key or XAI_API_KEY
@@ -1133,48 +1133,23 @@ async def tag_single_frame(
             "XAI_API_KEY not set — required for Grok cinematic frame tagging"
         )
 
-    messages = [
-        {"role": "system", "content": TAXONOMY_TEXT},
-        {
-            "role": "user",
-            "content": (
-                "Assign the single best cinematic tag for this frame.\n"
-                "Reply with ONLY the tag string (e.g. 'D01.a +push'). "
-                "Nothing else — no explanation, no punctuation, no markdown.\n\n"
-                f"{frame_context}"
-            ),
-        },
-    ]
+    if client is None:
+        client = XAIClient(api_key=key)
 
-    payload = {
-        "model": GROK_TAGGER_MODEL,
-        "messages": messages,
-        "max_tokens": TAGGER_MAX_TOKENS,
-        "temperature": 0.1,
-    }
-
-    headers = {
-        "Authorization": f"Bearer {key}",
-        "Content-Type": "application/json",
-    }
-
-    own_client = client is None
-    if own_client:
-        client = httpx.AsyncClient(timeout=30.0)
-
-    try:
-        resp = await client.post(
-            f"{XAI_BASE_URL}/chat/completions",
-            json=payload,
-            headers=headers,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-    finally:
-        if own_client:
-            await client.aclose()
-
-    raw = data["choices"][0]["message"]["content"].strip()
+    raw = await client.generate_text(
+        system_prompt=TAXONOMY_TEXT,
+        prompt=(
+            "Assign the single best cinematic tag for this frame.\n"
+            "Reply with ONLY the tag string (e.g. 'D01.a +push'). "
+            "Nothing else — no explanation, no punctuation, no markdown.\n\n"
+            f"{frame_context}"
+        ),
+        model=GROK_TAGGER_MODEL,
+        task_hint="cinematic_tagger",
+        temperature=0.1,
+        max_tokens=TAGGER_MAX_TOKENS,
+        cache_key=TAGGER_CACHE_KEY,
+    )
     tag, modifier, full_tag = _parse_tag_response(raw)
 
     if tag not in TAG_DEFINITIONS:
@@ -1227,39 +1202,39 @@ async def tag_all_frames(
 
     key = api_key or XAI_API_KEY
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    client = XAIClient(api_key=key)
 
-        async def _tag_one(frame_id: str) -> None:
-            frame = graph.frames[frame_id]
+    async def _tag_one(frame_id: str) -> None:
+        frame = graph.frames[frame_id]
 
-            # Skip already-tagged frames (tag is non-empty)
-            if frame.cinematic_tag.tag:
-                results["skipped"] += 1
-                return
+        # Skip already-tagged frames (tag is non-empty)
+        if frame.cinematic_tag.tag:
+            results["skipped"] += 1
+            return
 
-            async with sem:
-                t0 = time.monotonic()
-                try:
-                    context = _build_frame_context(graph, frame_id)
-                    cinematic_tag = await tag_single_frame(
-                        frame_id, context, api_key=key, client=client
-                    )
-                    frame.cinematic_tag = cinematic_tag
-                    results["tagged"] += 1
+        async with sem:
+            t0 = time.monotonic()
+            try:
+                context = _build_frame_context(graph, frame_id)
+                cinematic_tag = await tag_single_frame(
+                    frame_id, context, api_key=key, client=client
+                )
+                frame.cinematic_tag = cinematic_tag
+                results["tagged"] += 1
 
-                    family = cinematic_tag.family or "?"
-                    results["tag_distribution"][family] = (
-                        results["tag_distribution"].get(family, 0) + 1
-                    )
+                family = cinematic_tag.family or "?"
+                results["tag_distribution"][family] = (
+                    results["tag_distribution"].get(family, 0) + 1
+                )
 
-                    elapsed = round(time.monotonic() - t0, 2)
-                    _log(frame_id, f"→ {cinematic_tag.full_tag} ({elapsed}s)")
+                elapsed = round(time.monotonic() - t0, 2)
+                _log(frame_id, f"→ {cinematic_tag.full_tag} ({elapsed}s)")
 
-                except Exception as exc:
-                    results["failed"] += 1
-                    _log(frame_id, f"Failed: {exc}")
+            except Exception as exc:
+                results["failed"] += 1
+                _log(frame_id, f"Failed: {exc}")
 
-        await asyncio.gather(*[_tag_one(fid) for fid in frame_ids])
+    await asyncio.gather(*[_tag_one(fid) for fid in frame_ids])
 
     store.save(graph)
 

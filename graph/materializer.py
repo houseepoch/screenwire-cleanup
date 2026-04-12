@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from .api import get_frame_cast_state_models, get_frame_prop_state_models
+from .api import build_shot_packet, get_frame_cast_state_models, get_frame_prop_state_models
 from .schema import NarrativeGraph
 from .reference_collector import ReferenceImageCollector, cast_bible_snapshot_for_frame
 from .store import GraphStore
@@ -275,8 +275,12 @@ def materialize_manifest(graph: NarrativeGraph, manifest_path: Path) -> int:
     # Project metadata from onboarding
     manifest["mediaStyle"] = graph.project.media_style
     manifest["mediaStylePrefix"] = graph.project.media_style_prefix
+    manifest["frameBudget"] = graph.project.frame_budget if graph.project.frame_budget is not None else "auto"
     manifest["outputSize"] = graph.project.output_size
-    manifest["stickinessLevel"] = graph.project.stickiness_level
+    manifest["creativeFreedom"] = graph.project.creative_freedom
+    manifest["creativeFreedomPermission"] = graph.project.creative_freedom_permission
+    manifest["creativeFreedomFailureModes"] = graph.project.creative_freedom_failure_modes
+    manifest["dialoguePolicy"] = graph.project.dialogue_policy
 
     # Cast array
     manifest["cast"] = [
@@ -362,6 +366,12 @@ def materialize_manifest(graph: NarrativeGraph, manifest_path: Path) -> int:
 
         cast_ids = [cs.cast_id for cs in cast_states
                     if cs.frame_role not in ("referenced",)]
+        try:
+            shot_packet = build_shot_packet(graph, fid)
+            if shot_packet.visible_cast_ids:
+                cast_ids = list(shot_packet.visible_cast_ids)
+        except Exception:
+            pass
         prop_ids = [ps.prop_id for ps in prop_states]
 
         existing_frame = existing_frames_by_id.get(frame.frame_id, {})

@@ -18,6 +18,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from pydantic import BaseModel
+
 from .schema import CastBible, CharacterSheet, NarrativeGraph, PoseState, ProjectNode
 
 
@@ -27,6 +29,20 @@ def _now_iso() -> str:
 
 def _now_slug() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+
+
+def _raw_model_data(value):
+    """Recursively unwrap Pydantic models without invoking serializers."""
+    if isinstance(value, BaseModel):
+        return {
+            field_name: _raw_model_data(getattr(value, field_name))
+            for field_name in value.__class__.model_fields
+        }
+    if isinstance(value, dict):
+        return {key: _raw_model_data(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_raw_model_data(item) for item in value]
+    return value
 
 
 class GraphStore:
@@ -80,7 +96,7 @@ class GraphStore:
 
         # Re-validate before writing so direct in-memory mutations cannot bypass
         # the canonical graph contract.
-        g = NarrativeGraph.model_validate(g.model_dump())
+        g = NarrativeGraph.model_validate(_raw_model_data(g))
 
         self.ensure_dirs()
 

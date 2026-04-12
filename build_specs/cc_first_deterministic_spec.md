@@ -20,7 +20,7 @@ Python parser (graph/cc_parser.py) — deterministic, seconds
   → All edges (FOLLOWS, APPEARS_IN, AT_LOCATION, etc.)
   → Base CastFrameState per character per frame
                 ↓
-Parallel Haiku workers — per-frame enrichment
+Parallel frame enricher workers — per-frame enrichment
   → CastFrameState enrichment (screen_position, looking_at, emotion, posture, ...)
   → FrameComposition (shot, angle, movement, focus)
   → FrameEnvironment, FrameBackground, FrameDirecting
@@ -41,7 +41,7 @@ Prompt assembly + materialization (existing deterministic code)
 - Morpheus Agent 1 (Entity Seeder) — replaced by Python parser
 - Morpheus Agent 2 (Frame Parser) — replaced by Python parser
 - Morpheus Agent 3 (Dialogue Wirer) — replaced by Python parser
-- Morpheus Agent 4 (Compositor) — replaced by Haiku workers
+- Morpheus Agent 4 (Compositor) — replaced by frame enricher workers
 
 **What remains:**
 - Morpheus Agent 5 (Continuity Wirer) — reduced to validation-only
@@ -219,7 +219,7 @@ Dialogue is NOT copied into the skeleton. Instead, CC outputs `///DLG` excerpt p
 
 **Temporal span assignment:**
 - `start_frame`: the frame_id of the `///` marker containing this dialogue (the `dlg` frame)
-- `end_frame`: same as `start_frame` (single-frame span by default; Haiku workers can extend for J/L cuts)
+- `end_frame`: same as `start_frame` (single-frame span by default; frame enricher workers can extend for J/L cuts)
 - `primary_visual_frame`: same as `start_frame`
 - `dialogue_id`: `dlg_{NNN}` (globally sequential)
 - `order`: 0-based global sequence
@@ -228,7 +228,7 @@ Dialogue is NOT copied into the skeleton. Instead, CC outputs `///DLG` excerpt p
 
 ### 1.7 Scene Staging Tags
 
-The CC declares a spatial staging plan per scene with three beats (start, mid, end) defining character positions, eyelines, and facing directions. Haiku workers use these as anchors — they interpolate between beats based on frame position within the scene.
+The CC declares a spatial staging plan per scene with three beats (start, mid, end) defining character positions, eyelines, and facing directions. frame enricher workers use these as anchors — they interpolate between beats based on frame position within the scene.
 
 Format:
 ```
@@ -254,7 +254,7 @@ Example:
 Parser behavior:
 - Extract per-scene staging plans and attach to SceneNode.staging_plan
 - Each beat (start/mid/end) maps cast_id → {screen_position, looking_at, facing_direction}
-- Haiku workers receive the staging_plan in their input and use the appropriate beat as baseline
+- frame enricher workers receive the staging_plan in their input and use the appropriate beat as baseline
 
 ---
 
@@ -276,7 +276,7 @@ def parse_cc_output(
       - {project_dir}/creative_output/creative_output.md
 
     Returns a fully populated NarrativeGraph with all entities,
-    frames, dialogue, states, and edges. Ready for Haiku enrichment.
+    frames, dialogue, states, and edges. Ready for frame enrichment.
     """
 ```
 
@@ -472,7 +472,7 @@ Provenance(
 
 ## 3. Haiku Worker Form Specification
 
-Each Haiku worker receives a single frame and fills out a structured enrichment form. Workers run in parallel (one per frame). The pipeline spawns them via batch Haiku API calls.
+Each frame enricher worker receives a single frame and fills out a structured enrichment form. Workers run in parallel (one per frame). The pipeline spawns them via batch Haiku API calls.
 
 ### 3.1 Worker Input
 
@@ -671,13 +671,13 @@ Workers return structured JSON. The `composition` fields (shot, angle, movement,
 | Agent 1 — Entity Seeder | CC skeleton already defines all entities in parsable format | `cc_parser.py` |
 | Agent 2 — Frame Parser | CC `///` markers already define frame boundaries, cast, location | `cc_parser.py` |
 | Agent 3 — Dialogue Wirer | Dialogue is embedded in CC prose with ENV tags | `cc_parser.py` |
-| Agent 4 — Compositor | Composition, environment, directing, cast state enrichment | Haiku workers |
+| Agent 4 — Compositor | Composition, environment, directing, cast state enrichment | frame enricher workers |
 
 ### 4.2 Retained Agent: Continuity Validator (Agent 5 — Reduced)
 
 **Role:** Validation-only pass. Does NOT build new data. Audits and flags issues.
 
-**Input:** Complete graph after Haiku enrichment.
+**Input:** Complete graph after frame enrichment.
 
 **Checks performed:**
 
@@ -743,9 +743,9 @@ Phase 6: Export (ffmpeg assembly)
 ```
 Phase 0: Server startup (unchanged)
 Phase 1: CC writes skeleton + prose (unchanged)
-Phase 2: Deterministic graph + Haiku enrichment
+Phase 2: Deterministic graph + frame enrichment
   Step 2a: Python parser (cc_parser.py)             — deterministic, <5 seconds
-  Step 2b: Parallel Haiku workers                    — per-frame enrichment, ~2-10 seconds per frame
+  Step 2b: Parallel frame enricher workers                    — per-frame enrichment, ~2-10 seconds per frame
   Step 2b.5: Grok frame tagging (grok_tagger.py)    — per-frame tag assignment, ~10 concurrent
   Step 2c: Continuity validation                     — deterministic Python checks + optional Haiku audit
   Step 2d: Prompt assembly + materialization         — existing deterministic code (prompt_assembler.py + materializer.py)
@@ -780,23 +780,23 @@ def run_phase_2a(project_dir: Path, project_node: ProjectNode) -> NarrativeGraph
 
 ```python
 def run_phase_2b(graph: NarrativeGraph, project_dir: Path) -> NarrativeGraph:
-    """Dispatch parallel Haiku workers for per-frame enrichment."""
-    worker_inputs = build_haiku_inputs(graph)  # one per frame
+    """Dispatch parallel frame enricher workers for per-frame enrichment."""
+    worker_inputs = build_frame_enricher_inputs(graph)  # one per frame
 
     # Batch Haiku API call — all frames in parallel
     # Uses Anthropic batch API or concurrent single calls
-    results = haiku_batch_enrich(worker_inputs, max_concurrent=20)
+    results = frame_enricher_batch_enrich(worker_inputs, max_concurrent=20)
 
     # Apply enrichments to graph
     for result in results:
-        apply_haiku_enrichment(graph, result)
+        apply_frame_enrichment(graph, result)
 
     store = GraphStore(project_dir / "graph")
     store.save(graph)
     return graph
 ```
 
-**Haiku worker dispatch options:**
+**frame enricher worker dispatch options:**
 1. **Anthropic Messages Batches API** — submit all frames as a batch, poll for completion. Most cost-efficient.
 2. **Concurrent single calls** — `asyncio.gather()` with semaphore. Faster wall-clock time, higher concurrency cost.
 
@@ -856,7 +856,7 @@ Phase 2c runs a **validate → auto-fix → re-enrich → re-validate** loop (ma
 3. **Re-enrichment:** `re_enrich_frames(graph, issues)` dispatches targeted Haiku calls for
    each frame with `needs_re_enrichment=True`. A `CORRECTION REQUIRED` block is appended to
    the system prompt so Haiku knows exactly what to fix. Results are applied with
-   `apply_haiku_enrichment()` and the graph is saved.
+   `apply_frame_enrichment()` and the graph is saved.
 
 4. **Pass 2 — re-validate:** The loop runs `validate_continuity(fix=True)` again to confirm
    fixes landed.
@@ -872,7 +872,7 @@ validate_continuity(fix=True)
         ↓
       re_enrich_frames()     → Haiku corrects specific frames
         ↓
-      apply_haiku_enrichment() → graph updated
+      apply_frame_enrichment() → graph updated
         ↓
       validate_continuity(fix=True)   ← pass 2
         └── still failing → log_warn, proceed (never halt)
@@ -880,7 +880,7 @@ validate_continuity(fix=True)
 
 **Implementation:** `run_pipeline.py:phase_2_morpheus()` Step 2c section.
 **Validator:** `graph/continuity_validator.py:validate_continuity(fix, project_dir)`
-**Re-enricher:** `graph/haiku_enricher.py:re_enrich_frames()`
+**Re-enricher:** `graph/frame_enricher.py:re_enrich_frames()`
 
 ---
 
@@ -898,7 +898,7 @@ Unchanged. Uses existing `prompt_assembler.py` and `materializer.py`:
 
 ### 6.1 Overview
 
-Frame composition tags are assigned AFTER the graph is fully built (entities seeded, frames parsed, Haiku enrichment complete). A dedicated Grok agent reads each frame's complete node data and assigns the single most relevant tag from the Cinematic Frame Tag Taxonomy.
+Frame composition tags are assigned AFTER the graph is fully built (entities seeded, frames parsed, frame enrichment complete). A dedicated Grok agent reads each frame's complete node data and assigns the single most relevant tag from the Cinematic Frame Tag Taxonomy.
 
 The tag's textual definition from the taxonomy becomes part of the frame's generation prompt — the definition IS the composition directive sent to image and video generation.
 
@@ -1024,18 +1024,18 @@ The tag's textual definition REPLACES the old formula-based shot description blo
 
 ### 6.7 Pipeline Integration
 
-New Phase 2 step between Haiku enrichment (2b) and continuity validation (2c):
+New Phase 2 step between frame enrichment (2b) and continuity validation (2c):
 
 ```
 Phase 2:
   Step 2a: Python parser (cc_parser.py)
-  Step 2b: Parallel Haiku workers (haiku_enricher.py)
+  Step 2b: Parallel frame enricher workers (frame_enricher.py)
   Step 2b.5: Grok frame tagging (grok_tagger.py)  ← NEW
   Step 2c: Continuity validation
   Step 2d: Prompt assembly + materialization
 ```
 
-The tagger runs after Haiku enrichment so it has the complete frame data (cast states, composition, environment, directing) to make informed tag selections.
+The tagger runs after frame enrichment so it has the complete frame data (cast states, composition, environment, directing) to make informed tag selections.
 
 ---
 
@@ -1076,7 +1076,7 @@ Add to the skeleton output spec:
 | File | Status | Description |
 |------|--------|-------------|
 | `graph/cc_parser.py` | NEW | Python parser — skeleton + prose → graph |
-| `graph/haiku_enricher.py` | NEW | Haiku worker dispatch + result application |
+| `graph/frame_enricher.py` | NEW | frame enricher worker dispatch + result application |
 | `graph/grok_tagger.py` | NEW | Grok-based cinematic frame tagger |
 | `graph/continuity_validator.py` | NEW | Deterministic continuity rule checks |
 | `graph/schema.py` | MODIFIED | Add StagingBeat model + SceneNode.staging_plan field. Replace FormulaTag enum with CinematicTag model |
@@ -1088,7 +1088,7 @@ Add to the skeleton output spec:
 | `agent_prompts/morpheus_1_entity_seeder.md` | REMOVED | Replaced by cc_parser.py |
 | `agent_prompts/morpheus_2_frame_parser.md` | REMOVED | Replaced by cc_parser.py |
 | `agent_prompts/morpheus_3_dialogue_wirer.md` | REMOVED | Replaced by cc_parser.py |
-| `agent_prompts/morpheus_4_compositor.md` | REMOVED | Replaced by haiku_enricher.py |
+| `agent_prompts/morpheus_4_compositor.md` | REMOVED | Replaced by frame_enricher.py |
 | `agent_prompts/morpheus_5_continuity_wirer.md` | MODIFIED | Reduced to validation-only |
 | `run_pipeline.py` | MODIFIED | Phase 2 rewritten as Steps 2a-2d |
 
@@ -1097,7 +1097,7 @@ Add to the skeleton output spec:
 ## 9. Migration Strategy
 
 1. **Implement cc_parser.py** — write parser, test against existing CC output from previous pipeline runs
-2. **Implement haiku_enricher.py** — build worker input/output, test with mock Haiku responses
+2. **Implement frame_enricher.py** — build worker input/output, test with mock Haiku responses
 3. **Implement continuity_validator.py** — port relevant checks from Agent 5 prompt to Python
 4. **Update CC prompt** — add `///TAG` format to skeleton spec, remove `dur:` from frame markers
 5. **Update run_pipeline.py** — replace Morpheus agent spawns with Steps 2a-2d
@@ -1113,11 +1113,11 @@ Add to the skeleton output spec:
 | Field | Source File | Parser Step | Graph Target | Downstream Consumer |
 |-------|------------|-------------|--------------|-------------------|
 | Entity rosters (cast, location, prop) | outline_skeleton.md | parse_skeleton | CastNode, LocationNode, PropNode | prompt_assembler |
-| Scene headers + staging | outline_skeleton.md | parse_skeleton | SceneNode + staging_plan | haiku_enricher, continuity_validator |
+| Scene headers + staging | outline_skeleton.md | parse_skeleton | SceneNode + staging_plan | frame_enricher, continuity_validator |
 | ///DLG excerpt pointers | outline_skeleton.md (tags) + creative_output.md (text) | parse_skeleton + resolve | DialogueNode.raw_line | prompt_assembler |
-| Frame markers (cast, cam, dlg, cast_states) | creative_output.md | parse_creative_output | FrameNode + base CastFrameState | haiku_enricher, prompt_assembler |
-| Frame prose (source_text) | creative_output.md | parse_creative_output | FrameNode.source_text | haiku_enricher |
-| Enriched cast states (screen_position, looking_at, emotion, etc.) | Haiku workers | haiku_enricher | CastFrameState | prompt_assembler |
-| Composition, environment, directing | Haiku workers | haiku_enricher | FrameNode sub-objects | prompt_assembler |
+| Frame markers (cast, cam, dlg, cast_states) | creative_output.md | parse_creative_output | FrameNode + base CastFrameState | frame_enricher, prompt_assembler |
+| Frame prose (source_text) | creative_output.md | parse_creative_output | FrameNode.source_text | frame_enricher |
+| Enriched cast states (screen_position, looking_at, emotion, etc.) | frame enricher workers | frame_enricher | CastFrameState | prompt_assembler |
+| Composition, environment, directing | frame enricher workers | frame_enricher | FrameNode sub-objects | prompt_assembler |
 | Location directions (background description) | outline_skeleton.md | parse_skeleton | LocationNode.directions | api.py fallback -> prompt_assembler |
 | Cinematic frame tag + definition | Grok tagger | grok_tagger.py (Step 2b.5) | FrameNode.cinematic_tag | prompt_assembler |

@@ -18,7 +18,9 @@ down the graph.
 
 from __future__ import annotations
 
+from itertools import chain
 from typing import Any, Optional
+import re
 
 from .schema import (
     NarrativeGraph,
@@ -31,6 +33,80 @@ from .schema import (
     GraphEdge, EdgeType, Provenance, canonical_edge_id,
 )
 from .store import GraphStore
+
+_SCREEN_CONTEXT_TOKENS = (
+    "screen",
+    "laptop",
+    "virtual window",
+    "video feed",
+    "camera",
+    "chat",
+    "screen within screen",
+    "inset",
+)
+_SCREEN_HUMAN_TOKENS = (
+    "smile",
+    "smiles",
+    "speaking",
+    "listener",
+    "face",
+    "gesturing",
+    "brightening",
+    "leans forward",
+    "impatient",
+    "serenely",
+)
+_HAND_ACTION_TOKENS = (
+    "hand",
+    "hands",
+    "finger",
+    "fingers",
+    "thumb",
+    "forefinger",
+)
+_SINGLE_SUBJECT_VISIBLE_TOKENS = (
+    "single person",
+    "single speaker",
+    "isolated framing",
+    "clean single",
+    "single subject",
+    "no other people visible",
+)
+_COLLECTIVE_VISIBLE_TOKENS = (
+    "group",
+    "everyone",
+    "everybody",
+    "all together",
+    "cluster",
+    "ensemble",
+    "in unison",
+    "chants",
+    "chanting",
+    "crowd",
+    "huddle",
+    "tightens together",
+)
+_NUMBER_WORDS = {
+    "zero": 0,
+    "one": 1,
+    "two": 2,
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+    "seven": 7,
+    "eight": 8,
+    "nine": 9,
+    "ten": 10,
+    "eleven": 11,
+    "twelve": 12,
+}
+_GROUP_OF_RE = re.compile(
+    r"\b(?:group|ensemble|cluster|crowd)\s+of\s+(\d+|"
+    + "|".join(_NUMBER_WORDS.keys())
+    + r")\b",
+    re.IGNORECASE,
+)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -253,8 +329,42 @@ def build_shot_packet(graph: NarrativeGraph, frame_id: str) -> ShotPacket:
     ]
     prop_states = get_frame_prop_state_models(graph, frame_id)
     location_state = get_frame_location_state_model(graph, frame_id)
+    audio = _build_audio_beat(ctx)
 
-    visible_cast_ids = [state.cast_id for state in visible_cast_states]
+    inferred_visible_cast_ids = _infer_visible_cast_ids(
+        graph,
+        frame=frame,
+        prev_frame=prev_frame,
+        next_frame=next_frame,
+        ctx=ctx,
+        audio=audio,
+        visible_cast_states=visible_cast_states,
+    )
+    subject_count = _resolve_subject_count(
+        frame=frame,
+        ctx=ctx,
+        audio=audio,
+        visible_cast_states=visible_cast_states,
+        inferred_visible_cast_ids=inferred_visible_cast_ids,
+    )
+
+    explicit_visible_cast_ids = [state.cast_id for state in visible_cast_states]
+    if explicit_visible_cast_ids:
+        if (
+            inferred_visible_cast_ids
+            and subject_count < len(explicit_visible_cast_ids)
+            and len(inferred_visible_cast_ids) == subject_count
+        ):
+            visible_cast_ids = inferred_visible_cast_ids
+        elif (
+            len(inferred_visible_cast_ids) > len(explicit_visible_cast_ids)
+            and subject_count >= len(inferred_visible_cast_ids)
+        ):
+            visible_cast_ids = inferred_visible_cast_ids
+        else:
+            visible_cast_ids = explicit_visible_cast_ids
+    else:
+        visible_cast_ids = inferred_visible_cast_ids
     visible_prop_ids = [state.prop_id for state in prop_states]
 
     continuity_deltas = _build_continuity_deltas(graph, frame, prev_frame, visible_cast_states, prop_states, location_state)
@@ -263,7 +373,6 @@ def build_shot_packet(graph: NarrativeGraph, frame_id: str) -> ShotPacket:
     location_invariants = _build_location_invariants(graph, frame, ctx, location_state)
     blocking = _build_blocking_lines(graph, ctx, visible_cast_states)
     background = _build_background_lines(frame, ctx)
-    audio = _build_audio_beat(ctx)
 
     intent = ShotIntent(
         shot=frame.composition.shot,
@@ -287,7 +396,7 @@ def build_shot_packet(graph: NarrativeGraph, frame_id: str) -> ShotPacket:
         scene_id=frame.scene_id,
         sequence_index=frame.sequence_index,
         location_id=frame.location_id,
-        subject_count=len(visible_cast_states),
+        subject_count=subject_count,
         visible_cast_ids=visible_cast_ids,
         visible_prop_ids=visible_prop_ids,
         previous_beat=_neighbor_beat(prev_frame),
@@ -303,6 +412,250 @@ def build_shot_packet(graph: NarrativeGraph, frame_id: str) -> ShotPacket:
         shot_intent=intent,
         audio=audio,
     )
+
+
+def _frame_subject_text(frame: FrameNode, ctx: dict[str, Any], audio: ShotAudioBeat) -> str:
+    parts = [
+        frame.narrative_beat,
+        frame.action_summary,
+        frame.source_text,
+        getattr(frame.directing, "dramatic_purpose", None),
+        getattr(frame.directing, "viewer_knowledge_delta", None),
+        getattr(frame.directing, "reaction_target", None),
+    ]
+    for turn in audio.turns:
+        parts.extend([
+            turn.speaker,
+            turn.line,
+            turn.performance_direction,
+        ])
+    return " ".join(part for part in parts if isinstance(part, str) and part).lower()
+
+
+def _parse_textual_count(text: str) -> int:
+    match = _GROUP_OF_RE.search(text or "")
+    if not match:
+        return 0
+    token = match.group(1).lower()
+    if token.isdigit():
+        return int(token)
+    return _NUMBER_WORDS.get(token, 0)
+
+
+def _looks_collective_visible_beat(text: str) -> bool:
+    lowered = (text or "").lower()
+    return any(token in lowered for token in _COLLECTIVE_VISIBLE_TOKENS) or bool(_GROUP_OF_RE.search(lowered))
+
+
+def _visible_cast_ids_for_frame(graph: NarrativeGraph, frame_id: str | None) -> list[str]:
+    if not frame_id:
+        return []
+    return [
+        state.cast_id
+        for state in get_frame_cast_state_models(graph, frame_id)
+        if getattr(getattr(state, "frame_role", None), "value", getattr(state, "frame_role", None)) != "referenced"
+    ]
+
+
+def _dedupe_preserve_order(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for value in values:
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        ordered.append(value)
+    return ordered
+
+
+def _shot_implied_subject_count(frame: FrameNode) -> int:
+    shot = ((getattr(frame, "composition", None) and frame.composition.shot) or "").lower()
+    if "two_shot" in shot or "two shot" in shot:
+        return 2
+    if "three_shot" in shot or "three shot" in shot:
+        return 3
+    return 0
+
+
+def _primary_visual_dialogue_cast_ids(
+    graph: NarrativeGraph,
+    frame_id: str,
+    audio: ShotAudioBeat,
+) -> list[str]:
+    cast_ids: list[str] = []
+    for turn in audio.turns:
+        dnode = graph.dialogue.get(turn.dialogue_id)
+        if dnode is None or dnode.primary_visual_frame != frame_id:
+            continue
+        if dnode.cast_id:
+            cast_ids.append(dnode.cast_id)
+    return _dedupe_preserve_order(cast_ids)
+
+
+def _mentioned_cast_ids(graph: NarrativeGraph, text: str) -> list[str]:
+    lowered = (text or "").lower()
+    mentions: list[tuple[int, str]] = []
+    for cast_id, cast_node in graph.cast.items():
+        candidates: list[str] = []
+        for raw in (
+            getattr(cast_node, "display_name", None),
+            getattr(cast_node, "name", None),
+            getattr(cast_node, "source_name", None),
+        ):
+            cleaned = re.sub(r"\s+", " ", (raw or "").strip()).lower()
+            if not cleaned:
+                continue
+            candidates.append(cleaned)
+            first = cleaned.split()[0]
+            if len(first) >= 4:
+                candidates.append(first)
+
+        first_index: int | None = None
+        for token in candidates:
+            match = re.search(rf"(?<!\w){re.escape(token)}(?!\w)", lowered)
+            if not match:
+                continue
+            if first_index is None or match.start() < first_index:
+                first_index = match.start()
+        if first_index is not None:
+            mentions.append((first_index, cast_id))
+
+    mentions.sort(key=lambda item: item[0])
+    return _dedupe_preserve_order([cast_id for _, cast_id in mentions])
+
+
+def _looks_screen_mediated_human_beat(text: str, audio: ShotAudioBeat) -> bool:
+    has_screen_context = any(token in text for token in _SCREEN_CONTEXT_TOKENS)
+    has_human_signal = audio.dialogue_present or any(token in text for token in _SCREEN_HUMAN_TOKENS)
+    return has_screen_context and has_human_signal
+
+
+def _looks_single_subject_visible_beat(frame: FrameNode, text: str) -> bool:
+    cinematic = " ".join(
+        part.strip().lower()
+        for part in (
+            getattr(getattr(frame, "cinematic_tag", None), "ai_prompt_language", ""),
+            getattr(getattr(frame, "cinematic_tag", None), "definition", ""),
+        )
+        if isinstance(part, str) and part.strip()
+    )
+    combined = f"{text}\n{cinematic}".lower()
+    return any(token in combined for token in _SINGLE_SUBJECT_VISIBLE_TOKENS)
+
+
+def _infer_visible_cast_ids(
+    graph: NarrativeGraph,
+    *,
+    frame: FrameNode,
+    prev_frame: FrameNode | None,
+    next_frame: FrameNode | None,
+    ctx: dict[str, Any],
+    audio: ShotAudioBeat,
+    visible_cast_states: list[CastFrameState],
+) -> list[str]:
+    explicit_ids = [state.cast_id for state in visible_cast_states]
+
+    text = _frame_subject_text(frame, ctx, audio)
+    shot_implied_count = _shot_implied_subject_count(frame)
+    primary_dialogue_ids = _primary_visual_dialogue_cast_ids(graph, frame.frame_id, audio)
+    named_cast_ids = _mentioned_cast_ids(graph, text)
+    single_subject_focus = _looks_single_subject_visible_beat(frame, text)
+    if explicit_ids:
+        if single_subject_focus:
+            narrowed = _dedupe_preserve_order(primary_dialogue_ids + named_cast_ids + explicit_ids)
+            return narrowed[:1] if narrowed else explicit_ids[:1]
+        expanded_ids = _dedupe_preserve_order(explicit_ids + primary_dialogue_ids + named_cast_ids)
+        if (
+            len(explicit_ids) == 1
+            and len(expanded_ids) > 1
+            and (
+                _looks_collective_visible_beat(text)
+                or shot_implied_count >= 2
+                or _parse_textual_count(text) >= 2
+            )
+        ):
+            if shot_implied_count >= 2:
+                return expanded_ids[: max(shot_implied_count, len(expanded_ids))]
+            return expanded_ids
+        return explicit_ids
+
+    prev_ids = _visible_cast_ids_for_frame(graph, getattr(prev_frame, "frame_id", None))
+    next_ids = _visible_cast_ids_for_frame(graph, getattr(next_frame, "frame_id", None))
+    if _looks_collective_visible_beat(text):
+        collective_ids = _dedupe_preserve_order(list(chain(prev_ids, next_ids)))
+        if len(collective_ids) >= 2:
+            return collective_ids
+
+    inferred_named_ids = _dedupe_preserve_order(primary_dialogue_ids + named_cast_ids)
+    if inferred_named_ids:
+        if single_subject_focus:
+            return inferred_named_ids[:1]
+        if shot_implied_count >= 2:
+            return inferred_named_ids[:shot_implied_count]
+        if _looks_collective_visible_beat(text) or len(inferred_named_ids) >= 2:
+            return inferred_named_ids
+        if primary_dialogue_ids:
+            return inferred_named_ids[: max(len(primary_dialogue_ids), 1)]
+        if len(inferred_named_ids) == 1:
+            return inferred_named_ids
+
+    if not _looks_screen_mediated_human_beat(text, audio):
+        return []
+
+    dialogue_ids = _dedupe_preserve_order([
+        turn.cast_id for turn in audio.turns if getattr(turn, "cast_id", None)
+    ])
+    if dialogue_ids:
+        return dialogue_ids
+
+    shared = [cast_id for cast_id in prev_ids if cast_id in next_ids]
+    if shared:
+        return _dedupe_preserve_order(shared)
+    if len(prev_ids) == 1:
+        return prev_ids
+    if len(next_ids) == 1:
+        return next_ids
+    return _dedupe_preserve_order(list(chain(prev_ids, next_ids)))[:1]
+
+
+def _resolve_subject_count(
+    *,
+    frame: FrameNode,
+    ctx: dict[str, Any],
+    audio: ShotAudioBeat,
+    visible_cast_states: list[CastFrameState],
+    inferred_visible_cast_ids: list[str],
+) -> int:
+    explicit_count = len(visible_cast_states)
+    text = _frame_subject_text(frame, ctx, audio)
+    shot_implied_count = _shot_implied_subject_count(frame)
+    textual_count = _parse_textual_count(text)
+    if _looks_single_subject_visible_beat(frame, text):
+        return 1
+    if explicit_count:
+        if (
+            len(inferred_visible_cast_ids) > explicit_count
+            and (
+                _looks_collective_visible_beat(text)
+                or shot_implied_count >= 2
+                or textual_count >= 2
+            )
+        ):
+            return len(inferred_visible_cast_ids)
+        return explicit_count
+
+    if inferred_visible_cast_ids:
+        return len(inferred_visible_cast_ids)
+
+    if textual_count:
+        return textual_count
+    if shot_implied_count:
+        return shot_implied_count
+    if _looks_collective_visible_beat(text):
+        return 2
+    if any(token in text for token in _HAND_ACTION_TOKENS):
+        return 1
+    return 0
 
 
 def _neighbor_beat(frame: Optional[FrameNode]) -> Optional[ShotNeighborBeat]:
@@ -1619,6 +1972,7 @@ def propagate_location_state(
 # ═══════════════════════════════════════════════════════════════════════════════
 
 MAX_GRID_SIZE = 6
+MIN_GRID_SIZE = 2
 
 
 def is_large_shift(graph: NarrativeGraph, prev_frame_id: str, curr_frame_id: str) -> bool:
@@ -1731,12 +2085,35 @@ def _storyboard_break_reason(
     return None
 
 
+def _should_flush_storyboard_batch(
+    current_batch: list[str],
+    break_reason: Optional[str],
+) -> bool:
+    """Decide whether a batch should flush before appending the next frame.
+
+    Storyboard grids are meant to show short sequential progressions, not
+    collapse into one-frame pseudo-storyboards. Soft shifts are tolerated
+    until a batch holds at least two frames; hard breaks still flush
+    immediately.
+    """
+    if not current_batch or not break_reason:
+        return False
+
+    if break_reason in {"scene_break", "large_shift"}:
+        return True
+
+    return len(current_batch) >= MIN_GRID_SIZE
+
+
 def build_storyboard_grids(graph: NarrativeGraph) -> list[StoryboardGrid]:
     """Partition frame_order into small sequential guidance grids.
 
     Grids are capped at 6 frames and break early when a new frame changes the
-    dialogue beat, cast set, prop state, camera setup, or background state.
-    Storyboards stay a continuity-planning layer, not a final render proxy.
+    scene or makes a major continuity jump. Softer beat/cast/camera changes
+    are tolerated until the current grid holds at least two frames so
+    storyboard guidance remains genuinely sequential instead of degenerating
+    into one-frame proxies. Storyboards stay a continuity-planning layer, not
+    a final render proxy.
 
     Clears existing grids and rebuilds from scratch.
     Returns the list of grids created.
@@ -1813,7 +2190,7 @@ def build_storyboard_grids(graph: NarrativeGraph) -> list[StoryboardGrid]:
         if len(current_batch) >= MAX_GRID_SIZE:
             _flush_batch("full")
             current_batch = []
-        elif break_reason:
+        elif _should_flush_storyboard_batch(current_batch, break_reason):
             _flush_batch(break_reason)
             current_batch = []
 

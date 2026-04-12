@@ -8,12 +8,14 @@ import httpx
 
 
 PROJECT_DIR_DEFAULT = os.getcwd()
+HTTP_TIMEOUT_S = float(os.environ.get("SCREENWIRE_VIDEO_HTTP_TIMEOUT", "1800"))
 
 
 def main():
     parser = argparse.ArgumentParser(description="Generate a video via the ScreenWire internal API.")
     parser.add_argument("--image", default=None, help="Input image path (relative or absolute)")
     parser.add_argument("--prompt", required=True, help="Video generation prompt")
+    parser.add_argument("--dialogue-text", default="", help="Optional dialogue prefix for lip-sync")
     parser.add_argument("--out", required=True, help="Output file path (relative or absolute)")
     parser.add_argument("--frame-id", default="", help="Canonical frame ID for telemetry and output tracking")
     parser.add_argument("--duration", type=int, default=5, help="Duration in seconds (2-15, default: 5)")
@@ -31,6 +33,7 @@ def main():
 
     body = {
         "prompt": args.prompt,
+        "dialogue_text": args.dialogue_text or None,
         "output_path": out_abs,
         "duration": min(max(args.duration, 2), 15),
         "frame_id": args.frame_id or None,
@@ -42,11 +45,21 @@ def main():
         body["image_path"] = resolve(args.image)
 
     try:
-        resp = httpx.post("http://localhost:8000/internal/generate-video", json=body, timeout=300)
+        resp = httpx.post(
+            "http://localhost:8000/internal/generate-video",
+            json=body,
+            timeout=HTTP_TIMEOUT_S,
+        )
         resp.raise_for_status()
         data = resp.json()
     except httpx.HTTPError as e:
         print(f"ERROR: HTTP request failed: {e}")
+        response = getattr(e, "response", None)
+        if response is not None:
+            try:
+                print(response.text)
+            except Exception:
+                pass
         sys.exit(1)
     except Exception as e:
         print(f"ERROR: {e}")

@@ -21,6 +21,8 @@ import logging
 import time
 from pathlib import Path
 
+from PIL import Image
+
 from .base import BaseHandler, classify_replicate_error
 from .models import (
     MODEL_ROUTES,
@@ -33,6 +35,9 @@ logger = logging.getLogger("handlers.video_clip")
 # Duration constraints (matching server.py's clamping)
 MIN_DURATION_S = 2
 MAX_DURATION_S = 15
+VIDEO_INPUT_MAX_WIDTH = 1280
+VIDEO_INPUT_MAX_HEIGHT = 720
+VIDEO_INPUT_QUALITY = 82
 
 
 class VideoClipHandler(BaseHandler):
@@ -48,10 +53,35 @@ class VideoClipHandler(BaseHandler):
 
     handler_name = "video_clip"
 
+    def _prepare_video_input_frame(self, frame_path: Path, output_dir: Path, frame_id: str) -> Path:
+        """
+        Downscale/compress the composed frame before sending it to xAI video.
+
+        Full-resolution PNG frame outputs can exceed the gRPC message size limit.
+        The video model only needs a 720p-class conditioning image, so normalize
+        to a lightweight JPEG first.
+        """
+        temp_dir = output_dir / "video" / "_inputs"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        prepared = temp_dir / f"{frame_id}_video_input.jpg"
+
+        with Image.open(frame_path) as im:
+            im = im.convert("RGB")
+            im.thumbnail((VIDEO_INPUT_MAX_WIDTH, VIDEO_INPUT_MAX_HEIGHT), Image.Resampling.LANCZOS)
+            im.save(
+                prepared,
+                format="JPEG",
+                quality=VIDEO_INPUT_QUALITY,
+                optimize=True,
+                progressive=True,
+            )
+
+        return prepared
+
     async def generate(self, inp: VideoClipInput) -> VideoClipOutput:
         t0 = time.monotonic()
         route = MODEL_ROUTES[self.handler_name]
-        model = route.primary  # xai/grok-imagine-video
+        model = route.primary  # Replicate fallback
 
         # Build output path
         out_dir = inp.output_dir / "video" / "clips"
@@ -70,16 +100,11 @@ class VideoClipHandler(BaseHandler):
                 elapsed_s=time.monotonic() - t0,
             )
 
-        # Upload the composed frame
-        try:
-            image_uri = await self.upload_to_replicate(inp.frame_image_path)
-        except Exception as exc:
-            return VideoClipOutput(
-                success=False,
-                frame_id=inp.frame_id,
-                error=f"Failed to upload frame image: {exc}",
-                elapsed_s=time.monotonic() - t0,
-            )
+        prepared_frame = self._prepare_video_input_frame(
+            inp.frame_image_path,
+            inp.output_dir,
+            inp.frame_id,
+        )
 
         # Build prompt: dialogue prefix + motion prompt
         # Dialogue comes first so Grok can attempt lip-sync
@@ -90,7 +115,16 @@ class VideoClipHandler(BaseHandler):
             prompt_parts.append(inp.motion_prompt.strip())
         full_prompt = "\n\n".join(prompt_parts) or inp.motion_prompt
 
-        # Build prediction input
+        try:
+            image_uri = await self.upload_to_replicate(prepared_frame)
+        except Exception as exc:
+            return VideoClipOutput(
+                success=False,
+                frame_id=inp.frame_id,
+                error=f"Failed to upload frame image: {exc}",
+                elapsed_s=time.monotonic() - t0,
+            )
+
         pred_input: dict = {
             "prompt": full_prompt,
             "image": image_uri,
@@ -135,7 +169,6 @@ class VideoClipHandler(BaseHandler):
                 elapsed_s=time.monotonic() - t0,
             )
 
-        # Download video
         output_url = self.extract_output_url(prediction)
         if not output_url:
             return VideoClipOutput(

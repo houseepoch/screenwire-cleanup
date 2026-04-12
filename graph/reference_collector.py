@@ -19,16 +19,22 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import math
 from dataclasses import dataclass, field
+from itertools import chain
 from pathlib import Path
 from typing import Optional
 
+from PIL import Image, ImageOps
+
 from .api import (
+    build_shot_packet,
     get_frame_cast_state_models,
     get_frame_cell_image,
     get_frame_prop_state_models,
 )
-from .schema import CastBible, CastFrameState, CharacterSheet, NarrativeGraph, PoseState
+from .feature_flags import ENABLE_STORYBOARD_GUIDANCE
+from .schema import CastBible, CastFrameRole, CastFrameState, CharacterSheet, NarrativeGraph, PoseState
 from .store import GraphStore
 from telemetry import current_run_id
 
@@ -36,6 +42,9 @@ logger = logging.getLogger("graph.reference_collector")
 
 _CAST_MAX = 5
 _PROP_MAX = 3
+_CAST_STITCH_MIN = 3
+_CAST_STITCH_CELL = (512, 768)
+_CAST_STITCH_GAP = 24
 
 
 def _normalize_pose_token(value: str) -> str:
@@ -53,6 +62,30 @@ def _sequence_number(frame_id: str) -> Optional[int]:
         return int(str(frame_id).split("_")[-1])
     except (TypeError, ValueError):
         return None
+
+
+def _screen_position_rank(value: str) -> int:
+    token = (value or "").strip().lower()
+    order = {
+        "frame_left_edge": 0,
+        "frame_left": 1,
+        "frame_left_third": 2,
+        "frame_center_left": 3,
+        "frame_center": 4,
+        "frame_center_right": 5,
+        "frame_right_third": 6,
+        "frame_right": 7,
+        "frame_right_edge": 8,
+    }
+    if token in order:
+        return order[token]
+    if "left" in token:
+        return 1
+    if "right" in token:
+        return 7
+    if "center" in token:
+        return 4
+    return 4
 
 
 def pose_state_from_cast_state(
@@ -167,9 +200,23 @@ def cast_bible_snapshot_for_frame(
         pose = sheet.pose_for_frame(frame_id)
         if pose is None:
             continue
+        target_sequence = _sequence_number(frame_id) or -1
+        recent_candidates = [
+            state
+            for state in chain(sheet.pose_history, sheet.frame_poses.values())
+            if (
+                state.frame_id
+                and (seq := _sequence_number(state.frame_id)) is not None
+                and seq <= target_sequence
+                and state.frame_id != frame_id
+            )
+        ]
+        recent_candidates.sort(
+            key=lambda state: _sequence_number(state.frame_id) or -1
+        )
         recent_history = [
             state.model_dump()
-            for state in sheet.pose_history[-3:]
+            for state in recent_candidates[-3:]
         ]
         characters.append(
             {
@@ -270,7 +317,10 @@ class ReferenceImageCollector:
             return FrameReferences()
 
         return FrameReferences(
-            storyboard_cell=self._resolve_storyboard_cell(frame_id),
+            storyboard_cell=(
+                self._resolve_storyboard_cell(frame_id)
+                if ENABLE_STORYBOARD_GUIDANCE else None
+            ),
             previous_frame=self._resolve_previous_frame(frame_id),
             cast_composites=self._resolve_cast_composites(frame_id),
             location_primary=self._resolve_location(frame_id),
@@ -297,9 +347,13 @@ class ReferenceImageCollector:
         if refs.previous_frame and refs.previous_frame.exists():
             flat.append(refs.previous_frame)
 
-        for p in refs.cast_composites:
-            if p.exists():
-                flat.append(p)
+        stitched_cast = self._resolve_stitched_cast_reference(frame_id)
+        if stitched_cast is not None and stitched_cast.exists():
+            flat.append(stitched_cast)
+        else:
+            for p in refs.cast_composites:
+                if p.exists():
+                    flat.append(p)
 
         if refs.location_primary and refs.location_primary.exists():
             flat.append(refs.location_primary)
@@ -542,12 +596,17 @@ class ReferenceImageCollector:
         cell_rel = get_frame_cell_image(self.graph, frame_id)
         if cell_rel:
             p = self._to_absolute(cell_rel)
-            if not p.exists():
-                logger.warning(
-                    "Storyboard cell for '%s' expected at %s — not found on disk",
-                    frame_id, p,
-                )
-            return p
+            if p.exists():
+                return p
+
+            legacy_name = p.with_name(f"{frame_id}_cell.png")
+            if legacy_name.exists():
+                return legacy_name
+
+            logger.warning(
+                "Storyboard cell for '%s' expected at %s — not found on disk",
+                frame_id, p,
+            )
 
         # Fallback: scan grids and try known conventions
         for grid in self.graph.storyboard_grids.values():
@@ -620,8 +679,8 @@ class ReferenceImageCollector:
 
         return None
 
-    def _resolve_cast_composites(self, frame_id: str) -> list[Path]:
-        """Resolve cast reference images for visible cast in this frame.
+    def _resolve_cast_reference_entries(self, frame_id: str) -> list[tuple[CastFrameState, Path]]:
+        """Resolve visible cast states paired with their reference images.
 
         Respects active_state_tag — a non-base state tag uses the variant image
         (e.g. wounded, formal) if available. Falls back to base composite, then
@@ -632,8 +691,23 @@ class ReferenceImageCollector:
         """
         cast_states = get_frame_cast_state_models(self.graph, frame_id)
         visible = [cs for cs in cast_states if cs.frame_role != "referenced"]
+        if not visible:
+            try:
+                packet = build_shot_packet(self.graph, frame_id)
+            except Exception:
+                packet = None
+            inferred_cast_ids = list(getattr(packet, "visible_cast_ids", []) or [])
+            visible = [
+                CastFrameState(
+                    cast_id=cast_id,
+                    frame_id=frame_id,
+                    frame_role=CastFrameRole.SUBJECT,
+                    active_state_tag="base",
+                )
+                for cast_id in inferred_cast_ids[:_CAST_MAX]
+            ]
 
-        paths: list[Path] = []
+        entries: list[tuple[CastFrameState, Path]] = []
         for cs in visible[:_CAST_MAX]:
             cast = self.graph.cast.get(cs.cast_id)
             if not cast:
@@ -648,20 +722,79 @@ class ReferenceImageCollector:
             if cs.active_state_tag and cs.active_state_tag != "base":
                 variant = cast.state_variants.get(cs.active_state_tag)
                 if variant and variant.image_path:
-                    paths.append(self._to_absolute(variant.image_path))
+                    entries.append((cs, self._to_absolute(variant.image_path)))
                     continue
 
             # Base composite from graph
             if cast.composite_path:
-                paths.append(self._to_absolute(cast.composite_path))
+                entries.append((cs, self._to_absolute(cast.composite_path)))
                 continue
 
             # Convention fallback
-            paths.append(
-                self.project_dir / "cast" / "composites" / f"{cs.cast_id}_ref.png"
-            )
+            entries.append((
+                cs,
+                self.project_dir / "cast" / "composites" / f"{cs.cast_id}_ref.png",
+            ))
 
-        return paths
+        return entries
+
+    def _resolve_cast_composites(self, frame_id: str) -> list[Path]:
+        """Resolve cast reference images for visible cast in this frame."""
+        return [path for _cast_state, path in self._resolve_cast_reference_entries(frame_id)]
+
+    def _resolve_stitched_cast_reference(self, frame_id: str) -> Optional[Path]:
+        """Build a temporary stitched cast sheet for 3+ visible cast references.
+
+        The stitched image collapses multiple cast refs into one landscape sheet,
+        ordered left-to-right using each cast state's screen position so group
+        frames arrive at the image model with clearer relative placement.
+        """
+        entries = [
+            (cast_state, path)
+            for cast_state, path in self._resolve_cast_reference_entries(frame_id)
+            if path.exists()
+        ]
+        if len(entries) < _CAST_STITCH_MIN:
+            return None
+
+        ordered = sorted(
+            entries,
+            key=lambda item: (
+                _screen_position_rank(item[0].screen_position or ""),
+                item[0].cast_id,
+            ),
+        )
+        digest = hashlib.sha1(
+            "|".join(
+                f"{cast_state.cast_id}:{cast_state.screen_position}:{cast_state.spatial_position}:{path}"
+                for cast_state, path in ordered
+            ).encode("utf-8")
+        ).hexdigest()[:10]
+        out_dir = self.project_dir / "cast" / "composites" / "group_refs"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = out_dir / f"{frame_id}_group_{digest}.png"
+        if out_path.exists():
+            return out_path
+
+        cols = min(3, len(ordered))
+        rows = math.ceil(len(ordered) / cols)
+        cell_w, cell_h = _CAST_STITCH_CELL
+        gap = _CAST_STITCH_GAP
+        canvas_w = cols * cell_w + (cols + 1) * gap
+        canvas_h = rows * cell_h + (rows + 1) * gap
+        canvas = Image.new("RGBA", (canvas_w, canvas_h), (245, 242, 236, 255))
+
+        for index, (_cast_state, path) in enumerate(ordered):
+            row = index // cols
+            col = index % cols
+            with Image.open(path) as src:
+                tile = ImageOps.contain(src.convert("RGBA"), (cell_w, cell_h), Image.Resampling.LANCZOS)
+            x = gap + col * (cell_w + gap) + max((cell_w - tile.width) // 2, 0)
+            y = gap + row * (cell_h + gap) + max((cell_h - tile.height) // 2, 0)
+            canvas.alpha_composite(tile, (x, y))
+
+        canvas.save(out_path)
+        return out_path
 
     def _resolve_location(self, frame_id: str) -> Optional[Path]:
         """Resolve the primary location reference image for this frame."""
@@ -678,12 +811,38 @@ class ReferenceImageCollector:
             )
             return None
 
-        # Graph-tracked path
+        background = getattr(frame, "background", None)
+        camera_facing = ""
+        if background is not None:
+            camera_facing = (
+                getattr(background, "camera_facing", None)
+                or (background.get("camera_facing") if isinstance(background, dict) else "")
+                or ""
+            )
+        primary_path: Optional[Path] = None
         if loc.primary_image_path:
-            return self._to_absolute(loc.primary_image_path)
+            primary_path = self._to_absolute(loc.primary_image_path)
+        else:
+            primary_path = self.project_dir / "locations" / "primary" / f"{frame.location_id}.png"
 
-        # Convention fallback: locations/primary/{location_id}.png
-        return self.project_dir / "locations" / "primary" / f"{frame.location_id}.png"
+        if camera_facing:
+            facing = camera_facing.strip().lower().replace("camera_facing_", "")
+            variant = self.project_dir / "locations" / "variants" / f"{frame.location_id}_{facing}.png"
+            if not variant.exists() and primary_path is not None and primary_path.exists():
+                try:
+                    from handlers.location_grid import extract_directional_location_variants
+
+                    extract_directional_location_variants(primary_path, frame.location_id)
+                except Exception:
+                    logger.exception(
+                        "Failed to extract directional location variants for %s from %s",
+                        frame.location_id,
+                        primary_path,
+                    )
+            if variant.exists():
+                return variant
+
+        return primary_path
 
     def _resolve_props(self, frame_id: str) -> list[Path]:
         """Resolve prop reference images for props active in this frame.
