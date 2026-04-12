@@ -1,5 +1,8 @@
 # Scaffold Spec — ScreenWire AI MVP
 
+> Legacy planning document. Some folders referenced here belong to removed
+> voice/TTS-era workflows and are no longer part of the supported runtime.
+
 ## Task
 Create the project scaffold for the headless MVP test pipeline.
 
@@ -135,7 +138,6 @@ Make it rich with sensory detail but concise.
 
 ```
 FAL_KEY=
-ELEVENLABS_API_KEY=
 REPLICATE_API_TOKEN=
 ```
 

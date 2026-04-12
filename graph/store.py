@@ -14,10 +14,19 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from .schema import NarrativeGraph, ProjectNode
+from .schema import CastBible, CharacterSheet, NarrativeGraph, PoseState, ProjectNode
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _now_slug() -> str:
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
 
 
 class GraphStore:
@@ -29,6 +38,9 @@ class GraphStore:
         self.graph_path = self.graph_dir / "narrative_graph.json"
         self.queue_dir = self.graph_dir / "assembly_queue"
         self.committed_dir = self.graph_dir / "committed"
+        self.cast_bible_dir = self.graph_dir / "cast_bible"
+        self.cast_bible_versions_dir = self.cast_bible_dir / "versions"
+        self.cast_bible_latest_path = self.cast_bible_dir / "latest.json"
         self._graph: Optional[NarrativeGraph] = None
 
     def ensure_dirs(self) -> None:
@@ -36,6 +48,8 @@ class GraphStore:
         self.graph_dir.mkdir(parents=True, exist_ok=True)
         self.queue_dir.mkdir(parents=True, exist_ok=True)
         self.committed_dir.mkdir(parents=True, exist_ok=True)
+        self.cast_bible_dir.mkdir(parents=True, exist_ok=True)
+        self.cast_bible_versions_dir.mkdir(parents=True, exist_ok=True)
 
     def exists(self) -> bool:
         """Check if a master graph file exists."""
@@ -90,6 +104,27 @@ class GraphStore:
         self._graph = g
         return self.graph_path
 
+    def _atomic_write_text(self, output_path: Path, content: str) -> Path:
+        """Atomically write text to disk using a temp file swap."""
+        self.ensure_dirs()
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp_path = tempfile.mkstemp(
+            dir=str(output_path.parent),
+            suffix=".tmp",
+            prefix=f"{output_path.stem}_",
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(content)
+            os.replace(tmp_path, str(output_path))
+        except Exception:
+            try:
+                Path(tmp_path).unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
+        return output_path
+
     def initialize(self, project_id: str, **kwargs) -> NarrativeGraph:
         """Create a new empty master graph."""
         self.ensure_dirs()
@@ -98,6 +133,121 @@ class GraphStore:
         self._graph = graph
         self.save(graph)
         return graph
+
+    def save_cast_bible(
+        self,
+        bible: CastBible,
+        *,
+        run_id: str = "",
+        sequence_id: str = "",
+    ) -> Path:
+        """Persist the latest cast bible and archive an immutable version."""
+        resolved = bible.model_copy(deep=True)
+        if run_id:
+            resolved.run_id = run_id
+        if sequence_id:
+            resolved.sequence_id = sequence_id
+        if not resolved.version:
+            resolved.version = _now_iso()
+
+        payload = resolved.to_json()
+        version_path = self.cast_bible_versions_dir / f"cast_bible_{_now_slug()}.json"
+        self._atomic_write_text(version_path, payload)
+        self._atomic_write_text(self.cast_bible_latest_path, payload)
+        return self.cast_bible_latest_path
+
+    def load_latest_cast_bible(
+        self,
+        run_id: str = "",
+        sequence_id: str = "",
+    ) -> Optional[CastBible]:
+        """Load the newest matching cast bible snapshot."""
+
+        def _matches(candidate: CastBible) -> bool:
+            if run_id and candidate.run_id != run_id:
+                return False
+            if sequence_id and candidate.sequence_id != sequence_id:
+                return False
+            return True
+
+        if self.cast_bible_latest_path.exists():
+            try:
+                latest = CastBible.from_json(
+                    self.cast_bible_latest_path.read_text(encoding="utf-8")
+                )
+            except Exception:
+                latest = None
+            if latest is not None and _matches(latest):
+                return latest
+
+        if not self.cast_bible_versions_dir.exists():
+            return None
+
+        for path in sorted(self.cast_bible_versions_dir.glob("cast_bible_*.json"), reverse=True):
+            try:
+                candidate = CastBible.from_json(path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if _matches(candidate):
+                return candidate
+        return None
+
+    def update_character_pose(
+        self,
+        character_id: str,
+        new_pose: PoseState,
+        *,
+        run_id: str = "",
+        sequence_id: str = "",
+        name: str = "",
+        description: str = "",
+        appearance_notes: Optional[dict[str, str]] = None,
+    ) -> CastBible:
+        """Upsert a single character pose in the latest cast bible."""
+        bible = self.load_latest_cast_bible(run_id=run_id, sequence_id=sequence_id)
+        if bible is None:
+            bible = CastBible(
+                run_id=run_id or None,
+                sequence_id=sequence_id or None,
+            )
+
+        sheet = bible.characters.get(character_id)
+        if sheet is None:
+            sheet = CharacterSheet(
+                character_id=character_id,
+                name=name or character_id,
+                description=description,
+            )
+            bible.characters[character_id] = sheet
+
+        if name:
+            sheet.name = name
+        if description:
+            sheet.description = description
+        if appearance_notes:
+            sheet.appearance_notes.update(appearance_notes)
+
+        previous_pose = sheet.current_pose.model_copy(deep=True)
+        if (
+            previous_pose.pose != new_pose.pose
+            or previous_pose.modifiers != new_pose.modifiers
+            or previous_pose.frame_id != new_pose.frame_id
+        ):
+            if previous_pose.frame_id or previous_pose.pose != "standing_neutral":
+                sheet.pose_history.append(previous_pose)
+                sheet.pose_history = sheet.pose_history[-5:]
+
+        if new_pose.frame_id:
+            sheet.frame_poses[new_pose.frame_id] = new_pose
+        sheet.current_pose = new_pose
+
+        bible.version = _now_iso()
+        if run_id:
+            bible.run_id = run_id
+        if sequence_id:
+            bible.sequence_id = sequence_id
+        self.save_cast_bible(bible, run_id=run_id, sequence_id=sequence_id)
+        return bible
 
     # ------------------------------------------------------------------
     # Overlay support — parallel write safety for swarm agents
@@ -206,7 +356,6 @@ class GraphStore:
         _merge_dict(base.scenes, overlay.scenes)
         _merge_dict(base.frames, overlay.frames)
         _merge_dict(base.dialogue, overlay.dialogue)
-        _merge_dict(base.voices, overlay.voices)
         _merge_dict(base.storyboard_grids, overlay.storyboard_grids)
 
         # Per-frame state snapshots (dict[str, StateNode])

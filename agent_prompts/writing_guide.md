@@ -130,7 +130,7 @@ Atomization reads this as three story atoms: `mei → rises → from stool` / `m
 
 ### 2. Camera Direction + Background in Every Paragraph
 
-Every paragraph must establish which direction the camera faces and what's visible behind the action. Use the location's cardinal direction views from the skeleton — these are the backgrounds for every frame in that location.
+Every paragraph must establish which direction the camera faces and what's visible behind the action. Use the location's cardinal direction views from the skeleton as textual spatial anchors for the background.
 
 **Bad — no camera direction, no background:**
 > Mei sets the teacup down on the table.
@@ -138,7 +138,7 @@ Every paragraph must establish which direction the camera faces and what's visib
 **Good — camera direction defines the background:**
 > The camera faces south — through the open screen doors, the koi pond glints in afternoon light, willows trailing into the water. Mei sets the teacup down on the lacquered table.
 
-**Why this is mandatory:** Every frame renders an image with a background. If your prose doesn't specify what's behind the action, the frame either gets a generic background or an empty one. The location's cardinal directions (defined in the skeleton) give you 4-5 pre-built backgrounds per location — cycle through them for visual variety. When the camera direction changes, the background changes, and the audience feels spatial awareness of the location.
+**Why this is mandatory:** Every frame renders an image with a background. If your prose doesn't specify what's behind the action, the frame either gets a generic background or an empty one. The location's cardinal directions give downstream prompt assembly stable spatial orientation, so changing camera direction changes what the audience understands is behind the action.
 
 **Practical rule:** When two characters are in dialogue, alternate camera directions for each speaker's shot. If Mei faces south (garden behind her) and Lin faces north (entrance behind him), the over-shoulder shots naturally alternate backgrounds. This prevents the visual monotony of talking heads against the same wall.
 

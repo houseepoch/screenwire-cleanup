@@ -11,6 +11,7 @@ import json
 import mimetypes
 import os
 import re
+import shutil
 import signal
 import sys
 from contextlib import asynccontextmanager
@@ -34,6 +35,22 @@ from tenacity import (
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
+from telemetry import activate_run_context, current_phase, current_run_id, emit_event
+
+from handlers import (
+    get_handler,
+    CastImageInput,
+    CastImageOutput,
+    FrameInput,
+    FrameOutput,
+    VideoClipInput,
+    VideoClipOutput,
+    LocationGridInput,
+    LocationGridOutput,
+    StoryboardInput,
+    StoryboardOutput,
+)
+
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
@@ -49,6 +66,7 @@ if not _project_dir_env:
 PROJECT_DIR = Path(_project_dir_env)
 
 REPLICATE_API_TOKEN = os.getenv("REPLICATE_API_TOKEN", "")
+ENABLE_MANIFEST_QUEUE = os.getenv("SCREENWIRE_ENABLE_MANIFEST_QUEUE", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def log(module: str, message: str) -> None:
@@ -189,16 +207,25 @@ class ManifestReconciler:
         if dialogue_path.exists():
             dialogue_data = json.loads(dialogue_path.read_text())
         else:
-            dialogue_data = []
+            dialogue_data = {"dialogue": []}
 
-        for item in dialogue_data:
+        if isinstance(dialogue_data, dict):
+            lines = dialogue_data.setdefault("dialogue", [])
+        elif isinstance(dialogue_data, list):
+            lines = dialogue_data
+            dialogue_data = {"dialogue": lines}
+        else:
+            lines = []
+            dialogue_data = {"dialogue": lines}
+
+        for item in lines:
             if item.get("dialogueId") == dialogue_id:
                 item.update(set_dict)
                 break
         else:
             new_item = {"dialogueId": dialogue_id}
             new_item.update(set_dict)
-            dialogue_data.append(new_item)
+            lines.append(new_item)
 
         tmp = dialogue_path.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(dialogue_data, indent=2))
@@ -418,18 +445,14 @@ _gateway_retry = retry(
 
 class GenerateImageRequest(BaseModel):
     prompt: str
-    image_size: str = "landscape_16_9"
+    size: str = "landscape_16_9"
     output_path: str
     seed: Optional[int] = None
     output_format: str = "png"
-
-
-class GenerateImageReduxRequest(BaseModel):
-    image_url: str
-    prompt: str = ""
-    image_size: str = "landscape_16_9"
-    output_path: str
-    seed: Optional[int] = None
+    cast_id: Optional[str] = None       # handler: identifies cast member for output naming
+    media_style: Optional[str] = None   # handler: triggers live-action upscale when set
+    run_id: Optional[str] = None
+    phase: str = ""
 
 
 class EditImageRequest(BaseModel):
@@ -440,12 +463,14 @@ class EditImageRequest(BaseModel):
     """
     input_path: str  # source image to edit
     prompt: str      # edit instruction
-    image_size: str = "landscape_16_9"
+    size: str = "landscape_16_9"
     output_path: str
     seed: Optional[int] = None
     output_format: str = "png"
     image_search: bool = False  # Google Image Search grounding for visual context
     google_search: bool = False  # Google Web Search grounding for real-time info
+    run_id: Optional[str] = None
+    phase: str = ""
 
 
 class FreshGenerationRequest(BaseModel):
@@ -455,40 +480,28 @@ class FreshGenerationRequest(BaseModel):
     guidance without requiring a source image to edit.
     """
     prompt: str
-    image_size: str = "landscape_16_9"
+    size: str = "landscape_16_9"
     output_path: str
     seed: Optional[int] = None
     output_format: str = "png"
     reference_images: list[str] = Field(default_factory=list)
     image_search: bool = False  # Google Image Search grounding for visual context
     google_search: bool = False  # Google Web Search grounding for real-time info
-
-
-class DesignVoiceRequest(BaseModel):
-    pass
-
-
-class SaveVoiceRequest(BaseModel):
-    pass
-
-
-class GenerateTTSRequest(BaseModel):
-    pass
-
-
-class GenerateDialogueRequest(BaseModel):
-    pass
+    run_id: Optional[str] = None
+    phase: str = ""
 
 
 class GenerateVideoRequest(BaseModel):
-    model: str  # "prunaai/p-video" or "xai/grok-imagine-video"
     prompt: str
     image_path: Optional[str] = None
-    audio_path: Optional[str] = None
     duration: int = 5
     resolution: str = "720p"
     output_path: str
     extra_params: dict[str, Any] = Field(default_factory=dict)
+    frame_id: Optional[str] = None       # handler: identifies frame for output naming
+    dialogue_text: Optional[str] = None  # handler: prefixed before prompt for lip-sync
+    run_id: Optional[str] = None
+    phase: str = ""
 
 
 class UploadToReplicateRequest(BaseModel):
@@ -520,10 +533,13 @@ async def lifespan(app: FastAPI):
     global http_client
     http_client = httpx.AsyncClient(timeout=None)
 
-    # Manifest reconciler
     reconciler.load_manifest()
-    reconciler.start_watcher()
-    await reconciler.start_writer()
+    if ENABLE_MANIFEST_QUEUE:
+        reconciler.start_watcher()
+        await reconciler.start_writer()
+        log("Engine", "Manifest queue reconciler enabled")
+    else:
+        log("Engine", "Manifest queue reconciler disabled; graph materialization is authoritative")
 
     # Sentinel
     sentinel.start()
@@ -533,7 +549,8 @@ async def lifespan(app: FastAPI):
     yield
 
     # Shutdown
-    await reconciler.stop()
+    if ENABLE_MANIFEST_QUEUE:
+        await reconciler.stop()
     sentinel.stop()
     await agent_mgr.kill_all()
     await http_client.aclose()
@@ -587,6 +604,10 @@ async def health():
 
 @app.get("/api/project/current")
 async def get_current_project():
+    if reconciler.manifest_path.exists():
+        reconciler.manifest = json.loads(
+            reconciler.manifest_path.read_text(encoding="utf-8")
+        )
     return reconciler.manifest
 
 
@@ -644,78 +665,65 @@ async def api_agent_status(agent_id: str):
 
 @app.post("/internal/generate-image")
 async def generate_image(req: GenerateImageRequest):
-    """Reference image generation via prunaai/p-image (sub-1s, used for mood/cast/location/prop assets)."""
+    """Reference image generation via cast_image handler (prunaai/p-image + optional upscale)."""
     output = _resolve_output(req.output_path)
+    cast_id = req.cast_id or output.stem
 
-    # Map image_size to p-image aspect_ratio format
-    aspect_map = {
-        "landscape_16_9": "16:9", "landscape_4_3": "4:3", "landscape_3_2": "3:2",
-        "portrait_9_16": "9:16", "portrait_3_4": "3:4", "portrait_2_3": "2:3",
-        "square": "1:1", "square_hd": "1:1",
-    }
-    aspect_ratio = aspect_map.get(req.image_size, "16:9")
-
-    # p-image max resolution is 1440px. For standard aspect ratios, use custom
-    # width/height to guarantee maximum output size.
-    _PIMAGE_MAX_DIMS: dict[str, tuple[int, int]] = {
-        "9:16": (816, 1440),   # 816/1440 = 0.5667 ≈ 9/16
-        "16:9": (1440, 816),
-        "3:4": (1088, 1440),
-        "4:3": (1440, 1088),
-        "2:3": (960, 1440),
-        "3:2": (1440, 960),
-        "1:1": (1440, 1440),
-        "4:5": (1152, 1440),
-        "5:4": (1440, 1152),
-    }
-
-    max_dims = _PIMAGE_MAX_DIMS.get(aspect_ratio)
-    if max_dims:
-        pred_input: dict[str, Any] = {
-            "prompt": req.prompt,
-            "aspect_ratio": "custom",
-            "width": max_dims[0],
-            "height": max_dims[1],
-            "disable_safety_checker": True,
-        }
-    else:
-        pred_input: dict[str, Any] = {
-            "prompt": req.prompt,
-            "aspect_ratio": aspect_ratio,
-            "disable_safety_checker": True,
-        }
-    if req.seed is not None:
-        pred_input["seed"] = req.seed
-
-    headers = {
-        "Authorization": f"Bearer {REPLICATE_API_TOKEN}",
-        "Content-Type": "application/json",
-        "Prefer": "wait",
-    }
-
+    handler = get_handler(
+        "cast_image",
+        replicate_token=REPLICATE_API_TOKEN,
+        http_client=http_client,
+    )
     try:
-        pred_data = await _replicate_predict("prunaai/p-image", pred_input, headers)
-    except httpx.HTTPStatusError as exc:
-        raise HTTPException(status_code=exc.response.status_code, detail=exc.response.text)
+        with activate_run_context(run_id=req.run_id or "", phase=req.phase):
+            result = await handler.generate(CastImageInput(
+                cast_id=cast_id,
+                prompt=req.prompt,
+                media_style=req.media_style or "",
+                output_dir=PROJECT_DIR,
+                seed=req.seed,
+                run_id=req.run_id,
+                phase=req.phase,
+            ))
+    finally:
+        await handler.close()
 
-    # Poll if not yet succeeded
-    prediction_id = pred_data.get("id", "")
-    if pred_data.get("status") != "succeeded":
-        pred_data = await _poll_replicate_prediction(prediction_id, headers)
-
-    if pred_data.get("status") != "succeeded":
-        error_detail = _build_prediction_error(pred_data, req.prompt)
+    if not result.success:
+        emit_event(
+            PROJECT_DIR,
+            event="asset_generation_failed",
+            level="ERROR",
+            run_id=req.run_id or "",
+            phase=req.phase,
+            asset_id=cast_id,
+            handler="cast_image",
+            details={"error": result.error, "model": result.model_used},
+        )
+        error_detail = result.error_detail or {"error": result.error, "failure_type": "MODEL_ERROR"}
         raise HTTPException(status_code=502, detail=error_detail)
 
-    output_url = pred_data.get("output")
-    if isinstance(output_url, list):
-        output_url = output_url[0]
+    # Move handler output to the requested location if different
+    if result.image_path and result.image_path.resolve() != output.resolve():
+        output.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(result.image_path), str(output))
 
-    seed_val = pred_data.get("metrics", {}).get("seed") or pred_data.get("input", {}).get("seed")
-
-    await _download_file(output_url, output)
-
-    return {"success": True, "path": str(output), "seed": seed_val, "prediction_id": prediction_id}
+    emit_event(
+        PROJECT_DIR,
+        event="asset_generated",
+        run_id=req.run_id or "",
+        phase=req.phase,
+        asset_id=cast_id,
+        handler="cast_image",
+        details={"path": str(output), "model": result.model_used, "upscaled": result.upscaled},
+    )
+    return {
+        "success": True,
+        "path": str(output),
+        "seed": req.seed,
+        "prediction_id": "",
+        "model": result.model_used,
+        "upscaled": result.upscaled,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -884,239 +892,115 @@ async def _generate_with_fallback(
 
 class GenerateFrameRequest(BaseModel):
     prompt: str
-    image_size: str = "landscape_16_9"
+    size: str = "landscape_16_9"
     output_path: str
     seed: Optional[int] = None
     output_format: str = "png"
-    reference_images: list[str] = Field(default_factory=list)  # paths to cast/location ref images
+    reference_images: list[str] = Field(default_factory=list)  # paths to cast/location/prop ref images
+    storyboard_image: Optional[str] = None  # explicit storyboard cell path (PRIMARY composition ref)
+    frame_id: Optional[str] = ""  # handler: identifies frame for output naming and ledger
+    run_id: Optional[str] = None
+    phase: str = ""
 
 
 @app.post("/internal/generate-frame")
 async def generate_frame(req: GenerateFrameRequest):
-    """Frame generation with automatic fallback: nano-banana-2 → nano-banana-pro → nano-banana.
-
-    Accepts reference_images — local file paths to cast composites, location refs, etc.
-    These are uploaded as data URIs and passed via image_input parameter (up to 14 images)
-    for character/scene consistency.
-    """
-    import time as _time
-    _t0 = _time.monotonic()
-
+    """Frame generation via frame handler (nano-banana-2 → nano-banana-pro, 4K, capacity rescue)."""
     output = _resolve_output(req.output_path)
+    frame_id = req.frame_id or output.stem
 
-    aspect_map = {
-        "landscape_16_9": "16:9", "landscape_4_3": "4:3", "landscape_3_2": "3:2",
-        "portrait_9_16": "9:16", "portrait_3_4": "3:4", "portrait_2_3": "2:3",
-        "square": "1:1", "square_hd": "1:1",
-    }
-    aspect_ratio = aspect_map.get(req.image_size, "16:9")
+    def _resolve_ref_path(ref: str) -> Path | None:
+        p = Path(ref)
+        if not p.is_absolute():
+            p = PROJECT_DIR / p
+        return p if p.exists() else None
 
-    pred_input: dict[str, Any] = {
-        "prompt": req.prompt,
-        "aspect_ratio": aspect_ratio,
-        "resolution": "4K",
-        "output_format": req.output_format if req.output_format in ("jpg", "png") else "png",
-    }
+    # Separate storyboard cell from generic reference images.
+    # Priority: explicit storyboard_image field > auto-detect from reference_images[0]
+    # (resolve_ref_images always puts the storyboard cell/composite first).
+    storyboard_path: Path | None = None
+    remaining_refs: list[str] = list(req.reference_images)
 
-    # Upload reference images as data URIs for character/scene consistency
-    if req.reference_images:
-        image_input = []
-        for ref_path in req.reference_images:
-            p = Path(ref_path)
-            if not p.is_absolute():
-                p = PROJECT_DIR / p
-            if p.exists():
-                data_uri = await _upload_to_replicate(p)
-                image_input.append(data_uri)
-                log("FrameGen", f"Attached reference: {p.name}")
-            else:
-                log("FrameGen", f"WARNING: Reference image not found: {ref_path}")
-        if image_input:
-            pred_input["image_input"] = image_input
+    if req.storyboard_image:
+        storyboard_path = _resolve_ref_path(req.storyboard_image)
+        if not storyboard_path:
+            log("FrameGen", f"WARNING: Storyboard image not found: {req.storyboard_image}")
+    elif remaining_refs and "storyboards/" in remaining_refs[0].replace("\\", "/"):
+        # Auto-extract: first ref is a storyboard cell/composite
+        storyboard_path = _resolve_ref_path(remaining_refs.pop(0))
+        if not storyboard_path:
+            log("FrameGen", "WARNING: Auto-detected storyboard ref not found on disk")
 
-    headers = {
-        "Authorization": f"Bearer {REPLICATE_API_TOKEN}",
-        "Content-Type": "application/json",
-        "Prefer": "wait",
-    }
+    ref_paths: list[Path] = []
+    for ref in remaining_refs:
+        p = _resolve_ref_path(ref)
+        if p:
+            ref_paths.append(p)
+        else:
+            log("FrameGen", f"WARNING: Reference image not found: {ref}")
 
-    return await _generate_with_fallback(
-        pred_input, headers, output, req.prompt,
-        req.reference_images, aspect_ratio, _t0,
+    handler = get_handler(
+        "frame",
+        replicate_token=REPLICATE_API_TOKEN,
+        http_client=http_client,
     )
-
-
-# ---------------------------------------------------------------------------
-# Layer 1: POST /internal/generate-location-direction  (prunaai/p-image-edit)
-# ---------------------------------------------------------------------------
-
-P_IMAGE_EDIT_MODEL = "prunaai/p-image-edit"
-
-
-class GenerateLocationDirectionRequest(BaseModel):
-    prompt: str
-    input_path: str                                     # Primary location image (north-facing)
-    image_size: str = "landscape_16_9"
-    output_path: str
-    output_format: str = "png"
-    reference_images: list[str] = Field(default_factory=list)  # Currently unused; reserved
-    seed: Optional[int] = None
-
-
-@app.post("/internal/generate-location-direction")
-async def generate_location_direction(req: GenerateLocationDirectionRequest):
-    """Generate a location direction view using prunaai/p-image-edit.
-
-    Takes the primary (north-facing) location image and edits it into the
-    requested cardinal direction view while preserving architecture, materials,
-    and lighting.
-    """
-    import time as _time
-    _t0 = _time.monotonic()
-
-    output = _resolve_output(req.output_path)
-
-    # Resolve the source image (primary/north view)
-    source = Path(req.input_path)
-    if not source.is_absolute():
-        source = PROJECT_DIR / source
-    if not source.exists():
-        raise HTTPException(status_code=400, detail=f"Source image not found: {source}")
-
-    # Upload source image as data URI
-    source_uri = await _upload_to_replicate(source)
-
-    # Map size preset to aspect ratio
-    aspect_map = {
-        "landscape_16_9": "16:9", "landscape_4_3": "4:3", "landscape_3_2": "3:2",
-        "portrait_9_16": "9:16", "portrait_3_4": "3:4", "portrait_2_3": "2:3",
-        "square": "1:1", "square_hd": "1:1",
-    }
-    aspect_ratio = aspect_map.get(req.image_size, "match_input_image")
-
-    pred_input: dict[str, Any] = {
-        "prompt": req.prompt,
-        "images": [source_uri],
-        "turbo": False,         # Perspective changes are complex; disable turbo
-        "aspect_ratio": aspect_ratio,
-    }
-    if req.seed is not None:
-        pred_input["seed"] = req.seed
-
-    headers = {
-        "Authorization": f"Bearer {REPLICATE_API_TOKEN}",
-        "Content-Type": "application/json",
-        "Prefer": "wait",
-    }
-
     try:
-        pred_data = await _replicate_predict(P_IMAGE_EDIT_MODEL, pred_input, headers)
-    except httpx.HTTPStatusError as exc:
-        log("LocDirection", f"p-image-edit HTTP error: {exc.response.status_code}")
-        _log_composition(
-            output_path=str(output), prompt=req.prompt, model=P_IMAGE_EDIT_MODEL,
-            prediction_id="", reference_images=[req.input_path], success=False,
-            aspect_ratio=aspect_ratio,
-            error=str(exc),
-            duration_ms=int((_time.monotonic() - _t0) * 1000),
-        )
-        raise HTTPException(status_code=502, detail=f"p-image-edit HTTP error: {exc.response.status_code}")
+        with activate_run_context(run_id=req.run_id or "", phase=req.phase):
+            result = await handler.generate(FrameInput(
+                frame_id=frame_id,
+                prompt=req.prompt,
+                reference_images=ref_paths,
+                storyboard_image=storyboard_path,
+                output_dir=PROJECT_DIR,
+                seed=req.seed,
+                output_format=req.output_format if req.output_format in ("jpg", "png") else "png",
+                run_id=req.run_id,
+                phase=req.phase,
+            ))
+    finally:
+        await handler.close()
 
-    prediction_id = pred_data.get("id", "")
-    if pred_data.get("status") != "succeeded":
-        pred_data = await _poll_replicate_prediction(prediction_id, headers)
-
-    if pred_data.get("status") != "succeeded":
-        error_detail = _build_prediction_error(pred_data, req.prompt)
-        _log_composition(
-            output_path=str(output), prompt=req.prompt, model=P_IMAGE_EDIT_MODEL,
-            prediction_id=prediction_id, reference_images=[req.input_path], success=False,
-            aspect_ratio=aspect_ratio,
-            error=error_detail.get("failure_type", "UNKNOWN"),
-            duration_ms=int((_time.monotonic() - _t0) * 1000),
+    if not result.success:
+        emit_event(
+            PROJECT_DIR,
+            event="frame_generation_failed",
+            level="ERROR",
+            run_id=req.run_id or "",
+            phase=req.phase,
+            frame_id=frame_id,
+            handler="frame",
+            details={"error": result.error, "model": result.model_used},
         )
+        error_detail = result.error_detail or {"error": result.error, "failure_type": "MODEL_ERROR"}
         raise HTTPException(status_code=502, detail=error_detail)
 
-    # Download result
-    output_url = pred_data.get("output")
-    if isinstance(output_url, list):
-        output_url = output_url[0]
+    # Move handler output to the requested location if different
+    if result.image_path and result.image_path.resolve() != output.resolve():
+        output.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(result.image_path), str(output))
 
-    seed_val = pred_data.get("metrics", {}).get("seed") or pred_data.get("input", {}).get("seed")
-    await _download_file(output_url, output)
-
-    elapsed = int((_time.monotonic() - _t0) * 1000)
-    _log_composition(
-        output_path=str(output), prompt=req.prompt, model=P_IMAGE_EDIT_MODEL,
-        prediction_id=prediction_id, reference_images=[req.input_path], success=True,
-        aspect_ratio=aspect_ratio, seed=seed_val, duration_ms=elapsed,
+    emit_event(
+        PROJECT_DIR,
+        event="frame_generated",
+        run_id=req.run_id or "",
+        phase=req.phase,
+        frame_id=frame_id,
+        handler="frame",
+        details={
+            "path": str(output),
+            "model": result.model_used,
+            "downshifted": result.downshifted,
+            "reference_count": len(ref_paths) + (1 if storyboard_path else 0),
+        },
     )
-
     return {
         "success": True,
         "path": str(output),
-        "seed": seed_val,
-        "prediction_id": prediction_id,
-        "model": P_IMAGE_EDIT_MODEL,
+        "seed": req.seed,
+        "prediction_id": "",
+        "model": result.model_used,
+        "downshifted": result.downshifted,
     }
-
-
-# ---------------------------------------------------------------------------
-# Layer 1: POST /internal/generate-image-redux
-# ---------------------------------------------------------------------------
-
-@app.post("/internal/generate-image-redux")
-async def generate_image_redux(req: GenerateImageReduxRequest):
-    """Image-to-image variation via Flux 2 Pro redux (used for frame variations from reference images)."""
-    output = _resolve_output(req.output_path)
-
-    aspect_map = {
-        "landscape_16_9": "16:9", "landscape_4_3": "4:3", "landscape_3_2": "3:2",
-        "portrait_9_16": "9:16", "portrait_3_4": "3:4", "portrait_2_3": "2:3",
-        "square": "1:1", "square_hd": "1:1",
-    }
-    aspect_ratio = aspect_map.get(req.image_size, "16:9")
-
-    pred_input: dict[str, Any] = {
-        "prompt": req.prompt,
-        "input_images": [req.image_url],
-        "aspect_ratio": aspect_ratio,
-        "resolution": "1 MP",
-        "output_format": "png",
-        "output_quality": 80,
-        "safety_tolerance": 5,
-    }
-    if req.seed is not None:
-        pred_input["seed"] = req.seed
-
-    headers = {
-        "Authorization": f"Bearer {REPLICATE_API_TOKEN}",
-        "Content-Type": "application/json",
-        "Prefer": "wait",
-    }
-
-    try:
-        pred_data = await _replicate_predict("black-forest-labs/flux-2-pro", pred_input, headers)
-    except httpx.HTTPStatusError as exc:
-        raise HTTPException(status_code=exc.response.status_code, detail=exc.response.text)
-
-    prediction_id = pred_data.get("id", "")
-    if pred_data.get("status") != "succeeded":
-        pred_data = await _poll_replicate_prediction(prediction_id, headers)
-
-    if pred_data.get("status") != "succeeded":
-        error_detail = _build_prediction_error(pred_data, req.prompt)
-        raise HTTPException(status_code=502, detail=error_detail)
-
-    output_url = pred_data.get("output")
-    if isinstance(output_url, list):
-        output_url = output_url[0]
-
-    seed_val = pred_data.get("metrics", {}).get("seed") or pred_data.get("input", {}).get("seed")
-
-    await _download_file(output_url, output)
-
-    return {"success": True, "path": str(output), "seed": seed_val, "prediction_id": prediction_id}
 
 
 # ---------------------------------------------------------------------------
@@ -1149,7 +1033,7 @@ async def edit_image(req: EditImageRequest):
         "portrait_9_16": "9:16", "portrait_3_4": "3:4", "portrait_2_3": "2:3",
         "square": "1:1", "square_hd": "1:1",
     }
-    aspect_ratio = aspect_map.get(req.image_size, "16:9")
+    aspect_ratio = aspect_map.get(req.size, "16:9")
 
     pred_input: dict[str, Any] = {
         "prompt": req.prompt,
@@ -1171,10 +1055,11 @@ async def edit_image(req: EditImageRequest):
         "Prefer": "wait",
     }
 
-    result = await _generate_with_fallback(
-        pred_input, headers, output, req.prompt,
-        [], aspect_ratio, _t0,
-    )
+    with activate_run_context(run_id=req.run_id or "", phase=req.phase):
+        result = await _generate_with_fallback(
+            pred_input, headers, output, req.prompt,
+            [], aspect_ratio, _t0,
+        )
 
     grounding = []
     if req.image_search:
@@ -1209,7 +1094,7 @@ async def fresh_generation(req: FreshGenerationRequest):
         "portrait_9_16": "9:16", "portrait_3_4": "3:4", "portrait_2_3": "2:3",
         "square": "1:1", "square_hd": "1:1",
     }
-    aspect_ratio = aspect_map.get(req.image_size, "16:9")
+    aspect_ratio = aspect_map.get(req.size, "16:9")
 
     pred_input: dict[str, Any] = {
         "prompt": req.prompt,
@@ -1246,10 +1131,11 @@ async def fresh_generation(req: FreshGenerationRequest):
         "Prefer": "wait",
     }
 
-    result = await _generate_with_fallback(
-        pred_input, headers, output, req.prompt,
-        req.reference_images, aspect_ratio, _t0,
-    )
+    with activate_run_context(run_id=req.run_id or "", phase=req.phase):
+        result = await _generate_with_fallback(
+            pred_input, headers, output, req.prompt,
+            req.reference_images, aspect_ratio, _t0,
+        )
 
     grounding = []
     if req.image_search:
@@ -1264,120 +1150,558 @@ async def fresh_generation(req: FreshGenerationRequest):
 
 
 # ---------------------------------------------------------------------------
-# Layer 1: POST /internal/design-voice  (TTS provider removed)
-# ---------------------------------------------------------------------------
-
-@app.post("/internal/design-voice")
-async def design_voice(req: DesignVoiceRequest):
-    return {"status": "skipped", "reason": "TTS provider removed"}
-
-
-# ---------------------------------------------------------------------------
-# Layer 1: POST /internal/save-voice  (TTS provider removed)
-# ---------------------------------------------------------------------------
-
-@app.post("/internal/save-voice")
-async def save_voice(req: SaveVoiceRequest):
-    return {"status": "skipped", "reason": "TTS provider removed"}
-
-
-# ---------------------------------------------------------------------------
-# Layer 1: POST /internal/generate-tts  (TTS provider removed)
-# ---------------------------------------------------------------------------
-
-@app.post("/internal/generate-tts")
-async def generate_tts(req: GenerateTTSRequest):
-    return {"status": "skipped", "reason": "TTS provider removed"}
-
-
-# ---------------------------------------------------------------------------
-# Layer 1: POST /internal/generate-dialogue  (TTS provider removed)
-# ---------------------------------------------------------------------------
-
-@app.post("/internal/generate-dialogue")
-async def generate_dialogue(req: GenerateDialogueRequest):
-    return {"status": "skipped", "reason": "TTS provider removed"}
-
-
-# ---------------------------------------------------------------------------
 # Layer 1: POST /internal/generate-video
 # ---------------------------------------------------------------------------
 
 @app.post("/internal/generate-video")
 async def generate_video(req: GenerateVideoRequest):
+    """Video generation via video_clip handler (xai/grok-imagine-video)."""
     output = _resolve_output(req.output_path)
+    frame_id = req.frame_id or output.stem
 
-    # Upload local files to Replicate if provided
-    image_url = None
-    audio_url = None
-
+    # Resolve frame image path
+    frame_image: Path | None = None
     if req.image_path:
-        image_url = await _upload_to_replicate(Path(req.image_path))
-    if req.audio_path:
-        audio_url = await _upload_to_replicate(Path(req.audio_path))
+        frame_image = Path(req.image_path)
+        if not frame_image.is_absolute():
+            frame_image = PROJECT_DIR / frame_image
 
-    # Build prediction input
-    if req.model == "prunaai/p-video":
-        # p-video clamp 3-10s
-        effective_duration = min(max(req.duration, 3), 10)
-        pred_input: dict[str, Any] = {
-            "prompt": req.prompt,
-            "resolution": req.resolution,
-            "num_frames": effective_duration * 24,  # explicit frame count = duration * fps
-            "fps": 24,
-            "save_audio": True,
-            "draft": False,
-            "prompt_upsampling": True,
-        }
-        if image_url:
-            pred_input["image"] = image_url
-        if audio_url:
-            pred_input["audio"] = audio_url
-        pred_input.update(req.extra_params)
+    if not frame_image or not frame_image.exists():
+        raise HTTPException(
+            status_code=400,
+            detail="image_path is required and must exist for video generation",
+        )
 
-    elif req.model == "xai/grok-imagine-video":
-        pred_input = {
-            "prompt": req.prompt,
-            "duration": min(max(req.duration, 3), 15),  # clamp 3-15s
-            "resolution": req.resolution,
-            "aspect_ratio": "auto",
-        }
-        if image_url:
-            pred_input["image"] = image_url
-        pred_input.update(req.extra_params)
-
-    else:
-        raise HTTPException(status_code=400, detail=f"Unknown video model: {req.model}")
-
-    headers = {
-        "Authorization": f"Bearer {REPLICATE_API_TOKEN}",
-        "Content-Type": "application/json",
-        "Prefer": "wait",
-    }
-
+    handler = get_handler(
+        "video_clip",
+        replicate_token=REPLICATE_API_TOKEN,
+        http_client=http_client,
+    )
     try:
-        pred_data = await _replicate_predict(req.model, pred_input, headers)
-    except httpx.HTTPStatusError as exc:
-        raise HTTPException(status_code=exc.response.status_code, detail=exc.response.text)
+        with activate_run_context(run_id=req.run_id or "", phase=req.phase):
+            result = await handler.generate(VideoClipInput(
+                frame_id=frame_id,
+                dialogue_text=req.dialogue_text or "",
+                motion_prompt=req.prompt,
+                frame_image_path=frame_image,
+                suggested_duration=req.duration,
+                output_dir=PROJECT_DIR,
+                run_id=req.run_id,
+                phase=req.phase,
+            ))
+    finally:
+        await handler.close()
 
-    # Poll if not yet succeeded
-    prediction_id = pred_data.get("id", "")
-    if pred_data.get("status") not in ("succeeded",):
-        pred_data = await _poll_replicate_prediction(prediction_id, headers)
-
-    if pred_data.get("status") != "succeeded":
-        error_detail = _build_prediction_error(pred_data, req.prompt)
+    if not result.success:
+        emit_event(
+            PROJECT_DIR,
+            event="video_generation_failed",
+            level="ERROR",
+            run_id=req.run_id or "",
+            phase=req.phase,
+            frame_id=frame_id,
+            handler="video_clip",
+            details={"error": result.error, "model": result.model_used},
+        )
+        error_detail = result.error_detail or {"error": result.error, "failure_type": "MODEL_ERROR"}
         raise HTTPException(status_code=502, detail=error_detail)
 
-    # Download output
-    output_url = pred_data.get("output")
-    if isinstance(output_url, list):
-        output_url = output_url[0]
+    # Move handler output to the requested location if different
+    if result.video_path and result.video_path.resolve() != output.resolve():
+        output.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(result.video_path), str(output))
 
-    if output_url:
-        await _download_file(output_url, output)
+    emit_event(
+        PROJECT_DIR,
+        event="video_generated",
+        run_id=req.run_id or "",
+        phase=req.phase,
+        frame_id=frame_id,
+        handler="video_clip",
+        details={"path": str(output), "model": result.model_used, "duration": result.duration},
+    )
+    return {
+        "success": True,
+        "path": str(output),
+        "prediction_id": "",
+        "model": result.model_used,
+        "duration": result.duration,
+    }
 
-    return {"success": True, "path": str(output), "prediction_id": prediction_id}
+
+# ---------------------------------------------------------------------------
+# Layer 1: POST /internal/generate-location-grid
+# ---------------------------------------------------------------------------
+
+class GenerateLocationGridRequest(BaseModel):
+    prompt: str
+    location_id: str
+    output_path: str
+    seed: Optional[int] = None
+    output_format: str = "png"
+    template_type: str = "exterior"  # Preset template key (see location_grid.py)
+    media_style: str = ""  # Optional style instructions for prompt
+    run_id: Optional[str] = None
+    phase: str = ""
+
+
+@app.post("/internal/generate-location-grid")
+async def generate_location_grid(req: GenerateLocationGridRequest):
+    """Location reference grid via location_grid handler (nano-banana-pro, 16:9, 2K, no fallback)."""
+    output = _resolve_output(req.output_path)
+
+    handler = get_handler(
+        "location_grid",
+        replicate_token=REPLICATE_API_TOKEN,
+        http_client=http_client,
+    )
+    try:
+        with activate_run_context(run_id=req.run_id or "", phase=req.phase):
+            result = await handler.generate(LocationGridInput(
+                location_id=req.location_id,
+                prompt=req.prompt,
+                template_type=req.template_type,
+                media_style=req.media_style,
+                output_dir=PROJECT_DIR,
+                seed=req.seed,
+                output_format=req.output_format,
+                run_id=req.run_id,
+                phase=req.phase,
+            ))
+    finally:
+        await handler.close()
+
+    if not result.success:
+        emit_event(
+            PROJECT_DIR,
+            event="location_generation_failed",
+            level="ERROR",
+            run_id=req.run_id or "",
+            phase=req.phase,
+            asset_id=req.location_id,
+            handler="location_grid",
+            details={"error": result.error, "model": result.model_used},
+        )
+        error_detail = result.error_detail or {"error": result.error, "failure_type": "MODEL_ERROR"}
+        raise HTTPException(status_code=502, detail=error_detail)
+
+    # Move handler output to the requested location if different
+    if result.image_path and result.image_path.resolve() != output.resolve():
+        output.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(result.image_path), str(output))
+
+    emit_event(
+        PROJECT_DIR,
+        event="location_generated",
+        run_id=req.run_id or "",
+        phase=req.phase,
+        asset_id=req.location_id,
+        handler="location_grid",
+        details={"path": str(output), "model": result.model_used, "resolution": result.resolution},
+    )
+    return {
+        "success": True,
+        "path": str(output),
+        "seed": req.seed,
+        "prediction_id": "",
+        "model": result.model_used,
+        "resolution": result.resolution,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Layer 1: POST /internal/generate-storyboard
+# ---------------------------------------------------------------------------
+
+class GenerateStoryboardRequest(BaseModel):
+    prompt: str
+    grid_id: str
+    layout: str = "2x2"
+    output_path: str
+    reference_images: list[str] = Field(default_factory=list)
+    frame_ids: list[str] = Field(default_factory=list)
+    seed: Optional[int] = None
+    output_format: str = "png"
+    run_id: Optional[str] = None
+    phase: str = ""
+
+
+@app.post("/internal/generate-storyboard")
+async def generate_storyboard(req: GenerateStoryboardRequest):
+    """Storyboard composite via storyboard handler (nano-banana-2 → pro, cell extraction)."""
+    output = _resolve_output(req.output_path)
+
+    # Resolve reference image paths
+    ref_paths: list[Path] = []
+    for ref in req.reference_images:
+        p = Path(ref)
+        if not p.is_absolute():
+            p = PROJECT_DIR / p
+        if p.exists():
+            ref_paths.append(p)
+
+    handler = get_handler(
+        "storyboard",
+        replicate_token=REPLICATE_API_TOKEN,
+        http_client=http_client,
+    )
+    try:
+        with activate_run_context(run_id=req.run_id or "", phase=req.phase):
+            result = await handler.generate(StoryboardInput(
+                grid_id=req.grid_id,
+                prompt=req.prompt,
+                reference_images=ref_paths,
+                layout=req.layout,
+                frame_ids=req.frame_ids,
+                output_dir=PROJECT_DIR,
+                seed=req.seed,
+                output_format=req.output_format,
+                run_id=req.run_id,
+                phase=req.phase,
+            ))
+    finally:
+        await handler.close()
+
+    if not result.success:
+        emit_event(
+            PROJECT_DIR,
+            event="storyboard_generation_failed",
+            level="ERROR",
+            run_id=req.run_id or "",
+            phase=req.phase,
+            asset_id=req.grid_id,
+            handler="storyboard",
+            details={"error": result.error, "model": result.model_used},
+        )
+        error_detail = result.error_detail or {"error": result.error, "failure_type": "MODEL_ERROR"}
+        raise HTTPException(status_code=502, detail=error_detail)
+
+    # Move composite to the requested location if different
+    if result.composite_path and result.composite_path.resolve() != output.resolve():
+        output.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(result.composite_path), str(output))
+
+    emit_event(
+        PROJECT_DIR,
+        event="storyboard_generated",
+        run_id=req.run_id or "",
+        phase=req.phase,
+        asset_id=req.grid_id,
+        handler="storyboard",
+        details={
+            "composite_path": str(output),
+            "cell_count": len(result.cell_paths),
+            "model": result.model_used,
+        },
+    )
+    return {
+        "success": True,
+        "composite_path": str(output),
+        "cell_paths": [str(p) for p in result.cell_paths],
+        "grid_id": result.grid_id,
+        "model": result.model_used,
+        "resolution": result.resolution,
+    }
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  Batch Generation Endpoints
+#  Semaphore-capped at 10 concurrent. Individual failures are graceful.
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+class BatchGenerateImageRequest(BaseModel):
+    items: list[GenerateImageRequest]
+    max_concurrent: int = Field(default=10, ge=1, le=10)
+
+
+class BatchGenerateFrameRequest(BaseModel):
+    items: list[GenerateFrameRequest]
+    max_concurrent: int = Field(default=10, ge=1, le=10)
+
+
+class BatchGenerateVideoRequest(BaseModel):
+    items: list[GenerateVideoRequest]
+    max_concurrent: int = Field(default=10, ge=1, le=10)
+
+
+class BatchGenerateLocationGridRequest(BaseModel):
+    items: list[GenerateLocationGridRequest]
+    max_concurrent: int = Field(default=10, ge=1, le=10)
+
+
+class BatchGenerateStoryboardRequest(BaseModel):
+    items: list[GenerateStoryboardRequest]
+    max_concurrent: int = Field(default=10, ge=1, le=10)
+
+
+@app.post("/internal/batch-generate-image")
+async def batch_generate_image(req: BatchGenerateImageRequest):
+    """Batch cast image generation — up to 10 concurrent. Graceful per-item failures."""
+    handler = get_handler(
+        "cast_image", replicate_token=REPLICATE_API_TOKEN, http_client=http_client,
+    )
+    try:
+        inputs = []
+        for item in req.items:
+            output = _resolve_output(item.output_path)
+            cast_id = item.cast_id or output.stem
+            inputs.append(CastImageInput(
+                cast_id=cast_id,
+                prompt=item.prompt,
+                media_style=item.media_style or "",
+                output_dir=PROJECT_DIR,
+                seed=item.seed,
+            ))
+        batch = await handler.generate_batch(inputs, req.max_concurrent)
+    finally:
+        await handler.close()
+
+    results: list[dict[str, Any]] = []
+    for item, result in zip(req.items, batch.results):
+        output = _resolve_output(item.output_path)
+        entry: dict[str, Any] = {"success": result.success, "path": str(output)}
+        if result.success:
+            if result.image_path and result.image_path.resolve() != output.resolve():
+                output.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(result.image_path), str(output))
+            entry["model"] = result.model_used
+            entry["upscaled"] = getattr(result, "upscaled", False)
+        else:
+            entry["error"] = result.error
+            entry["error_detail"] = result.error_detail
+        results.append(entry)
+
+    return {
+        "results": results,
+        "total": batch.total,
+        "succeeded": batch.succeeded,
+        "failed": batch.failed,
+    }
+
+
+@app.post("/internal/batch-generate-frame")
+async def batch_generate_frame(req: BatchGenerateFrameRequest):
+    """Batch frame generation — up to 10 concurrent. Graceful per-item failures."""
+    handler = get_handler(
+        "frame", replicate_token=REPLICATE_API_TOKEN, http_client=http_client,
+    )
+    try:
+        def _resolve_batch_ref(ref: str) -> Path | None:
+            p = Path(ref)
+            if not p.is_absolute():
+                p = PROJECT_DIR / p
+            return p if p.exists() else None
+
+        inputs = []
+        for item in req.items:
+            output = _resolve_output(item.output_path)
+            frame_id = item.frame_id or output.stem
+
+            # Separate storyboard from generic refs (mirrors single-frame logic)
+            item_storyboard: Path | None = None
+            remaining: list[str] = list(item.reference_images)
+            if item.storyboard_image:
+                item_storyboard = _resolve_batch_ref(item.storyboard_image)
+            elif remaining and "storyboards/" in remaining[0].replace("\\", "/"):
+                item_storyboard = _resolve_batch_ref(remaining.pop(0))
+
+            ref_paths: list[Path] = [p for ref in remaining if (p := _resolve_batch_ref(ref))]
+            inputs.append(FrameInput(
+                frame_id=frame_id,
+                prompt=item.prompt,
+                reference_images=ref_paths,
+                storyboard_image=item_storyboard,
+                output_dir=PROJECT_DIR,
+                seed=item.seed,
+                output_format=item.output_format if item.output_format in ("jpg", "png") else "png",
+                run_id=item.run_id,
+                phase=item.phase,
+            ))
+        batch = await handler.generate_batch(inputs, req.max_concurrent)
+    finally:
+        await handler.close()
+
+    results: list[dict[str, Any]] = []
+    for item, result in zip(req.items, batch.results):
+        output = _resolve_output(item.output_path)
+        entry: dict[str, Any] = {"success": result.success, "path": str(output)}
+        if result.success:
+            if result.image_path and result.image_path.resolve() != output.resolve():
+                output.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(result.image_path), str(output))
+            entry["model"] = result.model_used
+            entry["downshifted"] = getattr(result, "downshifted", False)
+        else:
+            entry["error"] = result.error
+            entry["error_detail"] = result.error_detail
+        results.append(entry)
+
+    return {
+        "results": results,
+        "total": batch.total,
+        "succeeded": batch.succeeded,
+        "failed": batch.failed,
+    }
+
+
+@app.post("/internal/batch-generate-video")
+async def batch_generate_video(req: BatchGenerateVideoRequest):
+    """Batch video clip generation — up to 10 concurrent. Graceful per-item failures."""
+    handler = get_handler(
+        "video_clip", replicate_token=REPLICATE_API_TOKEN, http_client=http_client,
+    )
+    try:
+        inputs = []
+        for item in req.items:
+            output = _resolve_output(item.output_path)
+            frame_id = item.frame_id or output.stem
+            frame_image: Path | None = None
+            if item.image_path:
+                frame_image = Path(item.image_path)
+                if not frame_image.is_absolute():
+                    frame_image = PROJECT_DIR / frame_image
+            inputs.append(VideoClipInput(
+                frame_id=frame_id,
+                dialogue_text=item.dialogue_text or "",
+                motion_prompt=item.prompt,
+                frame_image_path=frame_image,
+                suggested_duration=item.duration,
+                output_dir=PROJECT_DIR,
+                run_id=item.run_id,
+                phase=item.phase,
+            ))
+        batch = await handler.generate_batch(inputs, req.max_concurrent)
+    finally:
+        await handler.close()
+
+    results: list[dict[str, Any]] = []
+    for item, result in zip(req.items, batch.results):
+        output = _resolve_output(item.output_path)
+        entry: dict[str, Any] = {"success": result.success, "path": str(output)}
+        if result.success:
+            if result.video_path and result.video_path.resolve() != output.resolve():
+                output.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(result.video_path), str(output))
+            entry["model"] = result.model_used
+            entry["duration"] = getattr(result, "duration", 0)
+        else:
+            entry["error"] = result.error
+            entry["error_detail"] = result.error_detail
+        results.append(entry)
+
+    return {
+        "results": results,
+        "total": batch.total,
+        "succeeded": batch.succeeded,
+        "failed": batch.failed,
+    }
+
+
+@app.post("/internal/batch-generate-location-grid")
+async def batch_generate_location_grid(req: BatchGenerateLocationGridRequest):
+    """Batch location grid generation — up to 10 concurrent. Graceful per-item failures."""
+    handler = get_handler(
+        "location_grid", replicate_token=REPLICATE_API_TOKEN, http_client=http_client,
+    )
+    try:
+        inputs = []
+        for item in req.items:
+            inputs.append(LocationGridInput(
+                location_id=item.location_id,
+                prompt=item.prompt,
+                template_type=item.template_type,
+                media_style=item.media_style,
+                output_dir=PROJECT_DIR,
+                seed=item.seed,
+                output_format=item.output_format,
+                run_id=item.run_id,
+                phase=item.phase,
+            ))
+        batch = await handler.generate_batch(inputs, req.max_concurrent)
+    finally:
+        await handler.close()
+
+    results: list[dict[str, Any]] = []
+    for item, result in zip(req.items, batch.results):
+        output = _resolve_output(item.output_path)
+        entry: dict[str, Any] = {"success": result.success, "path": str(output)}
+        if result.success:
+            if result.image_path and result.image_path.resolve() != output.resolve():
+                output.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(result.image_path), str(output))
+            entry["model"] = result.model_used
+            entry["resolution"] = getattr(result, "resolution", "")
+        else:
+            entry["error"] = result.error
+            entry["error_detail"] = result.error_detail
+        results.append(entry)
+
+    return {
+        "results": results,
+        "total": batch.total,
+        "succeeded": batch.succeeded,
+        "failed": batch.failed,
+    }
+
+
+@app.post("/internal/batch-generate-storyboard")
+async def batch_generate_storyboard(req: BatchGenerateStoryboardRequest):
+    """Batch storyboard generation — up to 10 concurrent. Graceful per-item failures."""
+    handler = get_handler(
+        "storyboard", replicate_token=REPLICATE_API_TOKEN, http_client=http_client,
+    )
+    try:
+        inputs = []
+        for item in req.items:
+            ref_paths: list[Path] = []
+            for ref in item.reference_images:
+                p = Path(ref)
+                if not p.is_absolute():
+                    p = PROJECT_DIR / p
+                if p.exists():
+                    ref_paths.append(p)
+            inputs.append(StoryboardInput(
+                grid_id=item.grid_id,
+                prompt=item.prompt,
+                reference_images=ref_paths,
+                layout=item.layout,
+                frame_ids=item.frame_ids,
+                output_dir=PROJECT_DIR,
+                seed=item.seed,
+                output_format=item.output_format,
+                run_id=item.run_id,
+                phase=item.phase,
+            ))
+        batch = await handler.generate_batch(inputs, req.max_concurrent)
+    finally:
+        await handler.close()
+
+    results: list[dict[str, Any]] = []
+    for item, result in zip(req.items, batch.results):
+        output = _resolve_output(item.output_path)
+        entry: dict[str, Any] = {"success": result.success}
+        if result.success:
+            if result.composite_path and result.composite_path.resolve() != output.resolve():
+                output.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(result.composite_path), str(output))
+            entry["composite_path"] = str(output)
+            entry["cell_paths"] = [str(p) for p in getattr(result, "cell_paths", [])]
+            entry["grid_id"] = getattr(result, "grid_id", "")
+            entry["model"] = result.model_used
+            entry["resolution"] = getattr(result, "resolution", "")
+        else:
+            entry["composite_path"] = str(output)
+            entry["error"] = result.error
+            entry["error_detail"] = result.error_detail
+        results.append(entry)
+
+    return {
+        "results": results,
+        "total": batch.total,
+        "succeeded": batch.succeeded,
+        "failed": batch.failed,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -1440,67 +1764,6 @@ async def api_refine_video_prompts(req: RefineVideoPromptsRequest):
         return results
     else:
         return await refine_all_video_prompts(
-            PROJECT_DIR, concurrency=req.concurrency
-        )
-
-
-# ---------------------------------------------------------------------------
-# Layer 1: POST /internal/correct-frames
-# ---------------------------------------------------------------------------
-
-class CorrectFramesRequest(BaseModel):
-    frame_ids: Optional[list[str]] = None  # None = all frames
-    concurrency: int = 5
-
-
-@app.post("/internal/correct-frames")
-async def api_correct_frames(req: CorrectFramesRequest):
-    """Run Grok vision review + nano-banana-2 correction on frame cells.
-
-    Reviews each extracted grid cell against its expected composition,
-    then edits via nano-banana-2 if correction is needed.
-    """
-    from graph.frame_correction import correct_frame, correct_all_frames
-
-    if req.frame_ids:
-        from graph.store import GraphStore
-        from graph.prompt_assembler import resolve_ref_images, assemble_image_prompt
-        from graph.api import get_frame_cell_image
-
-        store = GraphStore(PROJECT_DIR / "graph")
-        graph = store.load()
-        results = {"passed": 0, "corrected": 0, "failed": 0, "skipped": 0}
-
-        for fid in req.frame_ids:
-            cell_rel = get_frame_cell_image(graph, fid)
-            if not cell_rel:
-                results["skipped"] += 1
-                continue
-            cell_path = PROJECT_DIR / cell_rel
-            if not cell_path.exists():
-                results["skipped"] += 1
-                continue
-
-            try:
-                img_data = assemble_image_prompt(graph, fid, project_dir=PROJECT_DIR)
-                image_prompt = img_data.get("prompt", "")
-            except Exception:
-                image_prompt = ""
-
-            ref_rels = resolve_ref_images(graph, fid, project_dir=PROJECT_DIR)
-            ref_paths = [PROJECT_DIR / r for r in ref_rels if (PROJECT_DIR / r).exists()]
-
-            r = await correct_frame(fid, cell_path, image_prompt, ref_paths, PROJECT_DIR)
-            if r["action"] == "pass":
-                results["passed"] += 1
-            elif r["action"] == "corrected":
-                results["corrected"] += 1
-            else:
-                results["failed"] += 1
-
-        return results
-    else:
-        return await correct_all_frames(
             PROJECT_DIR, concurrency=req.concurrency
         )
 
@@ -1645,6 +1908,8 @@ def _log_composition(
 
     entry = {
         "timestamp": timestamp,
+        "run_id": current_run_id() or None,
+        "phase": current_phase() or None,
         "frame_id": frame_id,
         "output_path": output_path,
         "model": model,
@@ -1682,6 +1947,8 @@ def _build_prediction_error(pred_data: dict, original_prompt: str) -> dict:
 
     # Write failure report to project dispatch for agent visibility
     report = {
+        "run_id": current_run_id() or None,
+        "phase": current_phase() or None,
         "prediction_id": prediction_id,
         "model": model,
         "original_prompt": original_prompt,
@@ -1700,6 +1967,20 @@ def _build_prediction_error(pred_data: dict, original_prompt: str) -> dict:
     try:
         failure_path.write_text(json.dumps(report, indent=2))
         log("PredictionError", f"{classification['failure_type']} → {failure_path.name}")
+        emit_event(
+            PROJECT_DIR,
+            event="prediction_failure",
+            level="ERROR",
+            run_id=report.get("run_id") or "",
+            phase=report.get("phase") or "",
+            handler=model,
+            details={
+                "prediction_id": prediction_id,
+                "failure_type": classification["failure_type"],
+                "error_code": classification["error_code"],
+                "failure_path": str(failure_path),
+            },
+        )
     except Exception as exc:
         log("PredictionError", f"Failed to write failure report: {exc}")
 

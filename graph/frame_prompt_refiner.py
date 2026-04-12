@@ -32,6 +32,8 @@ from typing import Any, Optional
 
 import httpx
 
+from .prompt_assembler import MAX_VIDEO_PROMPT_CHARS
+
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
@@ -58,6 +60,38 @@ def _image_to_data_url(path: Path) -> str:
     mime = mimetypes.guess_type(str(path))[0] or "image/png"
     data = base64.b64encode(path.read_bytes()).decode()
     return f"data:{mime};base64,{data}"
+
+
+def _cast_bible_context(video_prompt: dict[str, Any]) -> str:
+    snapshot = video_prompt.get("cast_bible_snapshot")
+    if not isinstance(snapshot, dict):
+        return ""
+
+    lines: list[str] = []
+    for character in snapshot.get("characters", []):
+        pose = character.get("pose") or {}
+        pose_name = (pose.get("pose") or "").strip()
+        if not pose_name:
+            continue
+        name = (character.get("name") or character.get("character_id") or "Character").strip()
+        modifiers = [
+            str(item).strip()
+            for item in pose.get("modifiers", [])
+            if str(item).strip()
+        ]
+        line = f"- {name}: locked pose {pose_name}"
+        if modifiers:
+            line += f" | modifiers: {', '.join(modifiers)}"
+        lines.append(line)
+
+    if not lines:
+        return ""
+
+    return (
+        "Locked cast bible pose references for this frame:\n"
+        + "\n".join(lines)
+        + "\nPreserve these pose locks unless the prompt explicitly calls for a transition."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -99,6 +133,7 @@ async def _call_grok_vision(
     image_path: Path,
     graph_prompt: str,
     *,
+    cast_bible_context: str = "",
     api_key: str = "",
     timeout_s: float | None = None,
 ) -> str:
@@ -124,9 +159,14 @@ async def _call_grok_vision(
                     "type": "text",
                     "text": (
                         "Here is the graph-assembled video prompt for this frame:\n\n"
-                        f"{graph_prompt}\n\n"
-                        "Refine this prompt based on what you actually see in the "
-                        "image. Output only the refined prompt."
+                        + f"{graph_prompt}\n\n"
+                        + (
+                            f"{cast_bible_context}\n\n"
+                            if cast_bible_context
+                            else ""
+                        )
+                        + "Refine this prompt based on what you actually see in the "
+                        + "image. Output only the refined prompt."
                     ),
                 },
             ],
@@ -189,13 +229,22 @@ async def refine_video_prompt(
         video_prompt["refined_by"] = "skipped:no_image"
         return video_prompt
 
+    if not (api_key or XAI_API_KEY):
+        _log(frame_id, "XAI_API_KEY missing, skipping refinement")
+        video_prompt["refined_by"] = "skipped:no_api_key"
+        return video_prompt
+
     graph_prompt = video_prompt["prompt"]
+    cast_bible_context = _cast_bible_context(video_prompt)
     _log(frame_id, f"Refining via {GROK_VISION_MODEL} ({len(graph_prompt)} chars)")
 
     t0 = time.monotonic()
     try:
         refined = await _call_grok_vision(
-            image_path, graph_prompt, api_key=api_key
+            image_path,
+            graph_prompt,
+            cast_bible_context=cast_bible_context,
+            api_key=api_key,
         )
     except Exception as e:
         _log(frame_id, f"Vision refinement failed: {e}")
@@ -204,9 +253,13 @@ async def refine_video_prompt(
 
     elapsed = round(time.monotonic() - t0, 1)
 
-    # Enforce grok-video char limit
-    if len(refined) > 4096:
-        refined = refined[:4096]
+    if len(refined) > MAX_VIDEO_PROMPT_CHARS:
+        _log(
+            frame_id,
+            f"Refined prompt exceeded {MAX_VIDEO_PROMPT_CHARS} chars ({len(refined)}), keeping graph prompt",
+        )
+        video_prompt["refined_by"] = "failed:PromptOverflow"
+        return video_prompt
 
     video_prompt["original_graph_prompt"] = graph_prompt
     video_prompt["prompt"] = refined

@@ -1,88 +1,128 @@
 #!/usr/bin/env python3
-"""graph_generate_assets — Programmatically generate all cast, location, and prop images from pre-built prompts.
+"""graph_generate_assets — Generate canonical asset images directly from the graph.
 
-Reads prompt JSONs from cast/prompts/, locations/prompts/, props/prompts/
-and fires generation requests to the server in parallel batches.
+Builds cast/location/prop prompts from the NarrativeGraph in memory and sends
+them to the internal generation server. Prompt JSON files remain audit
+projections only; they are no longer used as the active transport layer.
 
 Usage:
     python3 graph_generate_assets --project-dir . [--batch-size 10] [--skip-existing]
 """
 
+from __future__ import annotations
+
 import argparse
 import asyncio
-import json
 import os
 import sys
 from pathlib import Path
 
 import httpx
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from graph.prompt_assembler import (
+    assemble_composite_prompt,
+    assemble_location_prompt,
+    assemble_prop_prompt,
+)
+from graph.runtime_state import (
+    mark_cast_asset,
+    mark_location_asset,
+    mark_prop_asset,
+    project_relative_path,
+    save_graph_projection,
+)
+from graph.store import GraphStore
+from telemetry import current_phase, current_run_id
+
 
 SERVER_URL = "http://localhost:8000"
+MIN_VALID_SIZE = 10240
 
 
-async def generate_one(client: httpx.AsyncClient, prompt_data: dict, project_dir: Path) -> dict:
-    """Generate a single image from a prompt JSON."""
-    prompt = prompt_data["prompt"]
-    size = prompt_data.get("size", "landscape_16_9")
-    out_path = prompt_data.get("out_path", "")
-    generation_mode = prompt_data.get("generation_mode", "")
+def _build_prompt_data(graph, category: str, entity_id: str) -> dict:
+    if category == "cast":
+        return assemble_composite_prompt(graph, entity_id)
+    if category == "locations":
+        return assemble_location_prompt(graph, entity_id)
+    if category == "props":
+        return assemble_prop_prompt(graph, entity_id)
+    raise ValueError(f"Unsupported category: {category}")
 
-    out_abs = project_dir / out_path
+
+def _iter_entity_ids(graph, category: str) -> list[str]:
+    if category == "cast":
+        return sorted(graph.cast.keys())
+    if category == "locations":
+        return sorted(graph.locations.keys())
+    if category == "props":
+        return sorted(graph.props.keys())
+    return []
+
+
+def _build_work_item(graph, project_dir: Path, category: str, entity_id: str) -> dict:
+    prompt_data = _build_prompt_data(graph, category, entity_id)
+    out_rel = prompt_data["out_path"]
+    out_abs = project_dir / out_rel
+    return {
+        "category": category,
+        "entity_id": entity_id,
+        "prompt_data": prompt_data,
+        "out_rel": out_rel,
+        "out_abs": out_abs,
+    }
+
+
+async def generate_one(
+    client: httpx.AsyncClient,
+    item: dict,
+    *,
+    run_id: str = "",
+    phase: str = "",
+) -> dict:
+    """Generate a single asset image directly from graph-assembled prompt data."""
+    prompt_data = item["prompt_data"]
+    category = item["category"]
+    entity_id = item["entity_id"]
+    out_abs: Path = item["out_abs"]
     out_abs.parent.mkdir(parents=True, exist_ok=True)
 
-    # Map size presets
-    aspect_map = {
-        "landscape_16_9": "16:9", "landscape_4_3": "4:3", "landscape_3_2": "3:2",
-        "portrait_9_16": "9:16", "portrait_3_4": "3:4", "portrait_2_3": "2:3",
-        "square": "1:1", "square_hd": "1:1",
-    }
-    aspect = aspect_map.get(size, "16:9")
+    prompt = prompt_data["prompt"]
+    size = prompt_data.get("size", "landscape_16_9")
 
-    # Resolve reference images (used by frame generation and location direction edits)
-    raw_refs = prompt_data.get("ref_images", [])
-    resolved_refs = []
-    for ref in raw_refs:
-        ref_path = project_dir / ref
-        if ref_path.exists():
-            resolved_refs.append(str(ref_path))
-
-    endpoint = "/internal/generate-frame"
-    body = {
-        "prompt": prompt,
-        "aspect_ratio": aspect,
-        "output_path": str(out_abs),
-        "output_format": "png",
-        "reference_images": resolved_refs,
-    }
-
-    if generation_mode == "p_image_edit":
-        input_path = prompt_data.get("input_path", "")
-        if not input_path:
-            return {
-                "success": False,
-                "path": str(out_abs),
-                "error": "direction prompt missing input_path",
-            }
-        source_abs = project_dir / input_path
-        if not source_abs.exists():
-            return {
-                "success": False,
-                "path": str(out_abs),
-                "error": f"source image not found: {source_abs}",
-            }
-        endpoint = "/internal/generate-location-direction"
-        body = {
+    if category == "locations":
+        endpoint = "/internal/generate-location-grid"
+        body: dict = {
             "prompt": prompt,
-            "input_path": str(source_abs),
-            "image_size": size,
+            "location_id": entity_id,
             "output_path": str(out_abs),
             "output_format": "png",
-            "reference_images": resolved_refs,
+            "template_type": prompt_data.get("template_type", "exterior"),
+            "run_id": run_id or None,
+            "phase": phase,
         }
+        seed = prompt_data.get("seed")
+        if seed is not None:
+            body["seed"] = seed
+    else:
+        endpoint = "/internal/generate-image"
+        body = {
+            "prompt": prompt,
+            "size": size,
+            "output_path": str(out_abs),
+            "output_format": "png",
+            "cast_id": entity_id,
+            "run_id": run_id or None,
+            "phase": phase,
+        }
+        if category == "cast":
+            media_style = prompt_data.get("media_style")
+            if media_style:
+                body["media_style"] = media_style
 
     try:
-        resp = await client.post(f"{SERVER_URL}{endpoint}", json=body, timeout=180)
+        resp = await client.post(f"{SERVER_URL}{endpoint}", json=body, timeout=300)
         if resp.status_code == 502:
             detail = "502 prediction failure"
             try:
@@ -91,110 +131,196 @@ async def generate_one(client: httpx.AsyncClient, prompt_data: dict, project_dir
             except Exception:
                 if resp.text:
                     detail = resp.text
-            return {"success": False, "path": str(out_abs), "error": detail}
+            return {
+                "success": False,
+                "category": category,
+                "entity_id": entity_id,
+                "path": str(out_abs),
+                "error": detail,
+            }
         resp.raise_for_status()
-        return {"success": True, "path": str(out_abs)}
-    except Exception as e:
-        return {"success": False, "path": str(out_abs), "error": str(e)}
+        return {
+            "success": True,
+            "category": category,
+            "entity_id": entity_id,
+            "path": str(out_abs),
+        }
+    except Exception as exc:
+        return {
+            "success": False,
+            "category": category,
+            "entity_id": entity_id,
+            "path": str(out_abs),
+            "error": str(exc),
+        }
 
 
-async def generate_batch(prompts: list[dict], project_dir: Path, batch_size: int) -> tuple[int, int]:
-    """Generate images in parallel batches."""
+async def generate_batch(
+    items: list[dict],
+    *,
+    batch_size: int,
+    run_id: str = "",
+    phase: str = "",
+) -> tuple[int, int, list[dict]]:
+    """Generate assets in parallel batches with a hard cap of 10 concurrent calls."""
+    batch_size = min(batch_size, 10)
     success = 0
     failed = 0
+    results: list[dict] = []
 
     async with httpx.AsyncClient() as client:
-        for i in range(0, len(prompts), batch_size):
-            batch = prompts[i:i + batch_size]
-            tasks = [generate_one(client, p, project_dir) for p in batch]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-
-            for r in results:
-                if isinstance(r, Exception):
+        for i in range(0, len(items), batch_size):
+            batch = items[i:i + batch_size]
+            batch_num = (i // batch_size) + 1
+            total_batches = (len(items) + batch_size - 1) // batch_size
+            print(f"  Batch {batch_num}/{total_batches} — dispatching {len(batch)} item(s)")
+            tasks = [
+                asyncio.create_task(generate_one(client, item, run_id=run_id, phase=phase))
+                for item in batch
+            ]
+            batch_success = 0
+            batch_failed = 0
+            for completed_idx, task in enumerate(asyncio.as_completed(tasks), 1):
+                result = await task
+                if isinstance(result, Exception):
                     failed += 1
-                    print(f"  ERROR: {r}")
-                elif r.get("success"):
+                    batch_failed += 1
+                    print(f"  ERROR: {result}")
+                    continue
+                results.append(result)
+                if result.get("success"):
                     success += 1
-                    print(f"  OK: {Path(r['path']).name}")
+                    batch_success += 1
+                    print(
+                        f"  OK: {Path(result['path']).name} "
+                        f"({completed_idx}/{len(batch)} in batch)"
+                    )
                 else:
                     failed += 1
-                    print(f"  FAIL: {Path(r['path']).name} — {r.get('error', 'unknown')}")
+                    batch_failed += 1
+                    print(
+                        f"  FAIL: {Path(result['path']).name} — "
+                        f"{result.get('error', 'unknown')}"
+                    )
+            print(
+                f"  Batch {batch_num}/{total_batches} complete — "
+                f"{batch_success} OK, {batch_failed} failed"
+            )
 
-    return success, failed
-
-
-def load_prompts(prompt_dir: Path) -> list[dict]:
-    """Load all JSON prompt files from a directory."""
-    prompts = []
-    if not prompt_dir.exists():
-        return prompts
-    for f in sorted(prompt_dir.glob("*.json")):
-        try:
-            prompts.append(json.loads(f.read_text(encoding="utf-8")))
-        except Exception as e:
-            print(f"  WARNING: Failed to read {f.name}: {e}")
-    return prompts
+    return success, failed, results
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Generate all asset images from pre-built prompts.")
+def _mark_graph_asset(graph, category: str, entity_id: str, rel_path: str, *, run_id: str, phase: str) -> None:
+    if category == "cast":
+        mark_cast_asset(graph, entity_id, rel_path, run_id=run_id, actor="graph_generate_assets", phase=phase)
+    elif category == "locations":
+        mark_location_asset(graph, entity_id, rel_path, run_id=run_id, actor="graph_generate_assets", phase=phase)
+    elif category == "props":
+        mark_prop_asset(graph, entity_id, rel_path, run_id=run_id, actor="graph_generate_assets", phase=phase)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Generate all asset images from the canonical graph.")
     parser.add_argument("--project-dir", default=os.getcwd())
-    parser.add_argument("--batch-size", type=int, default=10)
-    parser.add_argument("--skip-existing", action="store_true",
-                        help="Skip generation if output file already exists")
-    parser.add_argument("--types", default="all",
-                        help="Comma-separated asset types to generate: cast,locations,direction,props (default: all)")
+    parser.add_argument("--batch-size", type=int, default=10, help="Max concurrent generation requests per batch (hard cap: 10)")
+    parser.add_argument("--skip-existing", action="store_true", help="Skip server generation if output file already exists")
+    parser.add_argument("--types", default="all", help="Comma-separated asset types to generate: cast,locations,props (default: all)")
     args = parser.parse_args()
 
+    if args.batch_size > 10:
+        print(f"WARNING: --batch-size {args.batch_size} exceeds hard cap of 10 — capping to 10")
+        args.batch_size = 10
+
     project_dir = Path(args.project_dir)
-    types = set(args.types.split(",")) if args.types != "all" else {"cast", "locations", "direction", "props"}
+    run_id = current_run_id()
+    phase = current_phase()
+    requested_types = (
+        {"cast", "locations", "props"}
+        if args.types == "all"
+        else {part.strip() for part in args.types.split(",") if part.strip()}
+    )
+    category_order = [c for c in ("cast", "locations", "props") if c in requested_types]
 
-    # Load prompt files for requested types only
-    cast_prompts = load_prompts(project_dir / "cast" / "prompts") if "cast" in types else []
-    loc_prompts = load_prompts(project_dir / "locations" / "prompts") if "locations" in types else []
-    loc_dir_prompts = load_prompts(project_dir / "locations" / "direction_prompts") if "direction" in types else []
-    prop_prompts = load_prompts(project_dir / "props" / "prompts") if "props" in types else []
+    store = GraphStore(project_dir)
+    graph = store.load()
 
-    # Filter existing if requested
-    if args.skip_existing:
-        cast_prompts = [p for p in cast_prompts if not (project_dir / p["out_path"]).exists()]
-        loc_prompts = [p for p in loc_prompts if not (project_dir / p["out_path"]).exists()]
-        loc_dir_prompts = [p for p in loc_dir_prompts if not (project_dir / p["out_path"]).exists()]
-        prop_prompts = [p for p in prop_prompts if not (project_dir / p["out_path"]).exists()]
-
-    total = len(cast_prompts) + len(loc_prompts) + len(loc_dir_prompts) + len(prop_prompts)
-    print(f"Generating {total} assets: {len(cast_prompts)} cast, {len(loc_prompts)} locations, {len(loc_dir_prompts)} direction views, {len(prop_prompts)} props")
-
+    total = 0
     all_success = 0
     all_failed = 0
+    graph_updates = 0
 
-    if cast_prompts:
-        print(f"\n--- Cast Composites ({len(cast_prompts)}) ---")
-        s, f = asyncio.run(generate_batch(cast_prompts, project_dir, args.batch_size))
-        all_success += s
-        all_failed += f
+    for category in category_order:
+        work_items: list[dict] = []
+        projected_results: list[dict] = []
 
-    if loc_prompts:
-        print(f"\n--- Locations — Primary ({len(loc_prompts)}) ---")
-        s, f = asyncio.run(generate_batch(loc_prompts, project_dir, args.batch_size))
-        all_success += s
-        all_failed += f
+        for entity_id in _iter_entity_ids(graph, category):
+            item = _build_work_item(graph, project_dir, category, entity_id)
+            out_abs: Path = item["out_abs"]
+            total += 1
 
-    # Directional views AFTER primary locations (they reference the primary image)
-    if loc_dir_prompts:
-        print(f"\n--- Locations — Direction Views ({len(loc_dir_prompts)}) ---")
-        s, f = asyncio.run(generate_batch(loc_dir_prompts, project_dir, args.batch_size))
-        all_success += s
-        all_failed += f
+            if args.skip_existing and out_abs.exists() and out_abs.stat().st_size >= MIN_VALID_SIZE:
+                projected_results.append(
+                    {
+                        "success": True,
+                        "existing": True,
+                        "category": category,
+                        "entity_id": entity_id,
+                        "path": str(out_abs),
+                    }
+                )
+                continue
 
-    if prop_prompts:
-        print(f"\n--- Props ({len(prop_prompts)}) ---")
-        s, f = asyncio.run(generate_batch(prop_prompts, project_dir, args.batch_size))
-        all_success += s
-        all_failed += f
+            work_items.append(item)
 
-    print(f"\nSUCCESS: Generated {all_success}/{total} assets ({all_failed} failed)")
+        label = {
+            "cast": "Cast Composites",
+            "locations": "Locations — Primary",
+            "props": "Props",
+        }[category]
+        print(f"\n--- {label} ({len(work_items) + len(projected_results)}) ---")
 
+        for result in projected_results:
+            print(f"  OK: {Path(result['path']).name} (existing)")
+
+        success = len(projected_results)
+        failed = 0
+        generated_results: list[dict] = []
+        if work_items:
+            batch_success, batch_failed, generated_results = asyncio.run(
+                generate_batch(
+                    work_items,
+                    batch_size=args.batch_size,
+                    run_id=run_id,
+                    phase=phase,
+                )
+            )
+            success += batch_success
+            failed += batch_failed
+
+        category_results = projected_results + generated_results
+        for result in category_results:
+            if not result.get("success"):
+                continue
+            rel_path = project_relative_path(project_dir, result["path"])
+            if not rel_path:
+                continue
+            _mark_graph_asset(
+                graph,
+                result["category"],
+                result["entity_id"],
+                rel_path,
+                run_id=run_id,
+                phase=phase,
+            )
+            graph_updates += 1
+
+        all_success += success
+        all_failed += failed
+
+    if graph_updates:
+        save_graph_projection(graph, project_dir, store=store)
+
+    print(f"\nSUCCESS: Generated or projected {all_success}/{total} assets ({all_failed} failed)")
     if all_failed > 0:
         sys.exit(1)
 

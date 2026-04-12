@@ -14,6 +14,8 @@ If `graph_run` fails:
 - `DialogueNode` requires `dialogue_id`, `scene_id`, `order`, `speaker`, `cast_id`, `start_frame`, `end_frame`, `primary_visual_frame`
 - `Provenance` requires `source_prose_chunk` (non-empty string)
 
+**"unknown argument --overlay"** — `graph_batch` does not support overlay writes. For overlay-safe parallel work, use `graph_run` and call `store.save_overlay("dialogue", overlay_graph)` or `store.save_overlay("composition", overlay_graph)`.
+
 **"value is not a valid enumeration member"** — Use string values, not enum objects:
 - `"formula_tag": "F07"` not `FormulaTag.F07` in JSON data dicts
 - When using Python objects directly: `FormulaTag.F07` works

@@ -1,6 +1,0 @@
-{
-  "location_id": "loc_rooftop",
-  "prompt": "Generate a 4x4 grid demonstrating this location facing all four directions, of north, south, east, west. Label each grid section with the direction label. You are to use your logic and build a 360 view of this environment captured in 4 images on the grid. live action, clinical midnight thriller photography with hard edge practicals and cool city spill carving subjects out of shadow. Cinematic wide establishing shot. Service Rooftop: a narrow rooftop service lane boxed by vents, antennas, and a low concrete ledge. cold, elevated, exposed. Mood: tense, watchful. No characters, environmental focus, professional cinematography composition.",
-  "size": "landscape_16_9",
-  "out_path": "locations/primary/loc_rooftop.png"
-}

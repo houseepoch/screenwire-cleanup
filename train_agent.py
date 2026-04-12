@@ -61,10 +61,8 @@ def _deploy_shared_conventions(project_dir: Path) -> None:
 AGENTS = [
     ("director",                "Director — orchestrates project lifecycle & reviews gates"),
     ("creative_coordinator",    "Creative Coordinator — narrative contracts, skeleton, assembly"),
-    ("morpheus",                "Morpheus — narrative graph builder, prompt assembly, materialization"),
+    # Morpheus 1-4 (entity seeder, frame parser, dialogue wirer, compositor) — archived
     # image_verifier, composition_verifier, video_verifier — REMOVED (phases 3-5 fully programmatic)
-
-    ("voice_director",          "Voice Director — (DEPRECATED) voice profiling, now VoiceNode"),
 ]
 
 AGENT_IDS = [a[0] for a in AGENTS]

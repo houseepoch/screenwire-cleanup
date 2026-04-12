@@ -4,6 +4,8 @@
 
 Write a JSON file with all operations, run it once:
 
+Use this only when you are writing directly to the base graph. Parallel overlay agents should use `graph_run` plus `store.save_overlay(...)` instead.
+
 ```
 # Write the ops file
 cat > batch_scene1.json << 'BATCH_EOF'

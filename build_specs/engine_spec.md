@@ -1,5 +1,8 @@
 # Engine Spec — ScreenWire AI FastAPI Core
 
+> Legacy planning document. Server endpoints for external voice design, TTS,
+> dialogue generation, and p-video routing are retired from the active runtime.
+
 ## Task
 Build the FastAPI backend engine for the headless MVP pipeline.
 
@@ -98,54 +101,12 @@ Use `httpx.AsyncClient` for all external API calls.
 
 #### POST /internal/generate-image
 - Body: `{prompt, image_size, output_path, num_inference_steps, guidance_scale, seed, output_format}`
-- Read `FAL_KEY` from env
-- Call `POST https://fal.run/fal-ai/flux-pro/v2` with:
-  ```json
-  {"prompt": "...", "image_size": "landscape_16_9", "num_inference_steps": 28, "guidance_scale": 3.5, "seed": null, "num_images": 1, "output_format": "png", "sync_mode": true}
-  ```
-- Response: `{"images": [{"url": "https://fal.media/..."}], "seed": 42}`
-- Download image from `images[0].url` to `{output_path}.tmp`
-- `os.replace()` to final path
-- Return `{"success": true, "path": "...", "seed": 42}`
-- tenacity: retry 3x with exponential backoff on HTTP 429/500/503
-
-#### POST /internal/generate-image-redux
-- Body: `{image_url, prompt, image_size, output_path, strength, seed}`
-- Same pattern, call `https://fal.run/fal-ai/flux-pro/v2/redux`
-
-#### POST /internal/design-voice
-- Body: `{voice_description, text, model_id, guidance_scale}`
-- Read `ELEVENLABS_API_KEY` from env
-- Call `POST https://api.elevenlabs.io/v1/text-to-voice/design` with header `xi-api-key`
-- Body: `{"voice_description": "...", "model_id": "eleven_ttv_v3", "text": "...", "auto_generate_text": false, "loudness": 0.5, "guidance_scale": 5}`
-- Return full response JSON (previews array)
-
-#### POST /internal/save-voice
-- Body: `{voice_name, voice_description, generated_voice_id, labels}`
-- Call `POST https://api.elevenlabs.io/v1/text-to-voice`
-- Return `{"voice_id": "...", "name": "..."}`
-
-#### POST /internal/generate-tts
-- Body: `{voice_id, text, model_id, voice_settings, output_path, output_format}`
-- Call `POST https://api.elevenlabs.io/v1/text-to-speech/{voice_id}?output_format=mp3_44100_128`
-- With header `xi-api-key` and body: `{"text": "...", "model_id": "eleven_v3", "voice_settings": {...}}`
-- **Response is RAW binary audio/mpeg** — write directly to file (not JSON!)
-- Capture `request-id` response header
-- Return `{"success": true, "path": "...", "request_id": "..."}`
-
-#### POST /internal/generate-dialogue
-- Body: `{inputs, model_id, settings, output_path}`
-- Call `POST https://api.elevenlabs.io/v1/text-to-dialogue/with-timestamps?output_format=mp3_44100_128`
-- Body: `{"inputs": [{"text": "...", "voice_id": "..."}], "model_id": "eleven_v3", "settings": {"stability": 0.5}}`
-- Response is JSON with `audio_base64` field — base64 decode and write to file
-- Return full response JSON + saved path
 
 #### POST /internal/generate-video
 - Body: `{model, prompt, image_path, audio_path, duration, resolution, output_path, extra_params}`
 - Read `REPLICATE_API_TOKEN` from env
 - Upload local files to Replicate: `POST https://api.replicate.com/v1/files` (multipart)
 - Create prediction: `POST https://api.replicate.com/v1/predictions` with `Authorization: Bearer {token}` and `Prefer: wait`
-- For p-video (prunaai/p-video): `{"model": "prunaai/p-video", "input": {"prompt": "...", "image": "{url}", "audio": "{url}", "resolution": "720p", "fps": 24, "save_audio": true, "draft": false, "prompt_upsampling": true}}`
 - For grok-video (xai/grok-imagine-video): `{"model": "xai/grok-imagine-video", "input": {"prompt": "...", "image": "{url}", "duration": 5, "resolution": "720p", "aspect_ratio": "auto"}}`
 - If response status != "succeeded", poll `GET /v1/predictions/{id}` every 5s until done
 - Download output MP4 to `{output_path}.tmp`, os.replace

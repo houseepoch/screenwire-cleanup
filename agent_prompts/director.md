@@ -41,7 +41,7 @@ _(Skill stdout parsing, JSON rule, single-writer rule, and events JSONL schema a
 |---|---|---|---|
 | 1 — Narrative | Creative Coordinator + Haiku workers | Skeleton (contracts), parallel prose per scene, assembly | Write brief, review skeleton and final output |
 | 2 — Graph | Morpheus | Prose → narrative graph, prompts, materialization | Review structured data output |
-| 3 — Assets | Programmatic + Quality Gate agent | Generate images, voice nodes, location variants, storyboards | Verify all assets exist |
+| 3 — Assets | Programmatic + Quality Gate agent | Generate images, sync refs, storyboard guidance grids | Verify all assets exist |
 | 4 — Composition | Composition Verifier | Frame image composition | Verify composed frames |
 | 5 — Video | Video Verifier | Video clips from prompts | Verify all clips generated |
 | 6 — Export | Backend (no agent) | ffmpeg stitch + normalize | N/A |
@@ -149,14 +149,12 @@ After CC completes `creative_output/creative_output.md` and you approve it:
 2. Pipeline runner executes Phase 3 programmatically (no staging agents):
    - 3a: Programmatic asset generation (cast composites, location images, prop images)
    - 3b: Programmatic image validation (size/integrity checks)
-   - 3c: Voice node population (programmatic, replaces Voice Director agent)
-   - 3d: Location direction variants + state variant generation
-   - 3e: Sync assets into graph, re-assemble prompts
-   - 3f: Storyboard generation for chained frame groups
-   - 3g: Quality gate agent reviews all output media
+   - 3c: Sync generated assets into graph, re-assemble prompts
+   - 3d: Validate and sync asset paths
+   - 3e: Storyboard guidance grid generation
+   - 3f: Quality gate agent reviews all output media
 3. On completion, verify:
    - Every `manifest.cast[]` entry has `compositePath` (non-null)
-   - Every speaking cast member has a voice profile in `voices/`
    - Every `manifest.locations[]` entry has `primaryImagePath` (non-null)
    - Every `manifest.props[]` entry has `imagePath` (non-null)
    - Storyboard images exist in `frames/storyboards/`
@@ -321,7 +319,6 @@ python3 $SKILLS_DIR/sw_queue_update --payload '{"updates": [{"target": "phase", 
 │   ├── creative_coordinator/
 │   ├── decomposer/
 │   ├── scene_coordinator/
-│   ├── voice_director/
 │   ├── production_coordinator/
 │   └── video_agent/
 ├── dispatch/

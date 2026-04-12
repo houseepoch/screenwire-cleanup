@@ -26,7 +26,8 @@ from .schema import (
     LocationNode, LocationFrameState,
     PropNode, PropFrameState,
     SceneNode, FrameNode, DialogueNode,
-    VoiceNode, StoryboardGrid, ShotMatchGroup,
+    StoryboardGrid, ShotMatchGroup,
+    ShotPacket, ShotNeighborBeat, ShotAudioBeat, ShotAudioTurn, ShotIntent,
     GraphEdge, EdgeType, Provenance, canonical_edge_id,
 )
 from .store import GraphStore
@@ -59,7 +60,6 @@ def query_graph(
         "cast": graph.cast,
         "location": graph.locations,
         "prop": graph.props,
-        "voice": graph.voices,
         "scene": graph.scenes,
         "frame": graph.frames,
         "dialogue": graph.dialogue,
@@ -92,12 +92,9 @@ def get_frame_cast_state_models(
     graph: NarrativeGraph,
     frame_id: str,
 ) -> list[CastFrameState]:
-    """Return cast states for a frame from the most reliable available source."""
-    frame = graph.frames.get(frame_id)
-    if frame is None:
+    """Return cast states for a frame from the canonical flat registry."""
+    if graph.frames.get(frame_id) is None:
         raise KeyError(f"Frame {frame_id} not found in graph")
-    if frame.cast_states:
-        return frame.cast_states
     suffix = f"@{frame_id}"
     return [
         state for key, state in graph.cast_frame_states.items()
@@ -109,12 +106,9 @@ def get_frame_prop_state_models(
     graph: NarrativeGraph,
     frame_id: str,
 ) -> list[PropFrameState]:
-    """Return prop states for a frame from the most reliable available source."""
-    frame = graph.frames.get(frame_id)
-    if frame is None:
+    """Return prop states for a frame from the canonical flat registry."""
+    if graph.frames.get(frame_id) is None:
         raise KeyError(f"Frame {frame_id} not found in graph")
-    if frame.prop_states:
-        return frame.prop_states
     suffix = f"@{frame_id}"
     return [
         state for key, state in graph.prop_frame_states.items()
@@ -127,19 +121,14 @@ def get_frame_location_state_model(
     frame_id: str,
     location_id: Optional[str] = None,
 ) -> Optional[LocationFrameState]:
-    """Return the location state for a frame, preferring the flat registry."""
+    """Return the location state for a frame from the canonical flat registry."""
     frame = graph.frames.get(frame_id)
     if frame is None:
         raise KeyError(f"Frame {frame_id} not found in graph")
     resolved_location_id = location_id or frame.location_id
     if not resolved_location_id:
-        return frame.location_state
-    state = graph.location_frame_states.get(f"{resolved_location_id}@{frame_id}")
-    if state is not None:
-        return state
-    if frame.location_state and frame.location_state.location_id == resolved_location_id:
-        return frame.location_state
-    return None
+        return None
+    return graph.location_frame_states.get(f"{resolved_location_id}@{frame_id}")
 
 
 def get_frame_context(graph: NarrativeGraph, frame_id: str) -> dict:
@@ -243,6 +232,378 @@ def get_frame_context(graph: NarrativeGraph, frame_id: str) -> dict:
     }
 
 
+def build_shot_packet(graph: NarrativeGraph, frame_id: str) -> ShotPacket:
+    """Build the canonical deterministic shot packet for a frame.
+
+    The packet consolidates neighboring beats, continuity deltas, invariants,
+    blocking, background, shot intent, and native-audio context into one
+    structured object for downstream prompt assembly.
+    """
+    ctx = get_frame_context(graph, frame_id)
+    frame = graph.frames.get(frame_id)
+    if frame is None:
+        raise KeyError(f"Frame {frame_id} not found in graph")
+
+    prev_frame = graph.frames.get(frame.previous_frame_id) if frame.previous_frame_id else None
+    next_frame = graph.frames.get(frame.next_frame_id) if frame.next_frame_id else None
+    cast_states = get_frame_cast_state_models(graph, frame_id)
+    visible_cast_states = [
+        state for state in cast_states
+        if getattr(getattr(state, "frame_role", None), "value", getattr(state, "frame_role", None)) != "referenced"
+    ]
+    prop_states = get_frame_prop_state_models(graph, frame_id)
+    location_state = get_frame_location_state_model(graph, frame_id)
+
+    visible_cast_ids = [state.cast_id for state in visible_cast_states]
+    visible_prop_ids = [state.prop_id for state in prop_states]
+
+    continuity_deltas = _build_continuity_deltas(graph, frame, prev_frame, visible_cast_states, prop_states, location_state)
+    cast_invariants = _build_cast_invariants(graph, visible_cast_states)
+    prop_invariants = _build_prop_invariants(graph, prop_states)
+    location_invariants = _build_location_invariants(graph, frame, ctx, location_state)
+    blocking = _build_blocking_lines(graph, ctx, visible_cast_states)
+    background = _build_background_lines(frame, ctx)
+    audio = _build_audio_beat(ctx)
+
+    intent = ShotIntent(
+        shot=frame.composition.shot,
+        angle=frame.composition.angle,
+        movement=frame.composition.movement,
+        focus=frame.composition.focus,
+        dramatic_purpose=frame.directing.dramatic_purpose,
+        beat_turn=frame.directing.beat_turn,
+        pov_owner=frame.directing.pov_owner,
+        viewer_knowledge_delta=frame.directing.viewer_knowledge_delta,
+        power_dynamic=frame.directing.power_dynamic,
+        tension_source=frame.directing.tension_source,
+        camera_motivation=frame.directing.camera_motivation,
+        movement_motivation=frame.directing.movement_motivation,
+        movement_path=frame.directing.movement_path,
+        reaction_target=frame.directing.reaction_target,
+    )
+
+    return ShotPacket(
+        frame_id=frame.frame_id,
+        scene_id=frame.scene_id,
+        sequence_index=frame.sequence_index,
+        location_id=frame.location_id,
+        subject_count=len(visible_cast_states),
+        visible_cast_ids=visible_cast_ids,
+        visible_prop_ids=visible_prop_ids,
+        previous_beat=_neighbor_beat(prev_frame),
+        current_beat=frame.narrative_beat or frame.action_summary or frame.source_text,
+        video_optimized_prompt_block=frame.video_optimized_prompt_block,
+        next_beat=_neighbor_beat(next_frame),
+        continuity_deltas=continuity_deltas,
+        cast_invariants=cast_invariants,
+        prop_invariants=prop_invariants,
+        location_invariants=location_invariants,
+        blocking=blocking,
+        background=background,
+        shot_intent=intent,
+        audio=audio,
+    )
+
+
+def _neighbor_beat(frame: Optional[FrameNode]) -> Optional[ShotNeighborBeat]:
+    if frame is None:
+        return None
+    return ShotNeighborBeat(
+        frame_id=frame.frame_id,
+        narrative_beat=frame.narrative_beat,
+        action_summary=frame.action_summary,
+        scene_id=frame.scene_id,
+        is_dialogue=frame.is_dialogue,
+    )
+
+
+def _build_continuity_deltas(
+    graph: NarrativeGraph,
+    frame: FrameNode,
+    prev_frame: Optional[FrameNode],
+    cast_states: list[CastFrameState],
+    prop_states: list[PropFrameState],
+    location_state: Optional[LocationFrameState],
+) -> list[str]:
+    if prev_frame is None:
+        return ["Sequence opener."]
+
+    deltas: list[str] = []
+
+    prev_cast = {
+        state.cast_id: state
+        for state in get_frame_cast_state_models(graph, prev_frame.frame_id)
+        if getattr(getattr(state, "frame_role", None), "value", getattr(state, "frame_role", None)) != "referenced"
+    }
+    current_cast = {state.cast_id: state for state in cast_states}
+
+    prev_ids = set(prev_cast)
+    current_ids = set(current_cast)
+    added = sorted(current_ids - prev_ids)
+    removed = sorted(prev_ids - current_ids)
+    if added:
+        deltas.append("Cast entering frame: " + ", ".join(added))
+    if removed:
+        deltas.append("Cast leaving frame: " + ", ".join(removed))
+
+    for cast_id in sorted(prev_ids & current_ids):
+        prev_state = prev_cast[cast_id]
+        curr_state = current_cast[cast_id]
+        changed: list[str] = []
+        for field_name in (
+            "action",
+            "posture",
+            "emotion",
+            "screen_position",
+            "facing_direction",
+            "looking_at",
+            "injury",
+            "active_state_tag",
+        ):
+            prev_value = getattr(prev_state, field_name, None)
+            curr_value = getattr(curr_state, field_name, None)
+            if prev_value != curr_value and curr_value not in (None, "", []):
+                changed.append(f"{field_name}={curr_value}")
+        if prev_state.props_held != curr_state.props_held and curr_state.props_held:
+            changed.append("props_held=" + ",".join(curr_state.props_held))
+        if changed:
+            deltas.append(f"{cast_id}: " + "; ".join(changed))
+
+    prev_props = {
+        state.prop_id: state
+        for state in get_frame_prop_state_models(graph, prev_frame.frame_id)
+    }
+    current_props = {state.prop_id: state for state in prop_states}
+    for prop_id in sorted(set(prev_props) | set(current_props)):
+        prev_state = prev_props.get(prop_id)
+        curr_state = current_props.get(prop_id)
+        if prev_state is None and curr_state is not None:
+            deltas.append(f"{prop_id}: enters frame {curr_state.condition}")
+            continue
+        if prev_state is not None and curr_state is None:
+            deltas.append(f"{prop_id}: leaves frame")
+            continue
+        if prev_state and curr_state:
+            prop_changes: list[str] = []
+            if prev_state.condition != curr_state.condition:
+                prop_changes.append(f"condition={curr_state.condition}")
+            if prev_state.holder_cast_id != curr_state.holder_cast_id and curr_state.holder_cast_id:
+                prop_changes.append(f"holder={curr_state.holder_cast_id}")
+            if prev_state.visibility != curr_state.visibility:
+                prop_changes.append(f"visibility={curr_state.visibility}")
+            if prop_changes:
+                deltas.append(f"{prop_id}: " + "; ".join(prop_changes))
+
+    prev_location_state = get_frame_location_state_model(graph, prev_frame.frame_id)
+    if prev_frame.location_id != frame.location_id and frame.location_id:
+        deltas.append(f"Location shifts to {frame.location_id}")
+    if location_state and (
+        prev_location_state is None
+        or prev_location_state.condition_modifiers != location_state.condition_modifiers
+        or prev_location_state.atmosphere_override != location_state.atmosphere_override
+        or prev_location_state.lighting_override != location_state.lighting_override
+    ):
+        loc_bits: list[str] = []
+        if location_state.condition_modifiers:
+            loc_bits.append("condition=" + ", ".join(location_state.condition_modifiers))
+        if location_state.atmosphere_override:
+            loc_bits.append(f"atmosphere={location_state.atmosphere_override}")
+        if location_state.lighting_override:
+            loc_bits.append(f"lighting={location_state.lighting_override}")
+        if loc_bits:
+            deltas.append("Location state: " + "; ".join(loc_bits))
+
+    if not deltas:
+        deltas.append("Maintain prior frame continuity with no major state changes.")
+    return deltas
+
+
+def _build_cast_invariants(graph: NarrativeGraph, cast_states: list[CastFrameState]) -> list[str]:
+    invariants: list[str] = []
+    for state in cast_states:
+        cast = graph.cast.get(state.cast_id)
+        if cast is None:
+            continue
+        appearance = cast.identity.physical_description or cast.identity.wardrobe_description
+        bits = [cast.name]
+        if appearance:
+            bits.append(appearance)
+        if state.clothing_current:
+            bits.append("wearing " + ", ".join(state.clothing_current[:3]))
+        elif cast.identity.wardrobe_description:
+            bits.append("wearing " + cast.identity.wardrobe_description)
+        if state.active_state_tag and state.active_state_tag != "base":
+            bits.append(f"state {state.active_state_tag}")
+        if state.injury:
+            bits.append(state.injury)
+        invariants.append(" | ".join(bit for bit in bits if bit))
+    return invariants
+
+
+def _build_prop_invariants(graph: NarrativeGraph, prop_states: list[PropFrameState]) -> list[str]:
+    invariants: list[str] = []
+    for state in prop_states:
+        prop = graph.props.get(state.prop_id)
+        name = prop.name if prop else state.prop_id
+        bits = [name, f"condition {state.condition}", f"visibility {state.visibility}"]
+        if state.holder_cast_id:
+            bits.append(f"held by {state.holder_cast_id}")
+        if state.spatial_position:
+            bits.append(state.spatial_position)
+        invariants.append(" | ".join(bit for bit in bits if bit))
+    return invariants
+
+
+def _build_location_invariants(
+    graph: NarrativeGraph,
+    frame: FrameNode,
+    ctx: dict,
+    location_state: Optional[LocationFrameState],
+) -> list[str]:
+    invariants: list[str] = []
+    location = graph.locations.get(frame.location_id) if frame.location_id else None
+    if location is not None:
+        invariants.append(location.name)
+        if location.description:
+            invariants.append(location.description)
+        if location.atmosphere:
+            invariants.append(location.atmosphere)
+
+    bg = frame.background
+    if bg.camera_facing:
+        invariants.append(f"camera_facing {bg.camera_facing}")
+    visible_description = bg.visible_description
+    if not visible_description and bg.camera_facing and ctx.get("location"):
+        directions = ctx["location"].get("directions", {})
+        if isinstance(directions, dict):
+            direction_view = directions.get(bg.camera_facing)
+            if isinstance(direction_view, dict):
+                visible_description = direction_view.get("description", "")
+            elif isinstance(direction_view, str):
+                visible_description = direction_view
+    if visible_description:
+        invariants.append(visible_description)
+
+    lighting = frame.environment.lighting
+    if lighting.direction or lighting.quality or lighting.color_temp:
+        lighting_bits = [
+            getattr(lighting.direction, "value", lighting.direction) or "",
+            getattr(lighting.quality, "value", lighting.quality) or "",
+            lighting.color_temp or "",
+            lighting.motivated_source or "",
+        ]
+        invariants.append("lighting " + ", ".join(bit for bit in lighting_bits if bit))
+
+    atmosphere = frame.environment.atmosphere
+    atmosphere_bits = [
+        atmosphere.weather or "",
+        atmosphere.particles or "",
+        atmosphere.ambient_motion or "",
+        atmosphere.temperature_feel or "",
+    ]
+    if any(atmosphere_bits):
+        invariants.append("atmosphere " + ", ".join(bit for bit in atmosphere_bits if bit))
+
+    if location_state:
+        if location_state.condition_modifiers:
+            invariants.append("location modifiers " + ", ".join(location_state.condition_modifiers))
+        if location_state.atmosphere_override:
+            invariants.append("location atmosphere " + location_state.atmosphere_override)
+        if location_state.lighting_override:
+            invariants.append("location lighting " + location_state.lighting_override)
+
+    return invariants
+
+
+def _build_blocking_lines(graph: NarrativeGraph, ctx: dict, cast_states: list[CastFrameState]) -> list[str]:
+    blocking: list[str] = []
+    cast_lookup = {cast.cast_id: cast.name for cast in graph.cast.values()}
+    for state in cast_states:
+        bits = [cast_lookup.get(state.cast_id, state.cast_id)]
+        if state.screen_position:
+            bits.append(f"at {state.screen_position}")
+        elif state.spatial_position:
+            bits.append(f"at {state.spatial_position}")
+        if state.facing_direction:
+            bits.append(f"facing {state.facing_direction}")
+        if state.action:
+            bits.append(state.action)
+        elif state.posture:
+            posture = getattr(state.posture, "value", state.posture)
+            bits.append(str(posture))
+        if state.looking_at:
+            bits.append(f"looking at {state.looking_at}")
+        elif state.eye_direction:
+            bits.append(f"eyes {state.eye_direction}")
+        if state.props_held:
+            bits.append("holding " + ", ".join(state.props_held[:3]))
+        blocking.append(" | ".join(bit for bit in bits if bit))
+    return blocking
+
+
+def _build_background_lines(frame: FrameNode, ctx: dict) -> list[str]:
+    lines: list[str] = []
+    bg = frame.background
+    if bg.visible_description:
+        lines.append(bg.visible_description)
+    if bg.background_action:
+        lines.append(bg.background_action)
+    if bg.background_sound:
+        lines.append(f"sound cue {bg.background_sound}")
+    if bg.background_music:
+        lines.append(f"music cue {bg.background_music}")
+    for layer in bg.depth_layers[:3]:
+        lines.append(layer)
+
+    env = frame.environment
+    if env.foreground_objects:
+        lines.append("foreground " + ", ".join(env.foreground_objects[:3]))
+    if env.midground_detail:
+        lines.append("midground " + env.midground_detail)
+    if env.background_depth:
+        lines.append("background depth " + env.background_depth)
+    return lines
+
+
+def _build_audio_beat(ctx: dict) -> ShotAudioBeat:
+    dialogue_nodes = ctx.get("dialogue", [])
+    turns: list[ShotAudioTurn] = []
+    ambient_layers: list[str] = []
+    background = ctx.get("frame", {}).get("background", {}) or {}
+    atmosphere = (ctx.get("frame", {}).get("environment", {}) or {}).get("atmosphere", {}) or {}
+
+    for dnode in dialogue_nodes:
+        turns.append(ShotAudioTurn(
+            dialogue_id=dnode.get("dialogue_id", ""),
+            cast_id=dnode.get("cast_id", ""),
+            speaker=dnode.get("speaker", ""),
+            line=dnode.get("raw_line", ""),
+            performance_direction=dnode.get("performance_direction", ""),
+            env_intensity=dnode.get("env_intensity"),
+            env_distance=dnode.get("env_distance"),
+            env_medium=dnode.get("env_medium"),
+            env_atmosphere=dnode.get("env_atmosphere", []) or [],
+        ))
+        for tag in dnode.get("env_atmosphere", []) or []:
+            if tag not in ambient_layers:
+                ambient_layers.append(tag)
+
+    for value in (
+        atmosphere.get("weather"),
+        atmosphere.get("ambient_motion"),
+        background.get("background_sound"),
+    ):
+        if value and value not in ambient_layers:
+            ambient_layers.append(value)
+
+    return ShotAudioBeat(
+        dialogue_present=bool(turns),
+        turns=turns,
+        ambient_layers=ambient_layers,
+        background_music=background.get("background_music"),
+    )
+
+
 def _frame_in_span(
     graph: NarrativeGraph,
     frame_id: str,
@@ -343,7 +704,6 @@ def upsert_node(
         "cast": (CastNode, graph.cast, "cast_id"),
         "location": (LocationNode, graph.locations, "location_id"),
         "prop": (PropNode, graph.props, "prop_id"),
-        "voice": (VoiceNode, graph.voices, "voice_id"),
         "scene": (SceneNode, graph.scenes, "scene_id"),
         "frame": (FrameNode, graph.frames, "frame_id"),
         "dialogue": (DialogueNode, graph.dialogue, "dialogue_id"),
@@ -1021,7 +1381,6 @@ def trace_provenance(graph: NarrativeGraph, node_id: str) -> Optional[dict]:
         ("cast", graph.cast),
         ("location", graph.locations),
         ("prop", graph.props),
-        ("voice", graph.voices),
         ("scene", graph.scenes),
         ("frame", graph.frames),
         ("dialogue", graph.dialogue),
@@ -1259,43 +1618,30 @@ def propagate_location_state(
 # STORYBOARD GRID BUILDING
 # ═══════════════════════════════════════════════════════════════════════════════
 
-MAX_GRID_SIZE = 9
+MAX_GRID_SIZE = 6
 
 
 def is_large_shift(graph: NarrativeGraph, prev_frame_id: str, curr_frame_id: str) -> bool:
-    """Detect a large visual shift between two consecutive frames.
-
-    Triggers on:
-      - Different scene_id (always breaks)
-      - Time-of-day change across scenes
-      - INT/EXT flip across scenes
-    Within a single scene, frames flow together regardless of location.
-    """
+    """Detect a major visual shift between two consecutive frames."""
     prev = graph.frames.get(prev_frame_id)
     curr = graph.frames.get(curr_frame_id)
     if not prev or not curr:
         return False
 
-    # Different scene is always a break
     if prev.scene_id != curr.scene_id:
         return True
 
-    # Within the same scene, check for major environmental shifts
-    prev_scene = graph.scenes.get(prev.scene_id)
-    curr_scene = graph.scenes.get(curr.scene_id)
-    if prev_scene and curr_scene and prev_scene.scene_id != curr_scene.scene_id:
-        # Time-of-day change
-        if prev.time_of_day and curr.time_of_day and prev.time_of_day != curr.time_of_day:
-            return True
-        # INT/EXT flip
-        prev_loc = graph.locations.get(prev.location_id)
-        curr_loc = graph.locations.get(curr.location_id)
-        if prev_loc and curr_loc:
-            prev_type = (prev_loc.location_type or "").upper()
-            curr_type = (curr_loc.location_type or "").upper()
-            if (("INT" in prev_type) != ("INT" in curr_type) or
-                    ("EXT" in prev_type) != ("EXT" in curr_type)):
-                return True
+    if prev.location_id != curr.location_id:
+        return True
+
+    if prev.time_of_day and curr.time_of_day and prev.time_of_day != curr.time_of_day:
+        return True
+
+    if _camera_signature(prev) != _camera_signature(curr):
+        return True
+
+    if _background_signature(prev) != _background_signature(curr):
+        return True
 
     return False
 
@@ -1303,19 +1649,94 @@ def is_large_shift(graph: NarrativeGraph, prev_frame_id: str, curr_frame_id: str
 def _grid_layout(n: int) -> tuple[int, int]:
     """Return (rows, cols) for a grid holding n frames.
 
-    Always 3x3 — every storyboard grid is a 9-cell 16:9 widescreen image.
-    Frames that don't fill all 9 cells leave trailing cells empty;
-    the grid generator handles padding automatically.
+    Guidance grids are intentionally small so they remain a continuity aid
+    instead of becoming the final frame source.
     """
-    return 3, 3
+    if n <= 1:
+        return 1, 1
+    if n <= 2:
+        return 1, 2
+    if n <= 4:
+        return 2, 2
+    return 2, 3
+
+
+def _visible_cast_signature(graph: NarrativeGraph, frame_id: str) -> tuple[str, ...]:
+    return tuple(sorted(
+        state.cast_id for state in get_frame_cast_state_models(graph, frame_id)
+        if getattr(getattr(state, "frame_role", None), "value", getattr(state, "frame_role", None)) != "referenced"
+    ))
+
+
+def _prop_signature(graph: NarrativeGraph, frame_id: str) -> tuple[str, ...]:
+    states = get_frame_prop_state_models(graph, frame_id)
+    return tuple(sorted(
+        f"{state.prop_id}:{state.condition}:{state.holder_cast_id or ''}:{state.visibility}"
+        for state in states
+    ))
+
+
+def _dialogue_signature(frame: FrameNode) -> tuple[str, ...]:
+    return tuple(frame.dialogue_ids or [])
+
+
+def _camera_signature(frame: FrameNode) -> tuple[str, ...]:
+    comp = frame.composition
+    bg = frame.background
+    return (
+        frame.cinematic_tag.tag or "",
+        comp.shot or "",
+        comp.angle or "",
+        comp.movement or "",
+        comp.focus or "",
+        bg.camera_facing or "",
+    )
+
+
+def _background_signature(frame: FrameNode) -> tuple[str, ...]:
+    bg = frame.background
+    env = frame.environment
+    atmo = env.atmosphere
+    return (
+        bg.visible_description or "",
+        bg.background_action or "",
+        bg.background_sound or "",
+        bg.background_music or "",
+        env.background_depth or "",
+        atmo.weather or "",
+        atmo.ambient_motion or "",
+        atmo.particles or "",
+    )
+
+
+def _storyboard_break_reason(
+    graph: NarrativeGraph,
+    prev_frame: FrameNode,
+    curr_frame: FrameNode,
+) -> Optional[str]:
+    if prev_frame.scene_id != curr_frame.scene_id:
+        return "scene_break"
+    if _dialogue_signature(prev_frame) != _dialogue_signature(curr_frame):
+        return "dialogue_turn_change"
+    if _visible_cast_signature(graph, prev_frame.frame_id) != _visible_cast_signature(graph, curr_frame.frame_id):
+        return "cast_set_change"
+    if _prop_signature(graph, prev_frame.frame_id) != _prop_signature(graph, curr_frame.frame_id):
+        return "prop_state_change"
+    if _camera_signature(prev_frame) != _camera_signature(curr_frame):
+        return "camera_shift"
+    if _background_signature(prev_frame) != _background_signature(curr_frame):
+        return "background_shift"
+    if is_large_shift(graph, prev_frame.frame_id, curr_frame.frame_id):
+        return "large_shift"
+    return None
 
 
 def build_storyboard_grids(graph: NarrativeGraph) -> list[StoryboardGrid]:
-    """Partition frame_order into sequential 3x3 storyboard grids of up to 9 frames.
+    """Partition frame_order into small sequential guidance grids.
 
-    Packs frames sequentially across scene boundaries — every grid is always
-    3x3 (9 cells). Grids with fewer than 9 frames leave trailing cells empty.
-    Only splits when reaching MAX_GRID_SIZE (9).
+    Grids are capped at 6 frames and break early when a new frame changes the
+    dialogue beat, cast set, prop state, camera setup, or background state.
+    Storyboards stay a continuity-planning layer, not a final render proxy.
 
     Clears existing grids and rebuilds from scratch.
     Returns the list of grids created.
@@ -1383,9 +1804,17 @@ def build_storyboard_grids(graph: NarrativeGraph) -> list[StoryboardGrid]:
         if not frame:
             continue
 
-        # Only split when the batch hits 16 — pack across scenes
+        break_reason = None
+        if current_batch:
+            prev_frame = graph.frames.get(current_batch[-1])
+            if prev_frame:
+                break_reason = _storyboard_break_reason(graph, prev_frame, frame)
+
         if len(current_batch) >= MAX_GRID_SIZE:
             _flush_batch("full")
+            current_batch = []
+        elif break_reason:
+            _flush_batch(break_reason)
             current_batch = []
 
         current_batch.append(fid)
@@ -1423,7 +1852,7 @@ def get_frame_cell_image(graph: NarrativeGraph, frame_id: str) -> str | None:
 def match_shots_in_grid(graph: NarrativeGraph, grid: StoryboardGrid) -> list[ShotMatchGroup]:
     """Group frames in a grid by shared shot setup for visual consistency.
 
-    Groups by (formula_tag, visible_cast_set, composition.shot, composition.angle).
+    Groups by (cinematic_tag.tag, visible_cast_set, composition.shot, composition.angle).
     Buckets with 2+ frames become ShotMatchGroups.
     """
     from collections import defaultdict
@@ -1435,7 +1864,7 @@ def match_shots_in_grid(graph: NarrativeGraph, grid: StoryboardGrid) -> list[Sho
         if not frame:
             continue
 
-        tag = str(frame.formula_tag.value if hasattr(frame.formula_tag, 'value') else frame.formula_tag or "")
+        ct_tag = frame.cinematic_tag.tag or ""
         cast_states = get_frame_cast_state_models(graph, fid)
         visible_cast = tuple(sorted(
             cs.cast_id for cs in cast_states if cs.frame_role != "referenced"
@@ -1443,7 +1872,7 @@ def match_shots_in_grid(graph: NarrativeGraph, grid: StoryboardGrid) -> list[Sho
         shot = frame.composition.shot if frame.composition else ""
         angle = frame.composition.angle if frame.composition else ""
 
-        key = f"{tag}_{shot}_{angle}_{','.join(visible_cast)}"
+        key = f"{ct_tag}_{shot}_{angle}_{','.join(visible_cast)}"
         buckets[key].append(fid)
 
     groups: list[ShotMatchGroup] = []

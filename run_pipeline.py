@@ -19,12 +19,14 @@ import re
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
+from telemetry import PHASE_ENV, RUN_ID_ENV, emit_event, generate_run_id, with_run_context
 load_dotenv(Path(__file__).resolve().parent / ".env")
 
 # ---------------------------------------------------------------------------
@@ -110,6 +112,7 @@ SERVER_START_TIMEOUT = 30  # seconds to wait for server to come up
 SERVER_POLL_INTERVAL = 1   # seconds between /health polls
 
 DEFAULT_MODEL = "claude-opus-4-6"
+AUDIT_PHASE2 = False  # Set to True via --audit flag to spawn graph auditor agent after Step 2c
 
 # Resolve claude CLI path (Windows subprocess.run can't find bare "claude")
 import shutil as _shutil
@@ -117,6 +120,9 @@ CLAUDE_CLI = _shutil.which("claude") or "claude"
 
 LOGS_DIR: Path | None = None          # Set in main() after --project
 PIPELINE_LOGS_DIR: Path | None = None  # Set in main() after --project
+PIPELINE_RUN_ID = ""
+LIVE_MODE = False
+LIVE_ENV = "SCREENWIRE_LIVE"
 
 # Phase names for reporting
 PHASE_NAMES = {
@@ -171,11 +177,52 @@ def fail(msg: str) -> None:
     sys.exit(1)
 
 
+def _phase_label(phase_num: int) -> str:
+    return f"phase_{phase_num}"
+
+
+def live_log(msg: str, color: str = CYAN) -> None:
+    """Emit a console progress line only when live mode is enabled."""
+    if LIVE_MODE:
+        log(msg, color)
+
+
+def _format_eta(seconds: float) -> str:
+    total_seconds = max(0, int(round(seconds)))
+    minutes, secs = divmod(total_seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}h {minutes}m"
+    if minutes:
+        return f"{minutes}m {secs}s"
+    return f"{secs}s"
+
+
+def _progress_eta_suffix(*, started_at: float, completed: int, total: int) -> str:
+    """Return a short ETA suffix for live progress lines."""
+    if completed <= 0 or completed >= total:
+        return ""
+    elapsed = max(time.time() - started_at, 0.001)
+    rate = completed / elapsed
+    if rate <= 0:
+        return ""
+    eta_seconds = (total - completed) / rate
+    return f", ETA {_format_eta(eta_seconds)}"
+
+
 # ---------------------------------------------------------------------------
 # Streaming subprocess helper
 # ---------------------------------------------------------------------------
 
-def _stream_subprocess(cmd, cwd=None, env=None, timeout=None, label="process"):
+def _stream_subprocess(
+    cmd,
+    cwd=None,
+    env=None,
+    timeout=None,
+    label="process",
+    echo_stdout: bool = True,
+    echo_stderr: bool = True,
+):
     """Run a subprocess, streaming stdout/stderr in real-time while capturing them.
 
     Uses os.read() on non-blocking file descriptors instead of readline()
@@ -231,12 +278,14 @@ def _stream_subprocess(cmd, cwd=None, env=None, timeout=None, label="process"):
                 text = chunk.decode("utf-8", errors="replace")
                 if stream is proc.stdout:
                     stdout_parts.append(chunk)
-                    for line in text.splitlines(keepends=True):
-                        print(f"{DIM}[{label}]{RESET} {line}", end="", flush=True)
+                    if echo_stdout:
+                        for line in text.splitlines(keepends=True):
+                            print(f"{DIM}[{label}]{RESET} {line}", end="", flush=True)
                 else:
                     stderr_parts.append(chunk)
-                    for line in text.splitlines(keepends=True):
-                        print(f"{DIM}[{label}]{RESET} {RED}{line}{RESET}", end="", flush=True)
+                    if echo_stderr:
+                        for line in text.splitlines(keepends=True):
+                            print(f"{DIM}[{label}]{RESET} {RED}{line}{RESET}", end="", flush=True)
 
             if proc.poll() is not None:
                 # Drain remaining data from pipes
@@ -253,9 +302,13 @@ def _stream_subprocess(cmd, cwd=None, env=None, timeout=None, label="process"):
                             break
                         parts.append(chunk)
                         text = chunk.decode("utf-8", errors="replace")
-                        for line in text.splitlines(keepends=True):
-                            print(f"{DIM}[{label}]{RESET} {color}{line}"
-                                  f"{RESET if color else ''}", end="", flush=True)
+                        should_echo = (stream is proc.stdout and echo_stdout) or (
+                            stream is proc.stderr and echo_stderr
+                        )
+                        if should_echo:
+                            for line in text.splitlines(keepends=True):
+                                print(f"{DIM}[{label}]{RESET} {color}{line}"
+                                      f"{RESET if color else ''}", end="", flush=True)
                 break
     except subprocess.TimeoutExpired:
         _unregister_proc(proc)
@@ -323,7 +376,11 @@ def start_server(dry_run: bool) -> None:
     server_log_path.parent.mkdir(parents=True, exist_ok=True)
     _server_log_fh = open(server_log_path, "w")
 
-    env = {**os.environ, "PROJECT_DIR": str(PROJECT_DIR)}
+    env = with_run_context(
+        {**os.environ, "PROJECT_DIR": str(PROJECT_DIR)},
+        run_id=PIPELINE_RUN_ID,
+        phase=os.environ.get(PHASE_ENV, "pipeline_boot"),
+    )
     _server_proc = subprocess.Popen(
         [sys.executable, str(SERVER_SCRIPT)],
         cwd=str(APP_DIR),
@@ -400,7 +457,9 @@ def read_manifest() -> dict:
 
 
 def write_manifest(manifest: dict) -> None:
-    MANIFEST_PATH.write_text(json.dumps(manifest, indent=2))
+    tmp_path = MANIFEST_PATH.with_suffix(".json.tmp")
+    tmp_path.write_text(json.dumps(manifest, indent=2))
+    os.replace(tmp_path, MANIFEST_PATH)
 
 
 def advance_phase(completed: int, next_phase: int, dry_run: bool) -> dict:
@@ -583,9 +642,41 @@ def build_context_seed(project_dir: Path) -> str:
     # 2. Onboarding config
     config_path = project_dir / "source_files" / "onboarding_config.json"
     if config_path.exists():
+        config_text = config_path.read_text(encoding="utf-8").strip()
         sections.append("## Onboarding Config\n```json")
-        sections.append(config_path.read_text(encoding="utf-8").strip())
+        sections.append(config_text)
         sections.append("```\n")
+
+        # 2a. Extract stickiness level explicitly so all agents see it
+        try:
+            import json as _json
+            config_data = _json.loads(config_text)
+            stickiness_level = config_data.get("stickinessLevel", "unknown")
+            stickiness_perm = config_data.get("stickinessPermission", "unknown")
+            tier_labels = {1: "Reformat", 2: "Remaster", 3: "Expand", 4: "Reimagine", 5: "Create"}
+            label = tier_labels.get(stickiness_level, "unknown")
+            sections.append("## Stickiness Tier (Extracted)\n")
+            sections.append(f"- **Level**: {stickiness_level} ({label})")
+            sections.append(f"- **Permission**: {stickiness_perm}")
+            if stickiness_level in (1, 2):
+                sections.append(
+                    "- **Enforcement**: STRICT — No new characters, locations, or props "
+                    "beyond what exists in source material. Skip any skeleton entity not "
+                    "found in source files."
+                )
+            elif stickiness_level in (4, 5):
+                sections.append(
+                    "- **Enforcement**: New entities allowed ONLY with "
+                    "`///ADDITION_JUSTIFICATION` in the outline skeleton. "
+                    "Skip unjustified additions."
+                )
+            else:
+                sections.append(
+                    "- **Enforcement**: Standard — all skeleton entities authorized."
+                )
+            sections.append("\n")
+        except Exception:
+            pass  # Config is already embedded as raw JSON above
 
     # 3. Outline skeleton
     skeleton_path = project_dir / "creative_output" / "outline_skeleton.md"
@@ -661,6 +752,37 @@ def _validate_graph_has_frames(project_dir: Path) -> bool:
         return False
 
 
+def _run_phase_2_postprocessing(project_dir: Path) -> None:
+    """Assemble, materialize, and hard-gate video-direction validity."""
+    log("Running deterministic prompt assembly + materialization...")
+
+    assemble_result = _stream_subprocess(
+        [sys.executable, str(SKILLS_DIR / "graph_assemble_prompts"),
+         "--project-dir", str(project_dir)],
+        cwd=project_dir, label="graph_assemble_prompts")
+    if assemble_result.returncode != 0:
+        raise RuntimeError("Phase 2 prompt assembly failed. Fix graph shot-packet data before proceeding.")
+
+    materialize_result = _stream_subprocess(
+        [sys.executable, str(SKILLS_DIR / "graph_materialize"),
+         "--project-dir", str(project_dir)],
+        cwd=project_dir, label="graph_materialize")
+    if materialize_result.returncode != 0:
+        raise RuntimeError("Phase 2 materialization failed. Fix graph serialization issues before proceeding.")
+
+    validate_result = _stream_subprocess(
+        [sys.executable, str(SKILLS_DIR / "graph_validate_video_direction"),
+         "--project-dir", str(project_dir), "--fix"],
+        cwd=project_dir, label="graph_validate_video_direction")
+    if validate_result.returncode != 0:
+        raise RuntimeError(
+            "Phase 2 video-direction validation failed. Fix missing composition/directing payloads "
+            "or split overlong dialogue before proceeding to Phase 3."
+        )
+
+    log_ok("Deterministic post-processing complete")
+
+
 # ---------------------------------------------------------------------------
 # Agent spawning
 # ---------------------------------------------------------------------------
@@ -674,6 +796,7 @@ def run_agent(
     prompt_prefix: str = "",
     context_seed: str = "",
     timeout: int | None = None,
+    stream_output: bool = True,
 ) -> subprocess.CompletedProcess:
     """Spawn a Claude CLI agent and wait for it to finish.
 
@@ -769,6 +892,8 @@ def run_agent(
             env=env,
             timeout=effective_timeout,
             label=agent_id,
+            echo_stdout=stream_output,
+            echo_stderr=stream_output,
         )
     finally:
         # Clean up temp prompt file
@@ -857,7 +982,9 @@ def flush_manifest_queue() -> int:
 
     if total_updates > 0:
         manifest["version"] = manifest.get("version", 0) + 1
-        MANIFEST_PATH.write_text(json.dumps(manifest, indent=2))
+        tmp_path = MANIFEST_PATH.with_suffix(".json.tmp")
+        tmp_path.write_text(json.dumps(manifest, indent=2))
+        os.replace(tmp_path, MANIFEST_PATH)
         log_ok(f"Flushed manifest queue: {total_updates} updates from {len(queue_files)} files")
 
     return total_updates
@@ -894,9 +1021,249 @@ def verify_files(phase: str, paths: list[Path]) -> None:
 MAX_QUALITY_RETRIES = 1  # Re-run a phase at most once if quality gate fails
 
 
+def _read_onboarding_config(base: Path) -> dict:
+    """Best-effort read of the Phase 0 onboarding contract."""
+    config_path = base / "source_files" / "onboarding_config.json"
+    if not config_path.exists():
+        return {}
+    try:
+        data = json.loads(config_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _frame_needs_haiku_enrichment(frame) -> bool:
+    """Return True when a frame is missing core Haiku-authored fields."""
+    if not getattr(frame, "action_summary", ""):
+        return True
+    if not getattr(frame, "video_optimized_prompt_block", ""):
+        return True
+    if not getattr(frame, "visual_flow_element", None):
+        return True
+
+    composition = getattr(frame, "composition", None)
+    if composition is None or not composition.shot or not composition.angle or not composition.movement:
+        return True
+
+    directing = getattr(frame, "directing", None)
+    if directing is None or not directing.dramatic_purpose or not directing.beat_turn or not directing.pov_owner:
+        return True
+
+    environment = getattr(frame, "environment", None)
+    lighting = getattr(environment, "lighting", None) if environment else None
+    if lighting is None or lighting.direction is None or lighting.quality is None:
+        return True
+
+    return False
+
+
+def _pending_haiku_inputs(graph, inputs: list[dict]) -> list[dict]:
+    """Filter Haiku inputs down to frames that still need enrichment."""
+    pending: list[dict] = []
+    for input_dict in inputs:
+        frame_id = str(input_dict.get("frame_id", "")).strip()
+        frame = graph.frames.get(frame_id)
+        if frame is None:
+            continue
+        if _frame_needs_haiku_enrichment(frame):
+            pending.append(input_dict)
+    return pending
+
+
+def _parse_haiku_worker_output(raw_text: str, frame_id: str) -> dict:
+    """Parse a CLI Haiku worker response into the enrichment contract."""
+    text = (raw_text or "").strip()
+    if not text:
+        return {"frame_id": frame_id, "error": "empty_output"}
+
+    if text.startswith("```"):
+        lines = text.splitlines()
+        text = "\n".join(
+            line for line in lines
+            if not line.strip().startswith("```")
+        ).strip()
+
+    try:
+        result = json.loads(text)
+    except json.JSONDecodeError as exc:
+        return {"frame_id": frame_id, "error": f"json_parse_error: {exc}"}
+
+    if not isinstance(result, dict):
+        return {"frame_id": frame_id, "error": "non_object_json"}
+    result["frame_id"] = frame_id
+    return result
+
+
+def _run_haiku_cli_worker(input_dict: dict, *, dry_run: bool = False) -> dict:
+    """Run one Haiku enrichment worker through the same Claude CLI path as other agents."""
+    from graph.haiku_enricher import HAIKU_MODEL, HAIKU_SYSTEM_PROMPT
+
+    frame_id = str(input_dict.get("frame_id", "unknown"))
+    worker_id = f"haiku_worker_{frame_id}"
+    worker_timer = Timer()
+    live_log(f"  [Haiku] starting {frame_id}")
+
+    prompt_file = tempfile.NamedTemporaryFile(
+        mode="w",
+        suffix=".md",
+        prefix=f"{worker_id}_",
+        dir=str(PROJECT_DIR),
+        delete=False,
+        encoding="utf-8",
+    )
+    try:
+        prompt_file.write(HAIKU_SYSTEM_PROMPT)
+        prompt_file.close()
+
+        prompt_prefix = (
+            "Process ONLY the frame payload below. Return ONLY valid JSON matching "
+            "the required enrichment schema. No markdown, no explanation.\n\n"
+            "FRAME INPUT:\n```json\n"
+            + json.dumps(input_dict, indent=2, ensure_ascii=False)
+            + "\n```"
+        )
+        result = run_agent(
+            worker_id,
+            prompt_file.name,
+            project_dir=PROJECT_DIR,
+            model=HAIKU_MODEL,
+            dry_run=dry_run,
+            prompt_prefix=prompt_prefix,
+            timeout=None,
+            stream_output=False,
+        )
+        check_agent_result(worker_id, result, worker_timer)
+        if result.returncode != 0:
+            return {"frame_id": frame_id, "error": f"agent_exit_{result.returncode}"}
+        return _parse_haiku_worker_output(result.stdout or "", frame_id)
+    finally:
+        try:
+            os.unlink(prompt_file.name)
+        except OSError:
+            pass
+
+
+def _run_haiku_cli_batch(inputs: list[dict], *, dry_run: bool = False, max_concurrent: int = 20) -> list[dict]:
+    """Run Haiku frame workers through Claude CLI, preserving input order."""
+    if not inputs:
+        return []
+
+    results: list[dict | None] = [None] * len(inputs)
+    started_at = time.time()
+    success_count = 0
+    failure_count = 0
+    total = len(inputs)
+    with ThreadPoolExecutor(max_workers=min(max_concurrent, len(inputs))) as executor:
+        futures = {
+            executor.submit(_run_haiku_cli_worker, input_dict, dry_run=dry_run): idx
+            for idx, input_dict in enumerate(inputs)
+        }
+        for future in as_completed(futures):
+            idx = futures[future]
+            try:
+                results[idx] = future.result()
+            except Exception as exc:
+                frame_id = str(inputs[idx].get("frame_id", "unknown"))
+                results[idx] = {"frame_id": frame_id, "error": f"worker_exception: {exc}"}
+            result = results[idx] or {}
+            frame_id = str(result.get("frame_id", inputs[idx].get("frame_id", "unknown")))
+            if "error" in result:
+                failure_count += 1
+                status = f"failed ({result['error']})"
+                color = YELLOW
+            else:
+                success_count += 1
+                status = "complete"
+                color = CYAN
+            completed = success_count + failure_count
+            eta_suffix = _progress_eta_suffix(
+                started_at=started_at,
+                completed=completed,
+                total=total,
+            )
+            live_log(
+                f"  [Haiku {completed}/{total}] {frame_id} {status} "
+                f"({success_count} ok, {failure_count} failed{eta_suffix})",
+                color=color,
+            )
+
+    return [result if result is not None else {"frame_id": str(inputs[idx].get("frame_id", "unknown")), "error": "missing_result"} for idx, result in enumerate(results)]
+
+
+def _project_output_size(base: Path, manifest: dict | None = None) -> str:
+    """Resolve the project's declared output size from onboarding/manifest."""
+    config = _read_onboarding_config(base)
+    raw = (
+        config.get("outputSize")
+        or config.get("output_size")
+        or (manifest or {}).get("outputSize")
+        or (manifest or {}).get("output_size")
+        or "short"
+    )
+    return str(raw).strip().lower()
+
+
+def _count_protagonists(manifest: dict, base: Path) -> int:
+    """Count protagonist declarations from manifest first, then cast profiles."""
+    cast_entries = manifest.get("cast") or []
+    manifest_count = sum(
+        1
+        for entry in cast_entries
+        if isinstance(entry, dict) and str(entry.get("role", "")).strip().lower() == "protagonist"
+    )
+    if manifest_count:
+        return manifest_count
+
+    cast_dir = base / "cast"
+    protagonist_count = 0
+    for cast_file in cast_dir.glob("*.json"):
+        try:
+            cast_data = json.loads(cast_file.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        if str(cast_data.get("role", "")).strip().lower() == "protagonist":
+            protagonist_count += 1
+    return protagonist_count
+
+
+def _resolve_regen_image_size(prompt_data: dict, *, prompt_file: Path) -> str:
+    """Resolve the authored image size, preferring the current schema key."""
+    size = str(prompt_data.get("size", "")).strip()
+    legacy_size = str(prompt_data.get("image_size", "")).strip()
+
+    if size and legacy_size and size != legacy_size:
+        raise ValueError(
+            f"{prompt_file.name} defines conflicting size keys: size={size!r}, image_size={legacy_size!r}"
+        )
+    if size:
+        return size
+    if legacy_size:
+        log_warn(f"  {prompt_file.name}: using legacy prompt key 'image_size' ({legacy_size})")
+        return legacy_size
+    raise ValueError(f"{prompt_file.name} is missing both 'size' and legacy 'image_size'")
+
+
+def _refine_status_kind(refined_by: str) -> str:
+    """Normalize refiner status strings to success/skipped/failed buckets."""
+    value = (refined_by or "").strip().lower()
+    if value == "grok-vision":
+        return "refined"
+    if value.startswith("skipped:"):
+        return "skipped"
+    if value.startswith("failed:"):
+        return "failed"
+    return "unknown"
+
+
 def quality_gate_phase_1(base: Path) -> list[str]:
     """Validate Phase 1 outputs. Returns list of failure reasons (empty = pass)."""
     issues = []
+    output_size = _project_output_size(base)
+    min_scene_drafts = 1 if output_size == "short" else 2
+    if min_scene_drafts != 2:
+        log(f"Phase 1 gate adjusted for output size {output_size}: min_scene_drafts={min_scene_drafts}")
+
     co = base / "creative_output" / "creative_output.md"
     if not co.exists():
         issues.append("creative_output.md missing")
@@ -911,8 +1278,11 @@ def quality_gate_phase_1(base: Path) -> list[str]:
     scenes_dir = base / "creative_output" / "scenes"
     if scenes_dir.exists():
         drafts = list(scenes_dir.glob("*.md"))
-        if len(drafts) < 2:
-            issues.append(f"Only {len(drafts)} scene draft(s) in creative_output/scenes/ — expected at least 2")
+        if len(drafts) < min_scene_drafts:
+            issues.append(
+                f"Only {len(drafts)} scene draft(s) in creative_output/scenes/ — "
+                f"expected at least {min_scene_drafts} for output size {output_size}"
+            )
     else:
         issues.append("creative_output/scenes/ directory missing — no scene drafts found")
     return issues
@@ -924,7 +1294,11 @@ def quality_gate_phase_2(base: Path) -> list[str]:
 
     # Manifest frame count
     manifest = json.loads((base / "project_manifest.json").read_text())
+    output_size = _project_output_size(base, manifest)
     frames = manifest.get("frames", [])
+    manifest_frames_by_id = {
+        frame.get("frameId"): frame for frame in frames if frame.get("frameId")
+    }
     if len(frames) < 10:
         issues.append(f"Only {len(frames)} frames in manifest — expected 10+ for this story size")
 
@@ -951,18 +1325,112 @@ def quality_gate_phase_2(base: Path) -> list[str]:
 
     # Cast/location/prop profiles
     cast_jsons = list((base / "cast").glob("*.json"))
-    if len(cast_jsons) < 2:
-        issues.append(f"Only {len(cast_jsons)} cast profile(s) — expected at least 2")
+    protagonist_count = _count_protagonists(manifest, base)
+    min_cast_profiles = 1 if output_size == "short" and protagonist_count == 1 else 2
+    if min_cast_profiles != 2:
+        log(
+            "Phase 2 gate adjusted for short single-protagonist project: "
+            f"min_cast_profiles={min_cast_profiles}"
+        )
+    if len(cast_jsons) < min_cast_profiles:
+        issues.append(
+            f"Only {len(cast_jsons)} cast profile(s) — expected at least {min_cast_profiles} "
+            f"for output size {output_size}"
+        )
 
     loc_jsons = list((base / "locations").glob("*.json"))
     if len(loc_jsons) < 1:
         issues.append(f"No location profiles found")
 
+    # Graph-level cast integrity
+    graph_path = base / "graph" / "narrative_graph.json"
+    if not graph_path.exists():
+        issues.append("graph/narrative_graph.json missing")
+        return issues
+
+    try:
+        from graph.store import GraphStore
+        from graph.api import get_frame_cast_state_models
+
+        store = GraphStore(str(base))
+        graph = store.load()
+
+        scene_cast_conflicts: list[str] = []
+        manifest_cast_conflicts: list[str] = []
+        missing_manifest_frames: list[str] = []
+        dialogue_presence_conflicts: list[str] = []
+
+        for frame_id in graph.frame_order:
+            frame = graph.frames.get(frame_id)
+            if not frame:
+                continue
+
+            visible_cast_ids = sorted({
+                cs.cast_id
+                for cs in get_frame_cast_state_models(graph, frame_id)
+                if getattr(getattr(cs, "frame_role", None), "value", getattr(cs, "frame_role", None)) != "referenced"
+            })
+
+            scene = graph.scenes.get(frame.scene_id)
+            scene_cast_ids = set(getattr(scene, "cast_present", []) or [])
+            extra_cast = [cast_id for cast_id in visible_cast_ids if cast_id not in scene_cast_ids]
+            if extra_cast:
+                scene_cast_conflicts.append(
+                    f"{frame_id} ({frame.scene_id}) has visible cast not in scene.cast_present: {', '.join(extra_cast)}"
+                )
+
+            manifest_frame = manifest_frames_by_id.get(frame_id)
+            if not manifest_frame:
+                missing_manifest_frames.append(frame_id)
+            else:
+                manifest_cast_ids = sorted(manifest_frame.get("castIds") or [])
+                if manifest_cast_ids != visible_cast_ids:
+                    manifest_cast_conflicts.append(
+                        f"{frame_id}: manifest.castIds={manifest_cast_ids} graph.visibleCast={visible_cast_ids}"
+                    )
+
+            if frame.dialogue_ids:
+                for dialogue_id in frame.dialogue_ids:
+                    dialogue_node = graph.dialogue.get(dialogue_id)
+                    if not dialogue_node:
+                        continue
+                    if dialogue_node.primary_visual_frame == frame_id and dialogue_node.cast_id not in visible_cast_ids:
+                        dialogue_presence_conflicts.append(
+                            f"{frame_id}: primary dialogue speaker {dialogue_node.cast_id} missing from visible cast"
+                        )
+
+        if missing_manifest_frames:
+            issues.append(
+                f"{len(missing_manifest_frames)} graph frames missing from manifest.frames[] "
+                f"(sample: {', '.join(missing_manifest_frames[:5])})"
+            )
+        if scene_cast_conflicts:
+            issues.append(
+                f"{len(scene_cast_conflicts)} frame(s) have visible cast outside scene.cast_present "
+                f"(sample: {'; '.join(scene_cast_conflicts[:3])})"
+            )
+        if manifest_cast_conflicts:
+            issues.append(
+                f"{len(manifest_cast_conflicts)} frame(s) have manifest castIds that do not match graph visible cast "
+                f"(sample: {'; '.join(manifest_cast_conflicts[:3])})"
+            )
+        if dialogue_presence_conflicts:
+            issues.append(
+                f"{len(dialogue_presence_conflicts)} primary dialogue frame(s) omit the speaker from visible cast "
+                f"(sample: {'; '.join(dialogue_presence_conflicts[:3])})"
+            )
+
+    except Exception as e:
+        issues.append(f"graph cast integrity check failed: {e}")
+
     return issues
 
 
 def quality_gate_phase_3(base: Path) -> list[str]:
-    """Validate Phase 3 outputs (reference and environment images)."""
+    """Validate Phase 3 outputs (reference and environment images).
+
+    This is the authoritative validation logic. See agent_prompts/archived_intents/ for historical design references.
+    """
     issues = []
 
     manifest = json.loads((base / "project_manifest.json").read_text())
@@ -988,7 +1456,10 @@ def quality_gate_phase_3(base: Path) -> list[str]:
 
 
 def quality_gate_phase_4(base: Path) -> list[str]:
-    """Validate Phase 4 outputs (composed frames). No TTS checks."""
+    """Validate Phase 4 outputs (composed frames). No TTS checks.
+
+    This is the authoritative validation logic. See agent_prompts/archived_intents/ for historical design references.
+    """
     issues = []
 
     manifest = json.loads((base / "project_manifest.json").read_text())
@@ -1009,7 +1480,10 @@ def quality_gate_phase_4(base: Path) -> list[str]:
 
 
 def quality_gate_phase_5(base: Path) -> list[str]:
-    """Validate Phase 5 outputs (video clips)."""
+    """Validate Phase 5 outputs (video clips).
+
+    This is the authoritative validation logic. See agent_prompts/archived_intents/ for historical design references.
+    """
     issues = []
 
     manifest = json.loads((base / "project_manifest.json").read_text())
@@ -1017,9 +1491,32 @@ def quality_gate_phase_5(base: Path) -> list[str]:
 
     clips_dir = base / "video" / "clips"
     clips = list(clips_dir.glob("*.mp4")) if clips_dir.exists() else []
+    prompt_dir = base / "video" / "prompts"
 
     if len(clips) < len(frames) * 0.8:
         issues.append(f"Only {len(clips)}/{len(frames)} video clips generated")
+
+    missing_prompts = []
+    missing_clips = []
+    for frame in frames:
+        frame_id = frame.get("frameId")
+        if not frame_id:
+            continue
+        if not (prompt_dir / f"{frame_id}_video.json").exists():
+            missing_prompts.append(frame_id)
+        if not (clips_dir / f"{frame_id}.mp4").exists():
+            missing_clips.append(frame_id)
+
+    if missing_prompts:
+        issues.append(
+            f"{len(missing_prompts)} frame(s) missing video prompt JSON "
+            f"(sample: {', '.join(missing_prompts[:5])})"
+        )
+    if missing_clips:
+        issues.append(
+            f"{len(missing_clips)} frame(s) missing expected clip output "
+            f"(sample: {', '.join(missing_clips[:5])})"
+        )
 
     for clip in clips:
         if clip.stat().st_size < 10240:
@@ -1117,6 +1614,135 @@ def verify_prerequisites(target_phase: int) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Phase 1 helpers
+# ---------------------------------------------------------------------------
+
+_SCENE_DRAFT_RE = re.compile(r"scene_(\d+)_draft\.md$")
+
+
+def _phase_checkpoint_path(phase_num: int) -> Path:
+    PIPELINE_LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    return PIPELINE_LOGS_DIR / f"phase_{phase_num}_checkpoint.json"
+
+
+def _write_phase_checkpoint(phase_num: int, payload: dict) -> None:
+    path = _phase_checkpoint_path(phase_num)
+    data = dict(payload)
+    data["phase"] = phase_num
+    data["timestamp"] = datetime.now(timezone.utc).isoformat()
+    tmp_path = path.with_suffix(".json.tmp")
+    tmp_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    os.replace(tmp_path, path)
+
+
+def _detect_scene_numbers_from_skeleton(skeleton_path: Path) -> list[int]:
+    if not skeleton_path.exists():
+        return []
+
+    text = skeleton_path.read_text(encoding="utf-8")
+    header_matches = {
+        int(match)
+        for match in re.findall(r"^\s*(?:#+\s*)?(?:SCENE|Scene)\s+(\d+)\b", text, re.MULTILINE)
+    }
+    if header_matches:
+        return sorted(header_matches)
+
+    tag_count = len(re.findall(r"^///SCENE:\s*", text, re.MULTILINE))
+    return list(range(1, tag_count + 1))
+
+
+def _detect_existing_scene_drafts(scenes_dir: Path, *, min_bytes: int = 200) -> dict[int, Path]:
+    drafts: dict[int, Path] = {}
+    if not scenes_dir.exists():
+        return drafts
+
+    for path in sorted(scenes_dir.glob("scene_*_draft.md")):
+        match = _SCENE_DRAFT_RE.fullmatch(path.name)
+        if not match:
+            continue
+        if path.stat().st_size < min_bytes:
+            continue
+        drafts[int(match.group(1))] = path
+    return drafts
+
+
+def _scan_phase_1_state(project_dir: Path) -> dict:
+    creative_dir = project_dir / "creative_output"
+    skeleton_path = creative_dir / "outline_skeleton.md"
+    scenes_dir = creative_dir / "scenes"
+    creative_output_path = creative_dir / "creative_output.md"
+    skeleton_exists = skeleton_path.exists() and skeleton_path.stat().st_size > 0
+
+    scene_numbers = _detect_scene_numbers_from_skeleton(skeleton_path) if skeleton_exists else []
+    existing_drafts = _detect_existing_scene_drafts(scenes_dir)
+    completed_scene_numbers = (
+        [num for num in scene_numbers if num in existing_drafts]
+        if scene_numbers
+        else sorted(existing_drafts)
+    )
+    missing_scene_numbers = [num for num in scene_numbers if num not in existing_drafts]
+
+    creative_output_exists = creative_output_path.exists() and creative_output_path.stat().st_size > 1000
+    creative_output_stale = False
+    if creative_output_exists and existing_drafts:
+        creative_output_mtime = creative_output_path.stat().st_mtime
+        creative_output_stale = any(
+            path.stat().st_mtime > creative_output_mtime
+            for path in existing_drafts.values()
+        )
+
+    return {
+        "skeleton_exists": skeleton_exists,
+        "skeleton_path": str(skeleton_path),
+        "expected_scene_numbers": scene_numbers,
+        "expected_scene_count": len(scene_numbers),
+        "completed_scene_numbers": completed_scene_numbers,
+        "completed_scene_count": len(completed_scene_numbers),
+        "missing_scene_numbers": missing_scene_numbers,
+        "missing_scene_count": len(missing_scene_numbers),
+        "scene_draft_paths": {
+            num: str(path) for num, path in sorted(existing_drafts.items())
+        },
+        "creative_output_exists": creative_output_exists,
+        "creative_output_path": str(creative_output_path),
+        "creative_output_stale": creative_output_stale,
+    }
+
+
+def _assemble_creative_output_from_drafts(project_dir: Path, scene_numbers: list[int]) -> Path:
+    creative_dir = project_dir / "creative_output"
+    scenes_dir = creative_dir / "scenes"
+    output_path = creative_dir / "creative_output.md"
+    creative_dir.mkdir(parents=True, exist_ok=True)
+
+    assembled_parts: list[str] = []
+    missing: list[int] = []
+    for scene_num in scene_numbers:
+        draft_path = scenes_dir / f"scene_{scene_num:02d}_draft.md"
+        if not draft_path.exists():
+            missing.append(scene_num)
+            continue
+        text = draft_path.read_text(encoding="utf-8").strip()
+        if text:
+            assembled_parts.append(text)
+
+    if missing:
+        raise FileNotFoundError(
+            "Cannot assemble creative_output.md; missing scene draft(s): "
+            + ", ".join(f"{num:02d}" for num in missing)
+        )
+
+    if not assembled_parts:
+        raise ValueError("Cannot assemble creative_output.md; no scene draft content found")
+
+    assembled_text = "\n\n".join(assembled_parts).strip() + "\n"
+    tmp_path = output_path.with_suffix(".md.tmp")
+    tmp_path.write_text(assembled_text, encoding="utf-8")
+    os.replace(tmp_path, output_path)
+    return output_path
+
+
+# ---------------------------------------------------------------------------
 # Phase runners
 # ---------------------------------------------------------------------------
 
@@ -1188,134 +1814,178 @@ def phase_1_narrative(dry_run: bool, phase_timers: dict) -> None:
     timer = Timer()
     phase_timers["phase_1"] = timer
 
+    base = PROJECT_DIR
+    creative_dir = base / "creative_output"
+    scenes_dir = creative_dir / "scenes"
+    skeleton_path = creative_dir / "outline_skeleton.md"
+    creative_output_path = creative_dir / "creative_output.md"
     prompt_file = str(PROMPTS_DIR / "creative_coordinator.md")
+    result_skeleton = None
+
+    def _checkpoint(stage: str) -> dict:
+        state = _scan_phase_1_state(base)
+        payload = {
+            "stage": stage,
+            **state,
+        }
+        _write_phase_checkpoint(1, payload)
+        return state
+
+    def spawn_prose_worker(scene_num: int) -> tuple[int, subprocess.CompletedProcess, Timer]:
+        worker_timer = Timer()
+        prose_prefix = (
+            f"CRITICAL OVERRIDE — THIS SUPERSEDES ALL INSTRUCTIONS ABOVE.\n"
+            f"You are a PARALLEL PROSE WORKER. Ignore ALL phase logic, skeleton "
+            f"writing, assembly, quality checks, and state updates above.\n"
+            f"Your ONLY task:\n"
+            f"  1. Read creative_output/outline_skeleton.md\n"
+            f"  2. Write Scene {scene_num} prose to: "
+            f"creative_output/scenes/scene_{scene_num:02d}_draft.md\n"
+            f"  3. Print 'Scene {scene_num} complete.' and STOP.\n\n"
+            f"Format: screenplay/novel hybrid. One paragraph = one frame.\n"
+            f"Do NOT write other scenes. Do NOT write creative_output.md.\n"
+            f"Do NOT write the skeleton. Do NOT run assembly. Do NOT run "
+            f"quality checks. Do NOT update state.json or context.json.\n"
+            f"Do NOT print summaries, checklists, or compliance tables.\n"
+            f"Write the scene file, print the completion line, stop.\n"
+        )
+        result = run_agent(
+            f"prose_worker_scene_{scene_num:02d}", prompt_file,
+            dry_run=dry_run, prompt_prefix=prose_prefix,
+            model="claude-haiku-4-5-20251001",
+            timeout=300,
+        )
+        return scene_num, result, worker_timer
+
+    def run_prose_batch(target_scene_numbers: list[int], *, attempt_label: str) -> dict[int, tuple[subprocess.CompletedProcess, Timer]]:
+        if not target_scene_numbers:
+            return {}
+        log(f"{attempt_label}: spawning {len(target_scene_numbers)} prose worker(s) for missing scenes: "
+            + ", ".join(f"{scene_num:02d}" for scene_num in target_scene_numbers))
+        prose_results: dict[int, tuple[subprocess.CompletedProcess, Timer]] = {}
+        with ThreadPoolExecutor(max_workers=min(len(target_scene_numbers), 10)) as executor:
+            futures = {
+                executor.submit(spawn_prose_worker, scene_num): scene_num
+                for scene_num in target_scene_numbers
+            }
+            for future in as_completed(futures):
+                scene_num = futures[future]
+                try:
+                    sn, res, wt = future.result()
+                    prose_results[sn] = (res, wt)
+                    log(f"Prose worker scene {sn} finished in {wt.elapsed_str()} "
+                        f"(exit={res.returncode})")
+                    if res.returncode != 0:
+                        log_err(f"Prose worker scene {sn} failed")
+                except Exception as e:
+                    log_err(f"Prose worker scene {scene_num} raised: {e}")
+        ok_count = sum(1 for result, _ in prose_results.values() if result.returncode == 0)
+        log(f"{attempt_label}: {ok_count}/{len(target_scene_numbers)} worker(s) succeeded")
+        return prose_results
+
+    state = _checkpoint("phase_1_start")
 
     # Step 1: CC writes skeleton only (the contracts)
-    log("--- Phase 1a: Skeleton (contracts) ---")
-    cc_skeleton_prefix = (
-        "CRITICAL OVERRIDE — THIS SUPERSEDES ALL INSTRUCTIONS ABOVE.\n"
-        "Complete ONLY the skeleton phase (Phase 1: ARCHITECT). "
-        "Write creative_output/outline_skeleton.md with the full story foundation, "
-        "character roster, location roster, per-scene construction specs, and "
-        "continuity chain. Do NOT write scene prose. Do NOT write creative_output.md. "
-        "Do NOT proceed to Phase 2 or Phase 3. Skeleton ONLY. "
-        "Stop after the skeleton is complete and update your state."
-    )
-    result_skeleton = run_agent("creative_coordinator", prompt_file,
-                                dry_run=dry_run, prompt_prefix=cc_skeleton_prefix)
-    check_agent_result("creative_coordinator_skeleton", result_skeleton, timer)
+    if state["skeleton_exists"]:
+        log("--- Phase 1a: Skeleton (contracts) ---")
+        log_ok(
+            f"Skipping skeleton agent — existing outline detected at {skeleton_path} "
+            f"({skeleton_path.stat().st_size:,} bytes)"
+        )
+    else:
+        log("--- Phase 1a: Skeleton (contracts) ---")
+        cc_skeleton_prefix = (
+            "CRITICAL OVERRIDE — THIS SUPERSEDES ALL INSTRUCTIONS ABOVE.\n"
+            "Complete ONLY the skeleton phase (Phase 1: ARCHITECT). "
+            "Write creative_output/outline_skeleton.md with the full story foundation, "
+            "character roster, location roster, per-scene construction specs, and "
+            "continuity chain. Do NOT write scene prose. Do NOT write creative_output.md. "
+            "Do NOT proceed to Phase 2 or Phase 3. Skeleton ONLY. "
+            "Stop after the skeleton is complete and update your state."
+        )
+        result_skeleton = run_agent("creative_coordinator", prompt_file,
+                                    dry_run=dry_run, prompt_prefix=cc_skeleton_prefix)
+        check_agent_result("creative_coordinator_skeleton", result_skeleton, timer)
+
+    state = _checkpoint("skeleton_complete")
 
     # Step 2: Parallel Haiku workers write prose per scene
     log("--- Phase 1b: Parallel prose writing (Haiku per scene) ---")
     if not dry_run:
-        base = PROJECT_DIR
-        skeleton_path = base / "creative_output" / "outline_skeleton.md"
         if not skeleton_path.exists():
             log_err("Skeleton not found — cannot dispatch parallel prose workers")
         else:
-            # Count scenes from skeleton
-            skeleton_text = skeleton_path.read_text(encoding="utf-8")
-            # Heuristic: count "SCENE X" or "Scene X" headers
-            import re as _re
-            scene_headers = _re.findall(r'(?:SCENE|Scene)\s+(\d+)', skeleton_text)
-            scene_count = max(len(set(scene_headers)), 1)
-            log(f"Detected {scene_count} scene(s) in skeleton — spawning Haiku workers")
-
-            haiku_model = "claude-haiku-4-5-20251001"
-
-            def spawn_prose_worker(scene_num: int) -> tuple[int, subprocess.CompletedProcess, Timer]:
-                worker_timer = Timer()
-                prose_prefix = (
-                    f"CRITICAL OVERRIDE — THIS SUPERSEDES ALL INSTRUCTIONS ABOVE.\n"
-                    f"You are a PARALLEL PROSE WORKER. Ignore ALL phase logic, skeleton "
-                    f"writing, assembly, quality checks, and state updates above.\n"
-                    f"Your ONLY task:\n"
-                    f"  1. Read creative_output/outline_skeleton.md\n"
-                    f"  2. Write Scene {scene_num} prose to: "
-                    f"creative_output/scenes/scene_{scene_num:02d}_draft.md\n"
-                    f"  3. Print 'Scene {scene_num} complete.' and STOP.\n\n"
-                    f"Format: screenplay/novel hybrid. One paragraph = one frame.\n"
-                    f"Do NOT write other scenes. Do NOT write creative_output.md.\n"
-                    f"Do NOT write the skeleton. Do NOT run assembly. Do NOT run "
-                    f"quality checks. Do NOT update state.json or context.json.\n"
-                    f"Do NOT print summaries, checklists, or compliance tables.\n"
-                    f"Write the scene file, print the completion line, stop.\n"
+            scene_numbers = state["expected_scene_numbers"]
+            if not scene_numbers:
+                log_err("Could not detect any scenes from the skeleton — cannot dispatch prose workers")
+            else:
+                scenes_dir.mkdir(parents=True, exist_ok=True)
+                existing_scene_numbers = state["completed_scene_numbers"]
+                missing_scene_numbers = state["missing_scene_numbers"]
+                log(
+                    f"Detected {len(scene_numbers)} scene(s) in skeleton — "
+                    f"{len(existing_scene_numbers)} already present, "
+                    f"{len(missing_scene_numbers)} missing"
                 )
-                result = run_agent(
-                    f"prose_worker_scene_{scene_num:02d}", prompt_file,
-                    dry_run=dry_run, prompt_prefix=prose_prefix,
-                    model=haiku_model,
-                    timeout=300,  # 5 min per scene — Haiku should finish well under this
-                )
-                return scene_num, result, worker_timer
-
-            # Spawn all scene workers in parallel
-            prose_results = {}
-            with ThreadPoolExecutor(max_workers=min(scene_count, 10)) as executor:
-                futures = {
-                    executor.submit(spawn_prose_worker, i): i
-                    for i in range(1, scene_count + 1)
-                }
-                for future in as_completed(futures):
-                    scene_num = futures[future]
-                    try:
-                        sn, res, wt = future.result()
-                        prose_results[sn] = (res, wt)
-                        log(f"Prose worker scene {sn} finished in {wt.elapsed_str()} "
-                            f"(exit={res.returncode})")
-                        if res.returncode != 0:
-                            log_err(f"Prose worker scene {sn} failed")
-                    except Exception as e:
-                        log_err(f"Prose worker scene {scene_num} raised: {e}")
-
-            ok_count = sum(1 for r, _ in prose_results.values() if r.returncode == 0)
-            log(f"Parallel prose: {ok_count}/{scene_count} workers succeeded")
+                if existing_scene_numbers:
+                    log(
+                        "Skipping existing scene draft(s): "
+                        + ", ".join(f"{scene_num:02d}" for scene_num in existing_scene_numbers)
+                    )
+                if missing_scene_numbers:
+                    run_prose_batch(missing_scene_numbers, attempt_label="Parallel prose")
+                else:
+                    log_ok("All expected scene drafts already exist — skipping prose workers")
     else:
         log("[DRY-RUN] Would spawn parallel Haiku prose workers per scene", YELLOW)
 
-    # Step 3: CC assembles all scene drafts into creative_output.md
-    # Guard: skip if a runaway prose worker already produced the assembly
-    co_path = PROJECT_DIR / "creative_output" / "creative_output.md"
-    result_assembly = None
-    cc_assembly_prefix = (
-        "CRITICAL OVERRIDE — THIS SUPERSEDES ALL INSTRUCTIONS ABOVE.\n"
-        "Complete ONLY the assembly phase (Phase 3: ASSEMBLY). "
-        "All scene drafts have been written by parallel workers to "
-        "creative_output/scenes/scene_*_draft.md. Read all scene drafts in sequence. "
-        "Run continuity check, smooth transitions, verify beat coverage, "
-        "and write the final creative_output/creative_output.md. "
-        "Do NOT write the skeleton. Do NOT regenerate scene prose that is already good. "
-        "Do NOT run Phase 1 or Phase 2. Assembly ONLY."
-    )
-    if not dry_run and co_path.exists() and co_path.stat().st_size > 1000:
-        log_warn("creative_output.md already exists (likely written by a prose worker "
-                 "that ran the full CC pipeline). Skipping assembly spawn.")
-        log(f"  Existing file: {co_path.stat().st_size:,} bytes")
+    state = _checkpoint("prose_complete")
+
+    # Step 3: Deterministic assembly of all scene drafts into creative_output.md
+    log("--- Phase 1c: Deterministic assembly ---")
+    if not dry_run:
+        if not state["expected_scene_numbers"]:
+            log_warn("Skipping assembly — no scene numbers could be detected from the skeleton")
+        elif state["missing_scene_numbers"]:
+            log_warn(
+                "Skipping assembly — missing scene draft(s): "
+                + ", ".join(f"{scene_num:02d}" for scene_num in state["missing_scene_numbers"])
+            )
+        else:
+            output_path = _assemble_creative_output_from_drafts(
+                base,
+                state["expected_scene_numbers"],
+            )
+            verb = "Rebuilt" if state["creative_output_exists"] else "Built"
+            log_ok(
+                f"{verb} creative_output.md deterministically from "
+                f"{state['completed_scene_count']} scene draft(s) -> {output_path}"
+            )
+            state = _checkpoint("assembly_complete")
     else:
-        log("--- Phase 1c: Assembly ---")
-        result_assembly = run_agent("creative_coordinator", prompt_file,
-                                    dry_run=dry_run, prompt_prefix=cc_assembly_prefix)
-        check_agent_result("creative_coordinator_assembly", result_assembly, timer)
+        log("[DRY-RUN] Would stitch scene drafts into creative_output.md deterministically", YELLOW)
 
     created_files = []
     if not dry_run:
-        base = PROJECT_DIR
         verify_files("1", [
-            base / "creative_output" / "outline_skeleton.md",
-            base / "creative_output" / "creative_output.md",
+            skeleton_path,
+            creative_output_path,
         ])
         log("Files created by Phase 1:")
-        list_dir_files(base / "creative_output")
-        created_files = collect_files_in(base / "creative_output")
-        save_phase_report(1, timer, "creative_coordinator", result_assembly, created_files)
+        list_dir_files(creative_dir)
+        created_files = collect_files_in(creative_dir)
+        save_phase_report(1, timer, "phase_1_hybrid", result_skeleton, created_files)
 
         # Quality gate
         if not run_quality_gate(1, base):
-            log_warn("Phase 1 quality gate FAILED — re-running assembly (attempt 2/2)...")
-            timer2 = Timer()
-            result2 = run_agent("creative_coordinator", prompt_file,
-                                dry_run=dry_run, prompt_prefix=cc_assembly_prefix)
-            check_agent_result("creative_coordinator", result2, timer2)
+            log_warn("Phase 1 quality gate FAILED — retrying missing prose + deterministic assembly (attempt 2/2)...")
+            retry_state = _scan_phase_1_state(base)
+            if retry_state["missing_scene_numbers"]:
+                run_prose_batch(retry_state["missing_scene_numbers"], attempt_label="Phase 1 recovery")
+                retry_state = _scan_phase_1_state(base)
+            if retry_state["expected_scene_numbers"] and not retry_state["missing_scene_numbers"]:
+                _assemble_creative_output_from_drafts(base, retry_state["expected_scene_numbers"])
+                _write_phase_checkpoint(1, {"stage": "assembly_rebuilt", **_scan_phase_1_state(base)})
             if not run_quality_gate(1, base):
                 log_warn("Phase 1 quality gate still failing after retry — proceeding with warnings")
 
@@ -1324,151 +1994,254 @@ def phase_1_narrative(dry_run: bool, phase_timers: dict) -> None:
 
 
 def phase_2_morpheus(dry_run: bool, phase_timers: dict) -> None:
-    """Phase 2 -- Morpheus Swarm builds narrative graph, assembles prompts, materializes flat files.
+    """Phase 2 -- CC-First deterministic graph construction + enrichment.
 
-    Decomposes the monolithic Morpheus agent into 5 specialized swarm agents:
-      1. Entity Seeder   — project config, world context, cast, locations, props, scenes, edges
-      2. Frame Parser     — atomize prose → frames, cast/prop/location states
-      3. Dialogue Wirer   — extract dialogue, wire dialogue-frame edges (parallel with 4)
-      4. Compositor       — frame environment, background, composition, directing (parallel with 3)
-      5. Continuity Wirer — merge overlays, wire edges, continuity audit, validation
-
-    Agents share a cached context seed (prepended system prompt prefix) for API-level
-    prompt caching — Agent 1 pays full cost, Agents 2-5 get ~90% input discount.
+    Step 2a:   Python parser (deterministic, <5 seconds)
+               Reads CC output files → NarrativeGraph with all entities, frames, dialogue, edges.
+    Step 2b:   Parallel Haiku workers for per-frame enrichment (composition, environment, directing).
+    Step 2b.5: Grok cinematic tagging — assigns CinematicTag to every FrameNode.
+    Step 2c:   Continuity validator — deterministic graph integrity checks (no LLM).
+    Step 2d:   Prompt assembly + materialization (existing deterministic post-processing).
+    Optional:  Graph auditor agent spawned after Step 2c if --audit flag is set.
     """
-    log_header("PHASE 2 -- Morpheus Swarm (5-Agent Graph Build + Prompt Assembly)")
+    log_header("PHASE 2 -- CC-First Graph Build (Parser → Haiku → Grok → Validator)")
     timer = Timer()
     phase_timers["phase_2"] = timer
 
-    # ── Pre-flight: initialize graph ──────────────────────────────────────
+    # ── Pre-flight: initialize graph dir ──────────────────────────────────
     if not dry_run:
         manifest = read_manifest()
         project_id = manifest.get("projectId", manifest.get("project", {}).get("id", "unknown"))
         graph_path = PROJECT_DIR / "graph" / "narrative_graph.json"
         if not graph_path.exists():
-            log("Initializing narrative graph...")
+            log("Initializing narrative graph directory...")
             _stream_subprocess(
                 [sys.executable, str(SKILLS_DIR / "graph_init"),
                  "--project-id", str(project_id), "--project-dir", str(PROJECT_DIR)],
                 cwd=PROJECT_DIR, label="graph_init")
-            log_ok("Graph initialized")
+            log_ok("Graph directory initialized")
 
-    # ── Build context seed once (shared by all 5 agents) ──────────────────
+    # ── Build context seed (used by graph auditor agent if --audit) ────────
     if not dry_run:
-        log("Building context seed for Morpheus swarm...")
+        log("Building context seed...")
         seed = build_context_seed(PROJECT_DIR)
         seed_kb = len(seed.encode("utf-8")) // 1024
-        log_ok(f"Context seed built: {seed_kb}KB (shared cacheable prefix)")
+        log_ok(f"Context seed built: {seed_kb}KB")
     else:
         seed = ""
 
-    # ── Agent 1: Entity Seeder (sequential, foundational) ─────────────────
-    log_header("  SWARM AGENT 1/5 — Entity Seeder")
-    t1 = Timer()
-    r1 = run_agent(
-        "morpheus_1_entity_seeder",
-        str(PROMPTS_DIR / "morpheus_1_entity_seeder.md"),
-        context_seed=seed, dry_run=dry_run,
-    )
-    check_agent_result("morpheus_1_entity_seeder", r1, t1)
-
+    # ── Step 2a: Python parser (deterministic, <5 seconds) ────────────────
+    log_header("  STEP 2a — CC Parser (deterministic)")
+    t2a = Timer()
     if not dry_run:
-        if not _validate_graph_has_entities(PROJECT_DIR):
-            log_warn("Entity Seeder may not have produced entities — continuing anyway")
+        from graph.cc_parser import parse_cc_output
+        from graph.schema import ProjectNode
+        from graph.store import GraphStore
 
-    # ── Agent 2: Frame Parser (sequential, needs entities) ────────────────
-    log_header("  SWARM AGENT 2/5 — Frame Parser")
-    t2 = Timer()
-    r2 = run_agent(
-        "morpheus_2_frame_parser",
-        str(PROMPTS_DIR / "morpheus_2_frame_parser.md"),
-        context_seed=seed, dry_run=dry_run,
-    )
-    check_agent_result("morpheus_2_frame_parser", r2, t2)
+        config = _read_onboarding_config(PROJECT_DIR)
+        project_node = ProjectNode(
+            project_id=config.get("projectId", ""),
+            title=config.get("projectName", ""),
+            pipeline=config.get("pipeline", "story_upload"),
+            stickiness_level=config.get("stickinessLevel", 3),
+            stickiness_permission=config.get("stickinessPermission", ""),
+            output_size=config.get("outputSize", "short"),
+            output_size_label=config.get("outputSizeLabel", ""),
+            frame_range=config.get("frameRange", [10, 20]),
+            scene_range=config.get("sceneRange", [1, 3]),
+            media_style=config.get("mediaStyle", "live_clear"),
+            media_style_prefix=config.get("mediaStylePrefix", ""),
+            aspect_ratio=config.get("aspectRatio", "16:9"),
+            style=config.get("style", []),
+            genre=config.get("genre", []),
+            mood=config.get("mood", []),
+            extra_details=config.get("extraDetails", ""),
+            source_files=config.get("sourceFiles", []),
+        )
 
-    if not dry_run:
-        if not _validate_graph_has_frames(PROJECT_DIR):
-            log_warn("Frame Parser may not have produced frames — continuing anyway")
+        graph = parse_cc_output(PROJECT_DIR, project_node)
+        store = GraphStore(PROJECT_DIR)
+        store.save(graph)
+        from graph.reference_collector import ReferenceImageCollector
 
-    # ── Agents 3+4: Dialogue Wirer + Compositor (PARALLEL) ────────────────
-    log_header("  SWARM AGENTS 3+4 — Dialogue Wirer + Compositor (parallel)")
-    t34 = Timer()
-
-    if dry_run:
-        # Dry-run both sequentially
-        run_agent("morpheus_3_dialogue_wirer",
-                  str(PROMPTS_DIR / "morpheus_3_dialogue_wirer.md"),
-                  context_seed=seed, dry_run=True)
-        run_agent("morpheus_4_compositor",
-                  str(PROMPTS_DIR / "morpheus_4_compositor.md"),
-                  context_seed=seed, dry_run=True)
+        ReferenceImageCollector(graph, Path(PROJECT_DIR)).sync_cast_bible(
+            store=store,
+            run_id=PIPELINE_RUN_ID,
+            sequence_id=project_node.project_id,
+        )
+        log_ok(
+            f"Parser complete in {t2a.elapsed_str()}: "
+            f"{len(graph.frames)} frames, {len(graph.cast)} cast, "
+            f"{len(graph.locations)} locations, {len(graph.props)} props, "
+            f"{len(graph.edges)} edges"
+        )
     else:
-        def _run_agent_3():
-            return run_agent(
-                "morpheus_3_dialogue_wirer",
-                str(PROMPTS_DIR / "morpheus_3_dialogue_wirer.md"),
-                context_seed=seed,
-            )
+        log("[DRY-RUN] Would run cc_parser.parse_cc_output() → NarrativeGraph", YELLOW)
 
-        def _run_agent_4():
-            return run_agent(
-                "morpheus_4_compositor",
-                str(PROMPTS_DIR / "morpheus_4_compositor.md"),
-                context_seed=seed,
-            )
-
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            future_3 = pool.submit(_run_agent_3)
-            future_4 = pool.submit(_run_agent_4)
-
-            results_34 = {}
-            for future in as_completed([future_3, future_4]):
-                agent_name = "morpheus_3_dialogue_wirer" if future is future_3 else "morpheus_4_compositor"
-                try:
-                    results_34[agent_name] = future.result()
-                except Exception as e:
-                    log_err(f"Agent '{agent_name}' raised exception: {e}")
-                    results_34[agent_name] = subprocess.CompletedProcess(
-                        [], returncode=1, stdout="", stderr=str(e))
-
-        for agent_name, result in results_34.items():
-            check_agent_result(agent_name, result, t34)
-
-    log_ok(f"Parallel agents 3+4 complete in {t34.elapsed_str()}")
-
-    # ── Agent 5: Continuity Wirer (sequential, needs all above) ───────────
-    log_header("  SWARM AGENT 5/5 — Continuity Wirer")
-    t5 = Timer()
-    r5 = run_agent(
-        "morpheus_5_continuity_wirer",
-        str(PROMPTS_DIR / "morpheus_5_continuity_wirer.md"),
-        context_seed=seed, dry_run=dry_run,
-    )
-    check_agent_result("morpheus_5_continuity_wirer", r5, t5)
-
-    # ── Deterministic post-processing (no agent needed) ───────────────────
+    # ── Step 2b: Parallel Haiku enrichment ────────────────────────────────
+    log_header("  STEP 2b — Haiku Enrichment (parallel per-frame)")
+    t2b = Timer()
     if not dry_run:
-        log("Running deterministic prompt assembly + materialization...")
+        from graph.haiku_enricher import (
+            build_haiku_inputs, apply_haiku_enrichment,
+        )
 
-        # Assemble prompts
-        _stream_subprocess(
-            [sys.executable, str(SKILLS_DIR / "graph_assemble_prompts"),
-             "--project-dir", str(PROJECT_DIR)],
-            cwd=PROJECT_DIR, label="graph_assemble_prompts")
+        inputs = build_haiku_inputs(graph)
+        pending_inputs = _pending_haiku_inputs(graph, inputs)
+        if not pending_inputs:
+            log_ok("All frames already contain core Haiku enrichment — skipping Step 2b")
+            results = []
+        else:
+            log(
+                f"Dispatching {len(pending_inputs)} Haiku workers via Claude CLI "
+                f"(max_concurrent=20, skipped={len(inputs) - len(pending_inputs)} already enriched)..."
+            )
+            results = _run_haiku_cli_batch(
+                pending_inputs,
+                dry_run=dry_run,
+                max_concurrent=20,
+            )
 
-        # Materialize to flat files
-        _stream_subprocess(
-            [sys.executable, str(SKILLS_DIR / "graph_materialize"),
-             "--project-dir", str(PROJECT_DIR)],
-            cwd=PROJECT_DIR, label="graph_materialize")
+        h_successes = 0
+        h_failures = 0
+        for result in results:
+            if "error" in result:
+                h_failures += 1
+                log_warn(f"Frame {result.get('frame_id')} enrichment failed: {result['error']}")
+            else:
+                apply_haiku_enrichment(graph, result)
+                h_successes += 1
+        store.save(graph)
+        log_ok(
+            f"Haiku enrichment complete in {t2b.elapsed_str()}: "
+            f"{h_successes} succeeded, {h_failures} failed"
+        )
+    else:
+        log("[DRY-RUN] Would dispatch parallel Haiku per-frame enrichment (max_concurrent=20)", YELLOW)
 
-        # Validate video direction (auto-fix durations)
-        _stream_subprocess(
-            [sys.executable, str(SKILLS_DIR / "graph_validate_video_direction"),
-             "--project-dir", str(PROJECT_DIR), "--fix"],
-            cwd=PROJECT_DIR, label="graph_validate_video_direction")
+    # ── Step 2b.5: Grok cinematic tagging ─────────────────────────────────
+    log_header("  STEP 2b.5 — Grok Cinematic Tagging")
+    t2b5 = Timer()
+    if not dry_run:
+        import asyncio as _asyncio2
+        from graph.grok_tagger import tag_all_frames
 
-        log_ok("Deterministic post-processing complete")
+        xai_key = os.getenv("XAI_API_KEY", "")
+        if not xai_key:
+            log_warn("XAI_API_KEY not set — skipping Grok cinematic tagging")
+        else:
+            tag_results = _asyncio2.run(tag_all_frames(PROJECT_DIR, api_key=xai_key))
+            log_ok(
+                f"Grok tagging complete in {t2b5.elapsed_str()}: "
+                f"{tag_results.get('tagged', 0)} tagged, "
+                f"{tag_results.get('failed', 0)} failed, "
+                f"{tag_results.get('skipped', 0)} skipped"
+            )
+    else:
+        log("[DRY-RUN] Would run Grok cinematic tagging (tag_all_frames)", YELLOW)
+
+    # ── Step 2c: Self-recovering continuity validation ────────────────────
+    log_header("  STEP 2c — Self-Recovering Continuity Validation")
+    t2c = Timer()
+    MAX_FIX_PASSES = 2
+    if not dry_run:
+        from graph.continuity_validator import validate_continuity
+        from graph.haiku_enricher import build_haiku_inputs, apply_haiku_enrichment
+        from graph.store import GraphStore as _GraphStore
+
+        _store_cv = _GraphStore(PROJECT_DIR)
+        graph_cv = _store_cv.load()
+
+        unresolved_issues: list[dict] = []
+
+        for pass_num in range(1, MAX_FIX_PASSES + 1):
+            log(f"  [Pass {pass_num}/{MAX_FIX_PASSES}] Running validate_continuity(fix=True)...")
+            issues = validate_continuity(graph_cv, fix=True, project_dir=PROJECT_DIR)
+
+            cv_errors = [i for i in issues if i["severity"] == "ERROR"]
+            cv_warns  = [i for i in issues if i["severity"] == "WARN"]
+            auto_fixed = [i for i in issues if i.get("auto_fixed")]
+            needs_re_enrich = [i for i in issues if i.get("needs_re_enrichment") and not i.get("auto_fixed")]
+
+            log(
+                f"  Pass {pass_num}: {len(cv_errors)} error(s), {len(cv_warns)} warn(s) — "
+                f"{len(auto_fixed)} auto-fixed, {len(needs_re_enrich)} need re-enrichment",
+                YELLOW if (cv_errors or needs_re_enrich) else RESET,
+            )
+            for i in auto_fixed[:5]:
+                log(f"    [FIXED] {i['check_name']}: {i['message']}")
+
+            if needs_re_enrich and pass_num < MAX_FIX_PASSES:
+                log(f"  Dispatching Haiku re-enrichment for {len(needs_re_enrich)} frame issue(s)...")
+                issue_frame_ids = {
+                    str(issue.get("frame_id", "")).strip()
+                    for issue in needs_re_enrich
+                    if issue.get("frame_id")
+                }
+                re_inputs = [
+                    input_dict
+                    for input_dict in build_haiku_inputs(graph_cv)
+                    if str(input_dict.get("frame_id", "")).strip() in issue_frame_ids
+                ]
+                re_results = _run_haiku_cli_batch(
+                    re_inputs,
+                    dry_run=dry_run,
+                    max_concurrent=10,
+                )
+                re_ok = 0
+                for r in re_results:
+                    if "error" not in r:
+                        apply_haiku_enrichment(graph_cv, r)
+                        re_ok += 1
+                log(f"  Re-enrichment complete: {re_ok}/{len(re_results)} succeeded")
+                _store_cv.save(graph_cv)
+                continue  # re-validate on next pass
+
+            # Final pass or nothing left to fix
+            unresolved_issues = [
+                i for i in issues if not i.get("auto_fixed") and i.get("severity") == "ERROR"
+            ]
+            break
+
+        if unresolved_issues:
+            log_warn(
+                f"Continuity validation: {len(unresolved_issues)} unresolved error(s) after "
+                f"{MAX_FIX_PASSES} pass(es) — proceeding with warnings"
+            )
+            for e in unresolved_issues[:10]:
+                log_warn(f"  [UNRESOLVED] {e['check_name']}: {e['message']}")
+        else:
+            log_ok(f"Continuity validation resolved in {t2c.elapsed_str()}")
+
+        remaining_warns = [i for i in issues if i.get("severity") == "WARN" and not i.get("auto_fixed")]
+        for w in remaining_warns[:5]:
+            log(f"  [WARN] {w['check_name']}: {w['message']}", YELLOW)
+    else:
+        log("[DRY-RUN] Would run self-recovering validate_continuity(fix=True) loop", YELLOW)
+
+    # ── Optional: Graph auditor agent (--audit mode only) ─────────────────
+    if AUDIT_PHASE2:
+        log_header("  GRAPH AUDITOR — QA Agent (--audit)")
+        t_audit = Timer()
+        if not dry_run:
+            auditor_prompt = PROMPTS_DIR / "morpheus_graph_auditor.md"
+            if auditor_prompt.exists():
+                r_audit = run_agent(
+                    "morpheus_graph_auditor",
+                    str(auditor_prompt),
+                    context_seed=seed, dry_run=False,
+                )
+                check_agent_result("morpheus_graph_auditor", r_audit, t_audit)
+            else:
+                log_warn(f"Graph auditor prompt not found: {auditor_prompt} — skipping")
+        else:
+            log("[DRY-RUN] Would spawn graph auditor agent (morpheus_graph_auditor.md)", YELLOW)
+
+    # ── Step 2d: Prompt assembly + materialization ─────────────────────────
+    if not dry_run:
+        _run_phase_2_postprocessing(PROJECT_DIR)
+    else:
+        log("[DRY-RUN] Would run prompt assembly + materialization (_run_phase_2_postprocessing)", YELLOW)
 
     # ── Verification ──────────────────────────────────────────────────────
     created_files = []
@@ -1478,54 +2251,40 @@ def phase_2_morpheus(dry_run: bool, phase_timers: dict) -> None:
         for sub in ("cast", "locations", "props"):
             d = base / sub
             if not any(d.glob("*.json")):
-                log_warn(f"No JSON files found in {sub}/ -- swarm may not "
-                         f"have materialized fully.")
+                log_warn(f"No JSON files found in {sub}/ — parser may not have materialized fully.")
         manifest = read_manifest()
         if not manifest.get("frames"):
-            log_warn("manifest.frames[] is empty -- swarm may not have "
-                     "populated frames.")
+            log_warn("manifest.frames[] is empty — parser may not have populated frames.")
 
         # Verify graph exists and has data
         graph_path = base / "graph" / "narrative_graph.json"
         if graph_path.exists():
             log_ok(f"Narrative graph: {graph_path.stat().st_size // 1024}KB")
         else:
-            log_warn("narrative_graph.json not found — swarm may not have saved graph")
+            log_warn("narrative_graph.json not found — parser may not have saved graph")
 
         # Verify prompt files exist
-        frame_prompts = list((base / "frames" / "prompts").glob("*_image.json")) if (base / "frames" / "prompts").exists() else []
-        video_prompts = list((base / "video" / "prompts").glob("*_video.json")) if (base / "video" / "prompts").exists() else []
+        frame_prompts = (
+            list((base / "frames" / "prompts").glob("*_image.json"))
+            if (base / "frames" / "prompts").exists() else []
+        )
+        video_prompts = (
+            list((base / "video" / "prompts").glob("*_video.json"))
+            if (base / "video" / "prompts").exists() else []
+        )
         log_ok(f"Assembled prompts: {len(frame_prompts)} image, {len(video_prompts)} video")
 
         log("Files created by Phase 2:")
         for sub in ("cast", "locations", "props", "graph"):
             list_dir_files(base / sub)
             created_files.extend(collect_files_in(base / sub))
-        # Use Agent 5 result for phase report (final agent)
-        save_phase_report(2, timer, "morpheus_swarm", r5 if not dry_run else
+        save_phase_report(2, timer, "cc_first_pipeline",
                           subprocess.CompletedProcess([], 0, "", ""), created_files)
 
-        # Quality gate (retry with monolithic fallback if swarm fails)
+        # Quality gate — retry postprocessing only (no agent spawns)
         if not run_quality_gate(2, base):
-            log_warn("Phase 2 quality gate FAILED — re-running continuity wirer (attempt 2/2)...")
-            timer2 = Timer()
-            result2 = run_agent(
-                "morpheus_5_continuity_wirer",
-                str(PROMPTS_DIR / "morpheus_5_continuity_wirer.md"),
-                context_seed=seed, dry_run=dry_run,
-            )
-            check_agent_result("morpheus_5_continuity_wirer", result2, timer2)
-
-            # Re-run deterministic steps
-            _stream_subprocess(
-                [sys.executable, str(SKILLS_DIR / "graph_assemble_prompts"),
-                 "--project-dir", str(PROJECT_DIR)],
-                cwd=PROJECT_DIR, label="graph_assemble_prompts_retry")
-            _stream_subprocess(
-                [sys.executable, str(SKILLS_DIR / "graph_materialize"),
-                 "--project-dir", str(PROJECT_DIR)],
-                cwd=PROJECT_DIR, label="graph_materialize_retry")
-
+            log_warn("Phase 2 quality gate FAILED — re-running postprocessing (attempt 2/2)...")
+            _run_phase_2_postprocessing(PROJECT_DIR)
             if not run_quality_gate(2, base):
                 log_warn("Phase 2 quality gate still failing after retry — proceeding with warnings")
 
@@ -1559,6 +2318,16 @@ _ASSET_PROMPT_MAP = [
     ("props/prompts", "props/generated", "_prop.json", ".png", "prop", "propId"),
 ]
 
+# Maps project aspectRatio (from onboarding_config.json) → expected image size key.
+# Cast composites are always portrait_9_16 regardless of project AR and are excluded
+# from this check. Location and prop prompts must match the project's declared AR.
+_AR_TO_SIZE_MAP: dict[str, str] = {
+    "16:9": "landscape_16_9",
+    "9:16": "portrait_9_16",
+    "4:3": "landscape_4_3",
+    "1:1": "square_hd",
+}
+
 MIN_VALID_SIZE = 10240  # 10KB — anything smaller is likely corrupt/empty
 MAX_REGEN_ATTEMPTS = 2
 
@@ -1567,26 +2336,52 @@ def _programmatic_asset_validation_and_regen(base: Path) -> None:
     """Programmatic replacement for the image_verifier agent.
 
     For each asset type (cast/location/prop):
-      1. Read prompt files to know what SHOULD exist.
+      1. Build the canonical prompt from the graph.
       2. Check if the output image exists and is valid (>10KB).
       3. Re-generate missing or corrupt images via sw_fresh_generation.
-      4. Queue manifest updates for all valid assets.
+      4. Write successful asset paths back into the graph and re-project manifest.
     """
+    from graph.prompt_assembler import (
+        assemble_composite_prompt,
+        assemble_location_prompt,
+        assemble_prop_prompt,
+    )
+    from graph.runtime_state import (
+        mark_cast_asset,
+        mark_location_asset,
+        mark_prop_asset,
+        save_graph_projection,
+    )
+    from graph.store import GraphStore
+
     stats = {"reviewed": 0, "missing_regen": 0, "corrupt_regen": 0, "regen_ok": 0, "regen_fail": 0}
 
-    manifest_updates: list[dict] = []
+    # Load the project's declared aspect ratio once so we can validate prompt sizes
+    # against it before calling sw_fresh_generation.  Cast composites are always
+    # portrait_9_16 and are excluded from this check (see _AR_TO_SIZE_MAP).
+    _onboarding = _read_onboarding_config(base)
+    project_ar: str = str(_onboarding.get("aspectRatio", "")).strip()
+    run_id = os.environ.get(RUN_ID_ENV, PIPELINE_RUN_ID)
+    phase = os.environ.get(PHASE_ENV, "")
+    store = GraphStore(str(base))
+    graph = store.load()
+    graph_dirty = False
 
-    for prompt_rel, output_rel, prompt_suffix, output_suffix, target, id_field in _ASSET_PROMPT_MAP:
-        prompt_dir = base / prompt_rel
-        output_dir = base / output_rel
-        if not prompt_dir.exists():
-            continue
-        output_dir.mkdir(parents=True, exist_ok=True)
+    prompt_builders = {
+        "cast": (graph.cast, assemble_composite_prompt),
+        "location": (graph.locations, assemble_location_prompt),
+        "prop": (graph.props, assemble_prop_prompt),
+    }
 
-        for prompt_file in sorted(prompt_dir.glob(f"*{prompt_suffix}")):
-            # Derive entity ID and expected output path
-            entity_id = prompt_file.stem.replace(prompt_suffix.replace(".json", ""), "")
-            output_path = output_dir / f"{entity_id}{output_suffix}"
+    for target, (registry, prompt_builder) in prompt_builders.items():
+        for entity_id in sorted(registry.keys()):
+            prompt_data = prompt_builder(graph, entity_id)
+            output_path = base / prompt_data["out_path"]
+            prompt_file = base / {
+                "cast": f"cast/prompts/{entity_id}_composite.json",
+                "location": f"locations/prompts/{entity_id}_location.json",
+                "prop": f"props/prompts/{entity_id}_prop.json",
+            }[target]
             stats["reviewed"] += 1
 
             needs_regen = False
@@ -1600,38 +2395,54 @@ def _programmatic_asset_validation_and_regen(base: Path) -> None:
                 needs_regen = True
 
             if needs_regen:
-                # Read the original prompt from the JSON file
-                try:
-                    prompt_data = json.loads(prompt_file.read_text(encoding="utf-8"))
-                    gen_prompt = prompt_data.get("prompt", prompt_data.get("text", ""))
-                    if not gen_prompt:
-                        log_warn(f"  No prompt found in {prompt_file.name} — skipping regen")
-                        stats["regen_fail"] += 1
-                        continue
-                except (json.JSONDecodeError, OSError) as e:
-                    log_warn(f"  Failed to read prompt {prompt_file.name}: {e}")
+                gen_prompt = prompt_data.get("prompt", prompt_data.get("text", ""))
+                if not gen_prompt:
+                    log_warn(f"  No prompt available for {entity_id} — skipping regen")
                     stats["regen_fail"] += 1
                     continue
 
-                # Determine size preset from prompt data
-                size = prompt_data.get("image_size", "landscape_16_9")
+                try:
+                    size = _resolve_regen_image_size(prompt_data, prompt_file=prompt_file)
+                except ValueError as exc:
+                    log_warn(f"  {exc} — skipping regen")
+                    stats["regen_fail"] += 1
+                    continue
 
-                # Attempt regen via sw_fresh_generation (higher quality)
+                if target in ("location", "prop") and project_ar:
+                    expected_size = _AR_TO_SIZE_MAP.get(project_ar, "landscape_16_9")
+                    if size != expected_size:
+                        log_warn(
+                            f"  {prompt_file.name}: aspect ratio mismatch — "
+                            f"prompt size={size!r} but project aspectRatio={project_ar!r} "
+                            f"expects {expected_size!r}. Proceeding with prompt value."
+                        )
+
                 regen_ok = False
                 for attempt in range(1, MAX_REGEN_ATTEMPTS + 1):
                     log(f"  Regenerating {output_path.name} (attempt {attempt}/{MAX_REGEN_ATTEMPTS})...")
                     regen_result = _stream_subprocess(
-                        [sys.executable, str(SKILLS_DIR / "sw_fresh_generation"),
-                         "--prompt", gen_prompt,
-                         "--size", size,
-                         "--out", str(output_path)],
-                        cwd=base, timeout=120, label=f"regen_{entity_id}",
+                        [
+                            sys.executable,
+                            str(SKILLS_DIR / "sw_fresh_generation"),
+                            "--prompt",
+                            gen_prompt,
+                            "--size",
+                            size,
+                            "--out",
+                            str(output_path),
+                            "--run-id",
+                            run_id,
+                            "--phase",
+                            phase,
+                        ],
+                        cwd=base,
+                        timeout=120,
+                        label=f"regen_{entity_id}",
                     )
                     if regen_result.returncode == 0 and output_path.exists() and output_path.stat().st_size >= MIN_VALID_SIZE:
                         log_ok(f"  Regenerated {output_path.name} successfully")
                         regen_ok = True
                         break
-                    # On safety filter or other failure, try rephrasing (strip adjectives)
                     gen_prompt = gen_prompt.replace("sexy", "").replace("violent", "").replace("bloody", "").strip()
 
                 if regen_ok:
@@ -1641,60 +2452,23 @@ def _programmatic_asset_validation_and_regen(base: Path) -> None:
                     log_warn(f"  Failed to regenerate {output_path.name} after {MAX_REGEN_ATTEMPTS} attempts — skipping")
                     continue
 
-            # Build manifest update for valid assets
             if output_path.exists() and output_path.stat().st_size >= MIN_VALID_SIZE:
                 rel_path = str(output_path.relative_to(base))
                 if target == "cast":
-                    manifest_updates.append({
-                        "target": "cast", id_field: entity_id,
-                        "set": {"compositePath": rel_path, "compositeStatus": "generated"},
-                    })
+                    mark_cast_asset(graph, entity_id, rel_path, run_id=run_id, actor="asset_validation", phase=phase)
                 elif target == "location":
-                    manifest_updates.append({
-                        "target": "location", id_field: entity_id,
-                        "set": {"primaryImagePath": rel_path, "imageStatus": "generated"},
-                    })
+                    mark_location_asset(graph, entity_id, rel_path, run_id=run_id, actor="asset_validation", phase=phase)
                 elif target == "prop":
-                    manifest_updates.append({
-                        "target": "prop", id_field: entity_id,
-                        "set": {"imagePath": rel_path, "imageStatus": "generated"},
-                    })
+                    mark_prop_asset(graph, entity_id, rel_path, run_id=run_id, actor="asset_validation", phase=phase)
+                graph_dirty = True
 
-    # Flush manifest updates via sw_queue_update
-    if manifest_updates:
-        payload = json.dumps({"updates": manifest_updates})
-        _stream_subprocess(
-            [sys.executable, str(SKILLS_DIR / "sw_queue_update"), "--payload", payload],
-            cwd=base, label="manifest_queue_update",
-        )
-        flush_manifest_queue()
-        log_ok(f"Queued {len(manifest_updates)} manifest update(s)")
+    if graph_dirty:
+        save_graph_projection(graph, base, store=store)
+        log_ok("Graph and manifest refreshed from validated asset outputs")
 
     log(f"Asset validation complete: {stats['reviewed']} reviewed, "
         f"{stats['missing_regen']} missing, {stats['corrupt_regen']} corrupt, "
         f"{stats['regen_ok']} regenerated OK, {stats['regen_fail']} failed")
-
-
-def _populate_voice_nodes(dry_run: bool) -> None:
-    """Populate VoiceNode entries in the graph for all speaking cast members.
-    Replaces the Voice Director agent — runs programmatically."""
-    if dry_run:
-        log("[DRY-RUN] Would populate voice nodes", YELLOW)
-        return
-
-    _stream_subprocess(
-        [sys.executable, str(SKILLS_DIR / "graph_populate_voices"),
-         "--project-dir", str(PROJECT_DIR)],
-        cwd=PROJECT_DIR, label="graph_populate_voices")
-    log_ok("Voice nodes populated in graph")
-
-
-def _generate_location_variants(dry_run: bool) -> None:
-    """Location direction variants are now generated as part of the primary
-    location 4x4 grid image. This step is a no-op retained for pipeline
-    phase ordering compatibility.
-    """
-    log("Location directions included in primary 4x4 grid — skipping separate generation")
 
 
 def _verify_storyboard_refs_tagged() -> tuple[bool, list[str]]:
@@ -1753,7 +2527,7 @@ def _generate_single_grid_storyboard(prompt_data: dict) -> dict | None:
     import asyncio as _asyncio
 
     grid_id = prompt_data.get("grid_id", "unknown")
-    grid_layout = prompt_data.get("grid", "3x3")
+    grid_layout = prompt_data.get("grid", "1x1")
     cell_prompts = prompt_data.get("cell_prompts", [])
     scene = prompt_data.get("scene", "")
     frame_ids = prompt_data.get("frame_ids", [])
@@ -1801,6 +2575,8 @@ def _generate_single_grid_storyboard(prompt_data: dict) -> dict | None:
             scene=scene,
             frame_ids=frame_ids,
             style_prefix=style_prefix,
+            run_id=PIPELINE_RUN_ID,
+            phase=os.environ.get(PHASE_ENV, ""),
         ))
         log_ok(f"  {grid_id}: storyboard generated → {result.get('composite', '')}")
         return result
@@ -1809,22 +2585,88 @@ def _generate_single_grid_storyboard(prompt_data: dict) -> dict | None:
         return None
 
 
+async def _generate_single_grid_storyboard_async(prompt_data: dict) -> dict | None:
+    """Async variant of _generate_single_grid_storyboard.
+
+    Calls grid_generate() directly with ``await`` so it can be used inside
+    a running event loop (e.g. asyncio.gather batches).  All skip-if-exists
+    and ref-resolution logic is identical to the sync version.
+    """
+    grid_id = prompt_data.get("grid_id", "unknown")
+    grid_layout = prompt_data.get("grid", "1x1")
+    cell_prompts = prompt_data.get("cell_prompts", [])
+    scene = prompt_data.get("scene", "")
+    frame_ids = prompt_data.get("frame_ids", [])
+    style_prefix = prompt_data.get("style_prefix", "")
+    output_dir = PROJECT_DIR / prompt_data.get("output_dir", f"frames/storyboards/{grid_id}")
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    composite = output_dir / "composite.png"
+
+    # Skip if already generated
+    if composite.exists() and composite.stat().st_size > 1000:
+        log(f"  {grid_id}: already exists ({composite.stat().st_size:,}B) — skipping")
+        frames_dir = output_dir / "frames"
+        frame_files = sorted(frames_dir.glob("f_*.png")) if frames_dir.exists() else []
+        if not frame_files:
+            frame_files = sorted(frames_dir.glob("frame_*.png")) if frames_dir.exists() else []
+        return {
+            "composite": str(composite),
+            "frames": [str(f) for f in frame_files],
+            "grid": grid_layout,
+        }
+
+    # Resolve reference images to absolute paths
+    ref_paths = []
+    for ref in prompt_data.get("refs", []):
+        ref_path = PROJECT_DIR / ref if not Path(ref).is_absolute() else Path(ref)
+        if ref_path.exists():
+            ref_paths.append(str(ref_path))
+        else:
+            log_warn(f"  {grid_id}: ref image missing: {ref}")
+
+    log(f"  {grid_id}: generating {grid_layout} storyboard ({len(ref_paths)} ref images)...")
+    log(f"  {grid_id}: {len(cell_prompts)} cell prompts stacked into {grid_layout} template")
+
+    try:
+        from graph.grid_generate import generate as grid_generate
+        result = await grid_generate(
+            grid=grid_layout,
+            output_dir=output_dir,
+            refs=ref_paths,
+            cell_prompts=cell_prompts,
+            scene=scene,
+            frame_ids=frame_ids,
+            style_prefix=style_prefix,
+            run_id=PIPELINE_RUN_ID,
+            phase=os.environ.get(PHASE_ENV, ""),
+        )
+        log_ok(f"  {grid_id}: storyboard generated → {result.get('composite', '')}")
+        return result
+    except Exception as exc:
+        log_warn(f"  {grid_id}: grid generation failed: {exc}")
+        return None
+
+
 def _update_grid_graph(grid_id: str, result: dict) -> None:
     """Update StoryboardGrid on graph with generated paths."""
     try:
+        from graph.runtime_state import mark_storyboard_asset, project_relative_path, save_graph_projection
         from graph.store import GraphStore
+
         store = GraphStore(str(PROJECT_DIR))
         graph = store.load()
-        grid = graph.storyboard_grids.get(grid_id)
-        if grid:
-            if grid.composite_image_path and grid.composite_image_path != result.get("composite"):
-                grid.storyboard_history.append(grid.composite_image_path)
-            grid.composite_image_path = result.get("composite", "")
-            frames = result.get("frames", [])
-            if frames:
-                grid.cell_image_dir = str(Path(frames[0]).parent)
-            grid.storyboard_status = "generated"
-            store.save(graph)
+        frames = result.get("frames", [])
+        mark_storyboard_asset(
+            graph,
+            grid_id,
+            composite_path=project_relative_path(PROJECT_DIR, result.get("composite")),
+            cell_image_dir=project_relative_path(PROJECT_DIR, str(Path(frames[0]).parent)) if frames else None,
+            run_id=PIPELINE_RUN_ID,
+            actor="storyboard_generation",
+            phase=os.environ.get(PHASE_ENV, ""),
+        )
+        save_graph_projection(graph, PROJECT_DIR, store=store)
     except Exception as e:
         log_warn(f"  Could not update grid {grid_id} on graph: {e}")
 
@@ -1854,7 +2696,8 @@ def _generate_storyboard_grids_phase3(dry_run: bool) -> None:
         log_warn(f"Prompt re-assembly failed after grid build (exit {assemble_result.returncode})")
         return
 
-    # Generate storyboards from prompt JSONs — SEQUENTIAL for cascading
+    # Generate storyboards from prompt JSONs in order so each grid can inherit
+    # the previous grid's output as continuity guidance.
     prompt_dir = PROJECT_DIR / "frames" / "storyboard_prompts"
     if not prompt_dir.exists():
         log_warn("No storyboard_prompts directory — skipping storyboard generation")
@@ -1871,18 +2714,63 @@ def _generate_storyboard_grids_phase3(dry_run: bool) -> None:
         log_warn(f"Storyboard ref verification failed ({len(ref_problems)} issue(s)) — "
                  "storyboards will generate with incomplete references")
 
-    log(f"Generating {len(prompt_files)} storyboard grids (sequential)...")
+    total = len(prompt_files)
+    log(f"Generating {total} storyboard guidance grids (batches of 10)...")
     generated = 0
-    for pf in prompt_files:
-        data = json.loads(pf.read_text(encoding="utf-8"))
-        result = _generate_single_grid_storyboard(data)
-        if result:
-            generated += 1
-            grid_id = data.get("grid_id")
-            if grid_id:
-                _update_grid_graph(grid_id, result)
 
-    log_ok(f"Generated {generated}/{len(prompt_files)} storyboard grids")
+    # Parse all prompt files upfront so JSON errors surface before any network work
+    parsed: list[tuple] = []  # (pf, data | None)
+    for pf in prompt_files:
+        try:
+            parsed.append((pf, json.loads(pf.read_text(encoding="utf-8"))))
+        except Exception as e:
+            log_warn(f"  Could not parse {pf.name}: {e}")
+            parsed.append((pf, None))
+
+    import asyncio as _asyncio
+
+    async def _run_batches() -> int:
+        """Run all grids in batches of 10, returns count of successes."""
+        _generated = 0
+        batch_size = 10
+        total_batches = (len(parsed) + batch_size - 1) // batch_size
+
+        for batch_idx in range(total_batches):
+            batch = parsed[batch_idx * batch_size:(batch_idx + 1) * batch_size]
+            batch_num = batch_idx + 1
+            log(f"  Batch {batch_num}/{total_batches} ({len(batch)} grids)...")
+
+            async def _run_one(pf, data):
+                if data is None:
+                    return pf, data, None
+                try:
+                    result = await _generate_single_grid_storyboard_async(data)
+                    return pf, data, result
+                except Exception as exc:
+                    log_warn(f"  Storyboard generation failed for {pf.name}: {exc}")
+                    return pf, data, None
+
+            # Launch up to 10 grids concurrently; individual failures are isolated
+            coros = [_run_one(pf, data) for pf, data in batch]
+            batch_results = await _asyncio.gather(*coros)
+
+            ok = fail = 0
+            for pf, data, result in batch_results:
+                if result and data:
+                    _generated += 1
+                    ok += 1
+                    grid_id = data.get("grid_id")
+                    if grid_id:
+                        _update_grid_graph(grid_id, result)
+                else:
+                    fail += 1
+            log(f"  Batch {batch_num} done — {ok} OK, {fail} failed")
+
+        return _generated
+
+    generated = _asyncio.run(_run_batches())
+
+    log_ok(f"Generated {generated}/{total} storyboard grids")
 
     # Shot matching step
     log("Running shot matching on generated grids...")
@@ -1908,11 +2796,22 @@ def _generate_storyboard_grids_phase3(dry_run: bool) -> None:
         cwd=PROJECT_DIR, label="graph_assemble_prompts")
     log_ok("Prompts re-assembled with grid storyboard references")
 
+    # Persist storyboard grid metadata to project_manifest.json so downstream
+    # manifest-driven phases can see the generated storyboard state.
+    try:
+        from graph.store import GraphStore
+        from graph.materializer import materialize_manifest
+        store = GraphStore(str(PROJECT_DIR))
+        graph = store.load()
+        materialize_manifest(graph, MANIFEST_PATH)
+        log_ok("Manifest refreshed with storyboard grid metadata")
+    except Exception as e:
+        log_warn(f"Could not refresh manifest after storyboard generation: {e}")
+
 
 
 def phase_3_assets(dry_run: bool, phase_timers: dict) -> None:
-    """Phase 3 -- Fully programmatic: asset generation, voice nodes, location variants,
-    storyboard generation, and programmatic quality validation."""
+    """Phase 3 -- Fully programmatic asset generation, storyboard guidance, and validation."""
     log_header("PHASE 3 -- Asset Generation + Storyboards (Programmatic)")
     timer = Timer()
     phase_timers["phase_3"] = timer
@@ -1927,7 +2826,6 @@ def phase_3_assets(dry_run: bool, phase_timers: dict) -> None:
             log_warn(f"Image tagger watcher failed to start: {e}")
 
     # Step 3a: Programmatic generation of cast/location/prop base images
-    #          Direction views are deferred to Step 3d (after sync populates ref_images)
     log("--- Phase 3a: Programmatic asset generation (cast, locations, props) ---")
     if not dry_run:
         gen_result = _stream_subprocess(
@@ -1963,48 +2861,31 @@ def phase_3_assets(dry_run: bool, phase_timers: dict) -> None:
         else:
             log_ok("All generated images pass size/integrity checks")
 
-    # Step 3c: Populate voice nodes (replaces Voice Director agent)
-    log("--- Phase 3c: Voice node population ---")
-    _populate_voice_nodes(dry_run)
-
-    # Step 3c½: Sync asset paths into graph BEFORE direction variant generation.
-    # Sync generated asset paths back into the graph so prompts reference real files.
-    log("--- Phase 3c½: Sync primary asset paths → graph ---")
+    # Step 3c: Project prompt audit logs from the canonical graph state.
+    log("--- Phase 3c: Project prompt audit logs from graph ---")
     if not dry_run:
-        _stream_subprocess(
-            [sys.executable, str(SKILLS_DIR / "graph_sync_assets"),
-             "--project-dir", str(PROJECT_DIR)],
-            cwd=PROJECT_DIR, label="graph_sync_assets_pre_direction")
         _stream_subprocess(
             [sys.executable, str(SKILLS_DIR / "graph_assemble_prompts"),
              "--project-dir", str(PROJECT_DIR)],
-            cwd=PROJECT_DIR, label="graph_assemble_prompts_post_sync")
-        log_ok("Asset paths synced into graph and prompts re-assembled")
+            cwd=PROJECT_DIR, label="graph_assemble_prompts_post_assets")
+        log_ok("Prompt audit logs refreshed from graph state")
 
-    # Step 3d: Location directions (now part of primary 4x4 grid — no-op)
-    log("--- Phase 3d: Location direction variants ---")
-    _generate_location_variants(dry_run)
-
-    # Step 3e: Validate assets + update manifest so graph has real paths
-    log("--- Phase 3e: Asset validation + manifest sync ---")
+    # Step 3d: Validate assets + update manifest so graph has real paths
+    log("--- Phase 3d: Asset validation + manifest sync ---")
     if not dry_run:
         _programmatic_asset_validation_and_regen(PROJECT_DIR)
 
-    # Step 3f: Sync manifest → graph + re-assemble prompts (now with real paths)
-    log("--- Phase 3f: Sync assets → graph → re-assemble prompts ---")
+    # Step 3e: Re-project prompt audit logs after any validation/regeneration.
+    log("--- Phase 3e: Refresh prompt audit logs after validation ---")
     if not dry_run:
-        _stream_subprocess(
-            [sys.executable, str(SKILLS_DIR / "graph_sync_assets"),
-             "--project-dir", str(PROJECT_DIR)],
-            cwd=PROJECT_DIR, label="graph_sync_assets")
         _stream_subprocess(
             [sys.executable, str(SKILLS_DIR / "graph_assemble_prompts"),
              "--project-dir", str(PROJECT_DIR)],
             cwd=PROJECT_DIR, label="graph_assemble_prompts")
-        log_ok("Asset paths synced, prompts re-assembled with ref images")
+        log_ok("Prompt audit logs refreshed with validated asset paths")
 
-    # Step 3g: Storyboard generation (includes tag verification gate)
-    log("--- Phase 3g: Storyboard grid generation ---")
+    # Step 3f: Storyboard generation (includes tag verification gate)
+    log("--- Phase 3f: Storyboard grid generation ---")
     _generate_storyboard_grids_phase3(dry_run)
 
     created_files = []
@@ -2015,12 +2896,10 @@ def phase_3_assets(dry_run: bool, phase_timers: dict) -> None:
         list_dir_files(base / "locations" / "primary")
         list_dir_files(base / "props" / "generated")
         list_dir_files(base / "frames" / "storyboards")
-        list_dir_files(base / "voices")
         created_files = (collect_files_in(base / "cast" / "composites") +
                          collect_files_in(base / "locations" / "primary") +
                          collect_files_in(base / "props" / "generated") +
-                         collect_files_in(base / "frames" / "storyboards") +
-                         collect_files_in(base / "voices"))
+                         collect_files_in(base / "frames" / "storyboards"))
         save_phase_report(3, timer, "phase_3_programmatic", None, created_files)
 
         # Quality gate (programmatic checks only)
@@ -2041,64 +2920,6 @@ def phase_3_assets(dry_run: bool, phase_timers: dict) -> None:
     log_ok(f"Phase 3 complete in {timer.elapsed_str()}")
 
 
-def _promote_cell_images(dry_run: bool) -> tuple[int, int, int]:
-    """Promote storyboard grid cell images to frames/composed/.
-
-    Instead of generating each frame individually (which causes drift),
-    we use the already-split cell images from nano banana's coherent
-    storyboard grids. Each cell is copied to frames/composed/{frame_id}_gen.png.
-
-    Returns (promoted, skipped, failed) counts.
-    """
-    import shutil
-    from graph.store import GraphStore
-    from graph.api import get_frame_cell_image
-
-    store = GraphStore(str(PROJECT_DIR))
-    graph = store.load()
-
-    composed_dir = PROJECT_DIR / "frames" / "composed"
-    composed_dir.mkdir(parents=True, exist_ok=True)
-
-    promoted = 0
-    skipped = 0
-    failed = 0
-    total = len(graph.frame_order)
-
-    for i, frame_id in enumerate(graph.frame_order, 1):
-        out_path = composed_dir / f"{frame_id}_gen.png"
-
-        # Skip if already promoted
-        if out_path.exists() and out_path.stat().st_size > 1000:
-            log(f"  [{i}/{total}] {frame_id}: already exists ({out_path.stat().st_size:,}B) — skipping")
-            skipped += 1
-            continue
-
-        # Resolve cell image from storyboard grid
-        cell_rel = get_frame_cell_image(graph, frame_id)
-        if not cell_rel:
-            log_err(f"  [{i}/{total}] {frame_id}: no grid cell mapping found")
-            failed += 1
-            continue
-
-        cell_path = PROJECT_DIR / cell_rel if not Path(cell_rel).is_absolute() else Path(cell_rel)
-        if not cell_path.exists() or cell_path.stat().st_size < 1000:
-            log_err(f"  [{i}/{total}] {frame_id}: cell image missing or corrupt: {cell_rel}")
-            failed += 1
-            continue
-
-        if dry_run:
-            log(f"  [{i}/{total}] [DRY-RUN] Would promote {frame_id} ← {cell_rel}", YELLOW)
-            promoted += 1
-            continue
-
-        shutil.copy2(cell_path, out_path)
-        log(f"  [{i}/{total}] {frame_id}: promoted from grid cell ({out_path.stat().st_size:,}B)")
-        promoted += 1
-
-    return promoted, skipped, failed
-
-
 def _audit_phase4_assets() -> dict:
     """Check that all expected Phase 3 assets exist before composing frames.
 
@@ -2107,7 +2928,7 @@ def _audit_phase4_assets() -> dict:
         missing_cast: list[str] — cast IDs with missing/corrupt composites
         missing_locations: list[str] — location IDs with missing/corrupt images
         missing_props: list[str] — prop IDs with missing/corrupt images
-        missing_storyboards: list[str] — grid IDs with missing storyboard composites
+        missing_storyboards: list[str] — grid IDs with missing storyboard composites (advisory)
         total_missing: int
     """
     from graph.store import GraphStore
@@ -2166,7 +2987,7 @@ def _audit_phase4_assets() -> dict:
             if not expected.exists() or expected.stat().st_size < 1000:
                 missing_storyboards.append(grid_id)
 
-    total = len(missing_cast) + len(missing_locations) + len(missing_props) + len(missing_storyboards)
+    total = len(missing_cast) + len(missing_locations) + len(missing_props)
 
     return {
         "ready": total == 0,
@@ -2178,25 +2999,126 @@ def _audit_phase4_assets() -> dict:
     }
 
 
-def phase_4_production(dry_run: bool, phase_timers: dict,
-                       skip_tts: bool = False) -> None:
-    """Phase 4 -- Promote storyboard grid cells to composed frames.
+def _generate_final_frames(dry_run: bool) -> tuple[int, int, int]:
+    """Generate final frames sequentially from composed continuity plus available guidance refs."""
+    from graph.prompt_assembler import assemble_image_prompt
+    from graph.runtime_state import mark_frame_composed, project_relative_path, save_graph_projection
+    from graph.store import GraphStore
 
-    No separate frame generation — uses the already-split cell images from
-    nano banana's coherent storyboard grids (Phase 3). This eliminates drift
-    that occurs when frames are generated individually."""
-    log_header("PHASE 4 -- Frame Promotion from Storyboard Cells")
+    store = GraphStore(str(PROJECT_DIR))
+    graph = store.load()
+
+    composed_dir = PROJECT_DIR / "frames" / "composed"
+    composed_dir.mkdir(parents=True, exist_ok=True)
+
+    generated = 0
+    skipped = 0
+    failed = 0
+    total = len(graph.frame_order)
+    graph_dirty = False
+
+    for i, frame_id in enumerate(graph.frame_order, 1):
+        out_rel = f"frames/composed/{frame_id}_gen.png"
+        out_path = PROJECT_DIR / out_rel
+
+        if out_path.exists() and out_path.stat().st_size > 1000:
+            mark_frame_composed(
+                graph,
+                frame_id,
+                out_rel,
+                run_id=PIPELINE_RUN_ID,
+                actor="frame_generation",
+                phase=os.environ.get(PHASE_ENV, ""),
+            )
+            skipped += 1
+            log(f"  [{i}/{total}] {frame_id}: composed frame exists ({out_path.stat().st_size:,}B) — skipping")
+            graph_dirty = True
+            continue
+
+        prompt_data = assemble_image_prompt(graph, frame_id, project_dir=PROJECT_DIR)
+        storyboard_ref = prompt_data.get("storyboard_image")
+        other_refs = list(prompt_data.get("reference_images") or [])
+
+        cmd = [
+            sys.executable, str(SKILLS_DIR / "sw_generate_frame"),
+            "--prompt", prompt_data["prompt"],
+            "--out", out_rel,
+            "--size", prompt_data.get("size", "landscape_16_9"),
+            "--frame-id", frame_id,
+        ]
+        if storyboard_ref:
+            cmd.extend(["--storyboard-image", storyboard_ref])
+        if other_refs:
+            cmd.extend(["--ref-images", ",".join(other_refs)])
+
+        refs_used = ([storyboard_ref] if storyboard_ref else []) + other_refs
+
+        if dry_run:
+            log(
+                f"  [{i}/{total}] [DRY-RUN] Would generate {frame_id} "
+                f"{'with storyboard + ' if storyboard_ref else 'with '}{len(other_refs)} ref(s)",
+                YELLOW,
+            )
+            generated += 1
+            continue
+
+        log(
+            f"  [{i}/{total}] {frame_id}: generating final frame "
+            f"{'storyboard+' if storyboard_ref else ''}{len(other_refs)} refs"
+        )
+        result = _stream_subprocess(
+            cmd,
+            cwd=PROJECT_DIR,
+            label=f"frame_{frame_id}",
+            env={**os.environ, "PROJECT_DIR": str(PROJECT_DIR), "SKILLS_DIR": str(SKILLS_DIR)},
+        )
+        if result.returncode == 0 and out_path.exists() and out_path.stat().st_size > 1000:
+            normalized_refs = [
+                ref for ref in (
+                    [project_relative_path(PROJECT_DIR, storyboard_ref)] if storyboard_ref else []
+                ) + [
+                    project_relative_path(PROJECT_DIR, ref) for ref in other_refs
+                ]
+                if ref
+            ]
+            mark_frame_composed(
+                graph,
+                frame_id,
+                out_rel,
+                refs_used=normalized_refs,
+                run_id=PIPELINE_RUN_ID,
+                actor="frame_generation",
+                phase=os.environ.get(PHASE_ENV, ""),
+            )
+            generated += 1
+            graph_dirty = True
+            continue
+
+        failed += 1
+        log_err(f"  [{i}/{total}] {frame_id}: final frame generation failed")
+
+    if graph_dirty and not dry_run:
+        save_graph_projection(graph, PROJECT_DIR, store=store)
+
+    return generated, skipped, failed
+
+
+def phase_4_production(dry_run: bool, phase_timers: dict) -> None:
+    """Phase 4 -- Generate final frames sequentially from structured prompts."""
+    log_header("PHASE 4 -- Sequential Final Frame Generation")
     timer = Timer()
     phase_timers["phase_4"] = timer
     base = PROJECT_DIR
 
-    # ── Asset readiness gate — storyboard grids must exist ──
+    # ── Asset readiness gate — core reference assets must exist ──
     if not dry_run:
         from graph.store import GraphStore
         _store = GraphStore(str(PROJECT_DIR))
         _graph = _store.load()
 
-        # If grids haven't been built yet (or were cleared), rebuild from scratch
+        # Storyboard guidance is helpful but not required for final frame generation.
+        # Build it when absent so later prompts can use it, but keep Phase 4 runnable
+        # even when storyboard generation is unavailable or partially missing.
         if not _graph.storyboard_grids or not _graph.seeded_domains.get("storyboard_grids"):
             log_warn(f"Phase 4: no storyboard grids in graph — rebuilding")
             _generate_storyboard_grids_phase3(dry_run=False)
@@ -2215,66 +3137,34 @@ def phase_4_production(dry_run: bool, phase_timers: dict,
             log("Falling back to Phase 3 asset regen for missing items...")
             _programmatic_asset_validation_and_regen(base)
 
-        # Regen missing storyboard grids
         if audit["missing_storyboards"]:
             log_warn(f"Phase 4: {len(audit['missing_storyboards'])} storyboard grid(s) missing")
             log_warn(f"  Storyboards: {', '.join(audit['missing_storyboards'])}")
+            log("Proceeding without those storyboard guidance refs; prompts will fall back to core refs.")
 
-            log("Regenerating missing storyboard grids...")
-            _generate_storyboard_grids_phase3(dry_run=False)
+    log("Generating final frames sequentially from shot-packet prompts...")
+    generated, skipped, failed = _generate_final_frames(dry_run)
+    log_ok(f"Final frame generation done: {generated} generated, {skipped} skipped, {failed} failed")
 
-            audit = _audit_phase4_assets()
-            if audit["missing_storyboards"]:
-                raise RuntimeError(
-                    f"HARD GATE: {len(audit['missing_storyboards'])} storyboard grid(s) still missing "
-                    f"after regen: {', '.join(audit['missing_storyboards'])}. "
-                    "Every frame requires its storyboard cell — cannot proceed."
-                )
-
-    # ── Grok vision frame correction — review + edit cells before promotion
-    if not dry_run and os.getenv("XAI_API_KEY"):
-        log("--- Phase 4a: Grok vision frame correction ---")
-        try:
-            import asyncio as _aio
-            from graph.frame_correction import correct_all_frames
-            correction_result = _aio.run(
-                correct_all_frames(PROJECT_DIR, concurrency=5)
-            )
-            log_ok(f"Frame correction: {correction_result.get('passed', 0)} passed, "
-                   f"{correction_result.get('corrected', 0)} corrected, "
-                   f"{correction_result.get('failed', 0)} failed, "
-                   f"{correction_result.get('skipped', 0)} skipped")
-        except Exception as e:
-            log_warn(f"Frame correction failed: {e} — proceeding with uncorrected cells")
-    elif not dry_run:
-        log_warn("Skipping frame correction (XAI_API_KEY not set)")
-
-    # Promote cell images → frames/composed/
-    log("Promoting storyboard grid cells to composed frames...")
-    promoted, skipped, failed = _promote_cell_images(dry_run)
-
-    log_ok(f"Frame promotion done: {promoted} promoted, {skipped} skipped, {failed} failed")
+    if not dry_run:
+        log("Refreshing prompt audit logs from graph-backed composed frames...")
+        _stream_subprocess(
+            [sys.executable, str(SKILLS_DIR / "graph_assemble_prompts"),
+             "--project-dir", str(PROJECT_DIR)],
+            cwd=PROJECT_DIR, label="graph_assemble_prompts_phase4")
+        log_ok("Prompt audit logs refreshed with final composed frames")
 
     if not dry_run:
         log("Files created by Phase 4:")
         list_dir_files(base / "frames" / "composed")
         created_files = collect_files_in(base / "frames" / "composed")
-        save_phase_report(4, timer, "phase_4_cell_promotion", None, created_files)
+        save_phase_report(4, timer, "phase_4_sequential_generation", None, created_files)
 
         if not run_quality_gate(4, base):
             log_warn("Phase 4 quality gate has warnings — proceeding")
 
     advance_phase(4, 5, dry_run)
     log_ok(f"Phase 4 complete in {timer.elapsed_str()}")
-
-
-def phase_4_production_parallel(dry_run: bool, phase_timers: dict,
-                                 num_workers: int = 10) -> None:
-    """Phase 4 -- Promote storyboard grid cells to composed frames (parallel variant).
-
-    Delegates to the same cell promotion logic as phase_4_production.
-    The num_workers param is kept for API compat but not used (promotion is fast I/O)."""
-    phase_4_production(dry_run, phase_timers)
 
 
 def _generate_video_clip(frame_id: str, image_path: Path, prompt: str,
@@ -2290,6 +3180,7 @@ def _generate_video_clip(frame_id: str, image_path: Path, prompt: str,
         "--prompt", prompt,
         "--image", str(image_path),
         "--out", str(out_path),
+        "--frame-id", frame_id,
         "--duration", str(duration),
     ]
 
@@ -2314,40 +3205,64 @@ def phase_5_video(dry_run: bool, phase_timers: dict) -> None:
     phase_timers["phase_5"] = timer
     base = PROJECT_DIR
 
-    if not dry_run:
-        if not os.getenv("XAI_API_KEY"):
-            raise RuntimeError("XAI_API_KEY is required — Grok vision refinement is mandatory for video prompts")
+    refine_enabled = not dry_run and bool(os.getenv("XAI_API_KEY"))
+    if not dry_run and not refine_enabled:
+        log_warn("XAI_API_KEY not set — skipping Grok vision refinement and using graph prompts as-is")
 
-    # Get frame list from manifest
-    manifest = json.loads(MANIFEST_PATH.read_text())
-    frames = manifest.get("frames", [])
+    from graph.frame_prompt_refiner import refine_video_prompt
+    from graph.prompt_assembler import assemble_video_prompt
+    from graph.runtime_state import mark_frame_video, project_relative_path, save_graph_projection
+    from graph.store import GraphStore
 
-    if not frames:
-        log_warn("No frames in manifest — nothing to generate")
+    graph = None
+    store = None
+    try:
+        store = GraphStore(str(base))
+        graph = store.load()
+        frame_ids = [frame_id for frame_id in graph.frame_order if frame_id in graph.frames]
+    except FileNotFoundError:
+        manifest = json.loads(MANIFEST_PATH.read_text()) if MANIFEST_PATH.exists() else {}
+        frame_ids = [str(frame.get("frameId", "")).strip() for frame in manifest.get("frames", []) if str(frame.get("frameId", "")).strip()]
+
+    if not frame_ids:
+        log_warn("No frames available for video generation — nothing to generate")
         advance_phase(5, 6, dry_run)
         return
 
     clips_dir = base / "video" / "clips"
-    clips_dir.mkdir(parents=True, exist_ok=True)
+    video_prompt_dir = base / "video" / "prompts"
+    if not dry_run:
+        clips_dir.mkdir(parents=True, exist_ok=True)
+        video_prompt_dir.mkdir(parents=True, exist_ok=True)
 
-    total = len(frames)
+    total = len(frame_ids)
     log(f"Pipelining {total} frames: refine → generate (as each completes)")
 
     # ── Build frame work list
     frame_items = []
     missing = 0
-    for i, f in enumerate(frames, 1):
-        fid = f.get("frameId", "")
-        image_path = base / "frames" / "composed" / f"{fid}_gen.png"
+    for i, fid in enumerate(frame_ids, 1):
+        video_prompt_file = video_prompt_dir / f"{fid}_video.json"
+        if graph is not None:
+            prompt_data = assemble_video_prompt(graph, fid, project_dir=base)
+        else:
+            if not video_prompt_file.exists():
+                raise RuntimeError(
+                    f"Missing video prompt JSON for frame {fid}: {video_prompt_file}"
+                )
+            prompt_data = json.loads(video_prompt_file.read_text(encoding="utf-8"))
+        image_rel = prompt_data.get("input_image_path", "") or f"frames/composed/{fid}_gen.png"
+        image_path = Path(image_rel)
+        if not image_path.is_absolute():
+            image_path = base / image_path
         if not image_path.exists():
             log_warn(f"  [{i}/{total}] {fid}: composed frame missing — skipping")
             missing += 1
             continue
-        frame_items.append((i, fid, image_path, f))
+        frame_items.append((i, fid, image_path, prompt_data, video_prompt_file))
 
     # ── Pipelined refine → generate
     import asyncio as _aio
-    from graph.frame_prompt_refiner import refine_video_prompt
     import threading
     from queue import Queue
 
@@ -2356,50 +3271,60 @@ def phase_5_video(dry_run: bool, phase_timers: dict) -> None:
     stats = {"refined": 0, "refine_skipped": 0, "refine_failed": 0,
              "generated": 0, "gen_skipped": 0, "gen_failed": 0}
     stats_lock = threading.Lock()
+    video_updates: dict[str, str] = {}
+    refine_started_at = time.time()
+    gen_started_at = time.time()
 
     def _refine_and_enqueue(item):
         """Refine one frame's video prompt, then put it on the gen queue."""
-        idx, fid, image_path, frame_manifest = item
-        video_prompt_file = base / "video" / "prompts" / f"{fid}_video.json"
+        idx, fid, image_path, prompt_data, video_prompt_file = item
+        prompt_state = dict(prompt_data)
+        prompt_state["refined_by"] = ""
 
-        if video_prompt_file.exists():
-            prompt_data = json.loads(video_prompt_file.read_text())
-
-            # Refine via Grok vision if not already refined
-            if not dry_run and prompt_data.get("refined_by") != "grok-vision":
-                try:
-                    prompt_data = _aio.run(
-                        refine_video_prompt(prompt_data, base)
-                    )
-                    # Write refined prompt back
-                    video_prompt_file.write_text(
-                        json.dumps(prompt_data, indent=2, ensure_ascii=False),
-                        encoding="utf-8",
-                    )
-                    with stats_lock:
-                        if prompt_data.get("refined_by") == "grok-vision":
-                            stats["refined"] += 1
-                        else:
-                            stats["refine_failed"] += 1
-                except Exception as e:
-                    log_err(f"  {fid}: refinement error: {e}")
-                    with stats_lock:
-                        stats["refine_failed"] += 1
-            else:
-                with stats_lock:
-                    stats["refine_skipped"] += 1
-
-            video_prompt = prompt_data.get("prompt", "")
-            dur = max(3, min(15, int(prompt_data.get("duration",
-                      frame_manifest.get("suggestedDuration", 5)))))
-            if prompt_data.get("dialogue_fit_status") == "capped_to_model_max":
-                log_warn(f"  [{idx}/{total}] {fid}: dialogue wants "
-                         f"{prompt_data.get('recommended_duration', dur)}s, capped to 15s")
-        else:
-            video_prompt = f"Cinematic scene, subtle motion, frame {fid}"
-            dur = max(3, min(15, int(frame_manifest.get("suggestedDuration", 5))))
+        if dry_run:
+            prompt_state["refined_by"] = "skipped:dry_run"
             with stats_lock:
                 stats["refine_skipped"] += 1
+        elif not refine_enabled:
+            prompt_state["refined_by"] = "skipped:no_api_key"
+            with stats_lock:
+                stats["refine_skipped"] += 1
+            log_warn(f"  [{idx}/{total}] {fid}: vision refinement skipped (no_api_key) — using graph prompt")
+        else:
+            try:
+                prompt_state = _aio.run(refine_video_prompt(prompt_state, base))
+            except Exception as e:
+                prompt_state["refined_by"] = f"failed:{type(e).__name__}"
+                log_warn(f"  [{idx}/{total}] {fid}: refinement raised {type(e).__name__} — using graph prompt")
+
+            refined_by = str(prompt_state.get("refined_by", ""))
+            status_kind = _refine_status_kind(refined_by)
+            with stats_lock:
+                if status_kind == "refined":
+                    stats["refined"] += 1
+                elif status_kind == "skipped":
+                    stats["refine_skipped"] += 1
+                else:
+                    stats["refine_failed"] += 1
+
+            if status_kind == "skipped":
+                reason = refined_by.split(":", 1)[1] if ":" in refined_by else refined_by or "unknown"
+                log_warn(f"  [{idx}/{total}] {fid}: vision refinement skipped ({reason}) — using graph prompt")
+            elif status_kind == "failed":
+                reason = refined_by.split(":", 1)[1] if ":" in refined_by else refined_by or "unknown"
+                log_warn(f"  [{idx}/{total}] {fid}: vision refinement failed ({reason}) — using graph prompt")
+
+        if not dry_run:
+            video_prompt_file.write_text(
+                json.dumps(prompt_state, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+        video_prompt = prompt_state.get("prompt", "")
+        dur = max(2, min(15, int(prompt_state.get("duration", 5))))
+        if prompt_state.get("dialogue_fit_status") == "capped_to_model_max":
+            log_warn(f"  [{idx}/{total}] {fid}: dialogue wants "
+                     f"{prompt_state.get('recommended_duration', dur)}s, capped to 15s")
 
         out_path = clips_dir / f"{fid}.mp4"
         gen_queue.put((idx, fid, image_path, video_prompt, dur, out_path))
@@ -2414,14 +3339,43 @@ def phase_5_video(dry_run: bool, phase_timers: dict) -> None:
             idx, fid, image_path, video_prompt, dur, out_path = item
             log(f"  [{idx}/{total}] {fid} ({dur}s) → generating clip")
             result = _generate_video_clip(fid, image_path, video_prompt, dur, out_path, dry_run)
+            done = 0
+            generated_ok = 0
+            generated_skipped = 0
+            generated_failed = 0
+            status = "complete"
+            color = CYAN
             with stats_lock:
                 if result is None:
                     stats["gen_skipped"] += 1
+                    if out_path.exists():
+                        video_updates[fid] = project_relative_path(base, out_path) or str(out_path)
+                    status = "skipped"
+                    color = YELLOW
                 elif result.returncode == 0:
                     stats["generated"] += 1
+                    if out_path.exists():
+                        video_updates[fid] = project_relative_path(base, out_path) or str(out_path)
                 else:
                     stats["gen_failed"] += 1
+                    status = f"failed (exit={result.returncode})"
+                    color = RED
                     log_err(f"  {fid} clip generation failed (exit={result.returncode})")
+                done = stats["generated"] + stats["gen_skipped"] + stats["gen_failed"]
+                generated_ok = stats["generated"]
+                generated_skipped = stats["gen_skipped"]
+                generated_failed = stats["gen_failed"]
+            eta_suffix = _progress_eta_suffix(
+                started_at=gen_started_at,
+                completed=done,
+                total=len(frame_items),
+            )
+            live_log(
+                f"  [Video {done}/{len(frame_items)}] {fid} {status} "
+                f"({generated_ok} generated, {generated_skipped} skipped, "
+                f"{generated_failed} failed{eta_suffix})",
+                color=color,
+            )
             gen_queue.task_done()
 
     # Start generator workers — they consume from queue as items arrive
@@ -2441,6 +3395,25 @@ def phase_5_video(dry_run: bool, phase_timers: dict) -> None:
                 future.result()
             except Exception as e:
                 log_err(f"  Refine worker error: {e}")
+            done = 0
+            refined_ok = 0
+            refined_skipped = 0
+            refined_failed = 0
+            with stats_lock:
+                done = stats["refined"] + stats["refine_skipped"] + stats["refine_failed"]
+                refined_ok = stats["refined"]
+                refined_skipped = stats["refine_skipped"]
+                refined_failed = stats["refine_failed"]
+            eta_suffix = _progress_eta_suffix(
+                started_at=refine_started_at,
+                completed=done,
+                total=len(frame_items),
+            )
+            live_log(
+                f"  [Refine {done}/{len(frame_items)}] "
+                f"({refined_ok} refined, {refined_skipped} skipped, "
+                f"{refined_failed} failed{eta_suffix})"
+            )
 
     # Wait for all generation to finish
     gen_queue.join()
@@ -2455,6 +3428,18 @@ def phase_5_video(dry_run: bool, phase_timers: dict) -> None:
            f"{stats['refine_failed']} failed")
     log_ok(f"Generate: {stats['generated']} generated, {stats['gen_skipped']} skipped, "
            f"{stats['gen_failed']} failed")
+
+    if not dry_run and graph is not None and store is not None and video_updates:
+        for fid, rel_path in video_updates.items():
+            mark_frame_video(
+                graph,
+                fid,
+                rel_path,
+                run_id=PIPELINE_RUN_ID,
+                actor="video_generation",
+                phase=os.environ.get(PHASE_ENV, ""),
+            )
+        save_graph_projection(graph, base, store=store)
 
     if not dry_run:
         clips = list(clips_dir.glob("*.mp4"))
@@ -2843,32 +3828,31 @@ def parse_args() -> argparse.Namespace:
              "0 = sequential (default).",
     )
     parser.add_argument(
-        "--skip-tts",
-        action="store_true",
-        help="Deprecated no-op. The TTS stage was removed; Phase 4 now derives timing "
-             "from dialogue-aware prompt assembly for native video audio.",
-    )
-    parser.add_argument(
         "--resume",
         action="store_true",
         help="Auto-detect last completed phase from manifest and continue from the next one.",
     )
     parser.add_argument(
-        "--correct-frames",
+        "--audit",
         action="store_true",
-        help="Run Grok vision frame correction on existing storyboard cells "
-             "(standalone, does not re-run any phase).",
+        help="After Phase 2 continuity validation, spawn the graph auditor agent for optional QA.",
+    )
+    parser.add_argument(
+        "--live",
+        action="store_true",
+        help="Stream live progress updates for long-running batch phases.",
     )
     return parser.parse_args()
 
 
 def main() -> None:
-    global PROJECT_DIR, MANIFEST_PATH, LOGS_DIR, PIPELINE_LOGS_DIR, DEFAULT_MODEL
+    global PROJECT_DIR, MANIFEST_PATH, LOGS_DIR, PIPELINE_LOGS_DIR, DEFAULT_MODEL, AUDIT_PHASE2, PIPELINE_RUN_ID, LIVE_MODE
     args = parse_args()
     dry_run   = args.dry_run
     only_phase = args.phase
     parallel_p4 = args.parallel_phase4
-    skip_tts = args.skip_tts
+    AUDIT_PHASE2 = args.audit
+    LIVE_MODE = bool(args.live)
 
     # Override model if specified
     if args.model:
@@ -2885,6 +3869,14 @@ def main() -> None:
     PIPELINE_LOGS_DIR = LOGS_DIR / "pipeline"
     log(f"Using project: {PROJECT_DIR}")
 
+    PIPELINE_RUN_ID = os.environ.get(RUN_ID_ENV) or generate_run_id()
+    os.environ[RUN_ID_ENV] = PIPELINE_RUN_ID
+    os.environ[PHASE_ENV] = "pipeline_boot"
+    os.environ[LIVE_ENV] = "1" if LIVE_MODE else "0"
+    log(f"Run ID: {PIPELINE_RUN_ID}")
+    if LIVE_MODE:
+        log("Live mode enabled — long-running batch phases will stream progress", CYAN)
+
     if dry_run:
         log_warn("DRY-RUN MODE -- no agents will be spawned, no files modified.")
 
@@ -2893,30 +3885,23 @@ def main() -> None:
 
     # Ensure log directories exist
     PIPELINE_LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    emit_event(
+        PROJECT_DIR,
+        event="pipeline_started",
+        run_id=PIPELINE_RUN_ID,
+        phase="pipeline_boot",
+        details={"dry_run": dry_run, "project_dir": str(PROJECT_DIR)},
+    )
 
     pipeline_timer = Timer()
     phase_timers: dict[str, Timer] = {}
-
-    # ── Standalone frame correction (no server needed)
-    if args.correct_frames:
-        if not os.getenv("XAI_API_KEY"):
-            fail("XAI_API_KEY is required for frame correction")
-        log_header("STANDALONE FRAME CORRECTION")
-        import asyncio as _aio
-        from graph.frame_correction import correct_all_frames
-        result = _aio.run(correct_all_frames(PROJECT_DIR, concurrency=5))
-        log_ok(f"Frame correction: {result.get('passed', 0)} passed, "
-               f"{result.get('corrected', 0)} corrected, "
-               f"{result.get('failed', 0)} failed, "
-               f"{result.get('skipped', 0)} skipped")
-        log_ok(f"Done in {pipeline_timer.elapsed_str()}")
-        return
 
     # Start and verify server (needed even for single-phase runs -- skills call it)
     start_server(dry_run)
     wait_for_server(dry_run)
 
     export_path: str | None = None
+    pipeline_failed = False
 
     # Determine starting phase
     start_phase = 0
@@ -2930,20 +3915,55 @@ def main() -> None:
 
     def _run_phase(n: int) -> str | None:
         """Run phase n. Returns export path for phase 6, else None."""
-        match n:
-            case 0: phase_0_verify(dry_run)
-            case 1: phase_1_narrative(dry_run, phase_timers)
-            case 2: phase_2_morpheus(dry_run, phase_timers)
-            case 3: phase_3_assets(dry_run, phase_timers)
-            case 4:
-                if parallel_p4 > 0:
-                    phase_4_production_parallel(dry_run, phase_timers,
-                                                 num_workers=parallel_p4)
-                else:
-                    phase_4_production(dry_run, phase_timers,
-                                       skip_tts=skip_tts)
-            case 5: phase_5_video(dry_run, phase_timers)
-            case 6: return phase_6_export(dry_run, phase_timers)
+        phase_label = _phase_label(n)
+        os.environ[PHASE_ENV] = phase_label
+        emit_event(
+            PROJECT_DIR,
+            event="phase_started",
+            run_id=PIPELINE_RUN_ID,
+            phase=phase_label,
+            details={"phase_number": n, "phase_name": PHASE_NAMES.get(n, str(n))},
+        )
+        try:
+            match n:
+                case 0: phase_0_verify(dry_run)
+                case 1: phase_1_narrative(dry_run, phase_timers)
+                case 2: phase_2_morpheus(dry_run, phase_timers)
+                case 3: phase_3_assets(dry_run, phase_timers)
+                case 4: phase_4_production(dry_run, phase_timers)
+                case 5: phase_5_video(dry_run, phase_timers)
+                case 6:
+                    result = phase_6_export(dry_run, phase_timers)
+                    emit_event(
+                        PROJECT_DIR,
+                        event="phase_completed",
+                        run_id=PIPELINE_RUN_ID,
+                        phase=phase_label,
+                        details={"phase_number": n, "phase_name": PHASE_NAMES.get(n, str(n))},
+                    )
+                    return result
+        except Exception as exc:
+            emit_event(
+                PROJECT_DIR,
+                event="phase_failed",
+                level="ERROR",
+                run_id=PIPELINE_RUN_ID,
+                phase=phase_label,
+                details={
+                    "phase_number": n,
+                    "phase_name": PHASE_NAMES.get(n, str(n)),
+                    "error": f"{type(exc).__name__}: {exc}",
+                },
+            )
+            raise
+
+        emit_event(
+            PROJECT_DIR,
+            event="phase_completed",
+            run_id=PIPELINE_RUN_ID,
+            phase=phase_label,
+            details={"phase_number": n, "phase_name": PHASE_NAMES.get(n, str(n))},
+        )
         return None
 
     try:
@@ -2957,10 +3977,28 @@ def main() -> None:
             # Full or resumed pipeline — run from start_phase through 6
             for phase_num in range(start_phase, 7):
                 export_path = _run_phase(phase_num)
+    except Exception:
+        pipeline_failed = True
+        emit_event(
+            PROJECT_DIR,
+            event="pipeline_failed",
+            level="ERROR",
+            run_id=PIPELINE_RUN_ID,
+            phase=os.environ.get(PHASE_ENV, ""),
+        )
+        raise
 
     finally:
         stop_server()
 
+    emit_event(
+        PROJECT_DIR,
+        event="pipeline_completed",
+        level="ERROR" if pipeline_failed else "INFO",
+        run_id=PIPELINE_RUN_ID,
+        phase="pipeline_complete",
+        details={"export_path": export_path},
+    )
     print_summary(pipeline_timer, phase_timers, export_path)
 
 

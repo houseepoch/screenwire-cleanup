@@ -2,7 +2,7 @@
 """graph_validate_video_direction — Validate that all frames have video direction data.
 
 Checks every FrameNode for:
-  - suggested_duration is set (minimum 3)
+  - suggested_duration is set (minimum 2)
   - action_summary is non-empty
   - Dialogue frames have dialogue_ids linked
   - Duration is reasonable for the formula tag (dialogue frames may exceed formula range)
@@ -23,25 +23,29 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from graph.api import get_frame_cast_state_models, get_frame_context
-from graph.prompt_assembler import _estimate_dialogue_timing, MAX_VIDEO_DURATION_SECONDS
+from graph.prompt_assembler import (
+    DURATION_BY_CINEMATIC_FAMILY,
+    _estimate_dialogue_timing,
+    MAX_VIDEO_DURATION_SECONDS,
+    MIN_VIDEO_DURATION_SECONDS,
+)
 from graph.store import GraphStore
 
 
-# Formula tag → recommended duration range (min, max)
-DURATION_RANGES = {
-    "F01": (4, 6), "F02": (4, 6), "F03": (5, 8), "F04": (4, 6),
-    "F05": (4, 6), "F07": (6, 10), "F08": (3, 4), "F10": (5, 8),
-    "F11": (3, 4), "F12": (8, 15), "F17": (8, 15), "F18": (6, 10),
-}
-
-# Default fallback durations per formula tag
-DEFAULT_DURATION = {
-    "F01": 5, "F02": 5, "F03": 6, "F04": 5, "F05": 5,
-    "F07": 8, "F08": 4, "F10": 5, "F11": 4, "F12": 10,
-    "F17": 10, "F18": 8,
+# Cinematic family → recommended duration range (min, max)
+DURATION_RANGES_BY_FAMILY = {
+    "D": (4, 8),   # Dialogue
+    "E": (5, 10),  # Establishment
+    "R": (4, 8),   # Revealer
+    "A": (3, 8),   # Action
+    "C": (3, 6),   # Cast/portrait
+    "T": (4, 10),  # Transitional
+    "S": (3, 8),   # Stylistic
+    "M": (3, 6),   # Music
 }
 
 REQUIRED_DIRECTING_FIELDS = ("dramatic_purpose", "beat_turn", "camera_motivation")
+REQUIRED_COMPOSITION_FIELDS = ("shot", "angle", "movement")
 
 
 def main():
@@ -57,8 +61,10 @@ def main():
     errors = []
     warnings = []
     fixed = 0
+    splits = 0
     total = len(graph.frame_order)
     scene_sequences = {}
+    overlong_dialogue_ids = set()
 
     for frame_id in graph.frame_order:
         frame = graph.frames.get(frame_id)
@@ -66,7 +72,8 @@ def main():
             errors.append(f"{frame_id}: FrameNode not found in graph")
             continue
 
-        tag = frame.formula_tag or "F07"
+        ct = frame.cinematic_tag
+        family = (ct.family if ct else "") or ""
         scene_sequences.setdefault(frame.scene_id, []).append(frame)
         ctx = get_frame_context(graph, frame_id)
         dialogue_nodes = ctx.get("dialogue", [])
@@ -87,12 +94,14 @@ def main():
         # Check suggested_duration
         if frame.suggested_duration is None:
             if args.fix:
-                frame.suggested_duration = minimum_dialogue_duration or DEFAULT_DURATION.get(tag, 5)
+                frame.suggested_duration = minimum_dialogue_duration or DURATION_BY_CINEMATIC_FAMILY.get(family, 5)
                 fixed += 1
             else:
                 errors.append(f"{frame_id}: suggested_duration is missing")
-        elif frame.suggested_duration < 3:
-            errors.append(f"{frame_id}: suggested_duration={frame.suggested_duration} below minimum 3")
+        elif frame.suggested_duration < MIN_VIDEO_DURATION_SECONDS:
+            errors.append(
+                f"{frame_id}: suggested_duration={frame.suggested_duration} below minimum {MIN_VIDEO_DURATION_SECONDS}"
+            )
         elif minimum_dialogue_duration and frame.suggested_duration < minimum_dialogue_duration:
             if args.fix:
                 frame.suggested_duration = minimum_dialogue_duration
@@ -103,26 +112,104 @@ def main():
                     f"(needs at least {minimum_dialogue_duration}s)"
                 )
         else:
-            # Check against formula range — dialogue frames may legitimately exceed
-            # the formula range to accommodate longer lines, so only warn
-            lo, hi = DURATION_RANGES.get(tag, (3, 30))
+            # Check against cinematic family range — dialogue frames may legitimately exceed
+            # the family range to accommodate longer lines, so only warn
+            lo, hi = DURATION_RANGES_BY_FAMILY.get(family, (MIN_VIDEO_DURATION_SECONDS, 30))
             is_dialogue = frame.is_dialogue or bool(frame.dialogue_ids)
             if frame.suggested_duration < lo:
                 warnings.append(
                     f"{frame_id}: suggested_duration={frame.suggested_duration} "
-                    f"below typical minimum {lo} for {tag}"
+                    f"below typical minimum {lo} for family '{family or 'unknown'}'"
                 )
             elif frame.suggested_duration > hi and not is_dialogue:
                 warnings.append(
                     f"{frame_id}: suggested_duration={frame.suggested_duration} "
-                    f"above typical maximum {hi} for {tag}"
+                    f"above typical maximum {hi} for family '{family or 'unknown'}'"
                 )
 
-        if dialogue_timing and dialogue_timing["exceeds_model_max"]:
-            warnings.append(
-                f"{frame_id}: dialogue wants ~{int(dialogue_timing['recommended_duration'])}s "
-                f"but runtime max is {MAX_VIDEO_DURATION_SECONDS}s; split dialogue across more frames if clipping persists"
+        # Check each dialogue node individually for overlong duration.
+        # Use per-node timing (not a combined batch) so each line is evaluated
+        # against the 15s clip limit on its own. Skip continuation nodes
+        # (start_frame != frame_id) — those were already checked at their
+        # origin frame and are handled by the span mechanism.
+        for dnode_dict in dialogue_nodes:
+            dnode_start = dnode_dict.get("start_frame")
+            if dnode_start and dnode_start != frame_id:
+                continue  # continuation of an already-processed span
+
+            raw_line = (dnode_dict.get("raw_line") or "").strip()
+            if not raw_line:
+                continue
+
+            node_timing = _estimate_dialogue_timing(
+                [raw_line],
+                tempo=dnode_dict.get("performance_direction", ""),
+                env_intensity=dnode_dict.get("env_intensity", ""),
             )
+            if not node_timing["exceeds_model_max"]:
+                continue
+
+            did = dnode_dict.get("dialogue_id", "")
+            if not did:
+                continue
+            if did in overlong_dialogue_ids:
+                continue
+            overlong_dialogue_ids.add(did)
+
+            rec_dur = int(node_timing["recommended_duration"])
+            overage = rec_dur - MAX_VIDEO_DURATION_SECONDS
+
+            if args.fix:
+                frames_needed = (rec_dur + MAX_VIDEO_DURATION_SECONDS - 1) // MAX_VIDEO_DURATION_SECONDS
+
+                # Walk next_frame_id chain within the same scene
+                chain = [frame_id]
+                cursor = frame
+                for _ in range(frames_needed - 1):
+                    nfid = cursor.next_frame_id
+                    if not nfid:
+                        break
+                    nframe = graph.frames.get(nfid)
+                    if not nframe or nframe.scene_id != frame.scene_id:
+                        break
+                    chain.append(nfid)
+                    cursor = nframe
+
+                if len(chain) >= frames_needed:
+                    span_end = chain[frames_needed - 1]
+                    dobj = graph.dialogue.get(did)
+                    if dobj:
+                        dobj.start_frame = frame_id
+                        dobj.end_frame = span_end
+                    for sfid in chain[:frames_needed]:
+                        sframe = graph.frames.get(sfid)
+                        if sframe:
+                            if did not in sframe.dialogue_ids:
+                                sframe.dialogue_ids.append(did)
+                            sframe.is_dialogue = True
+                    splits += 1
+                    warnings.append(
+                        f"[AUTO-SPLIT] {did} — {rec_dur}s dialogue "
+                        f"auto-spanned across {frames_needed} frames "
+                        f"({frame_id} → {span_end})"
+                    )
+                else:
+                    errors.append(
+                        "[PIPELINE HALT] "
+                        f"Node ID: {did} — Calculated duration "
+                        f"{rec_dur}s exceeds Grok model maximum of "
+                        f"{MAX_VIDEO_DURATION_SECONDS}s by {overage}s. Only {len(chain)} of "
+                        f"{frames_needed} required frames available in scene. "
+                        "Manual split or Phase 1 rewrite required before Phase 4 execution."
+                    )
+            else:
+                errors.append(
+                    "[PIPELINE HALT] "
+                    f"Node ID: {did} — Calculated duration "
+                    f"{rec_dur}s exceeds Grok model maximum of "
+                    f"{MAX_VIDEO_DURATION_SECONDS}s by {overage}s. Manual split or Phase 1 rewrite "
+                    "required before Phase 4 execution."
+                )
 
         # Check action_summary
         if not frame.action_summary or len(frame.action_summary.strip()) < 10:
@@ -154,11 +241,15 @@ def main():
             warnings.append(f"{frame_id}: reaction frame missing directing.reaction_target")
 
         comp = frame.composition
+        for field_name in REQUIRED_COMPOSITION_FIELDS:
+            value = getattr(comp, field_name, None)
+            if not value or len(str(value).strip()) < 3:
+                errors.append(f"{frame_id}: composition.{field_name} is missing")
         if comp.movement and comp.movement not in ("static", "Static"):
             if not getattr(directing, "movement_path", None):
                 warnings.append(f"{frame_id}: moving shot missing directing.movement_path")
 
-        if tag in ("F07", "F09", "F12", "F17"):
+        if family in ("E", "T"):
             has_bg_life = bool(getattr(directing, "background_life", None))
             has_bg_action = bool(frame.background.background_action)
             has_ambient_motion = bool(frame.environment.atmosphere.ambient_motion)
@@ -211,9 +302,12 @@ def main():
                 )
 
     # Save fixes if any
-    if args.fix and fixed > 0:
+    if args.fix and (fixed > 0 or splits > 0):
         store.save(graph)
-        print(f"FIXED: Auto-set suggested_duration on {fixed} frames using formula heuristics")
+        if fixed > 0:
+            print(f"FIXED: Auto-set suggested_duration on {fixed} frames using formula heuristics")
+        if splits > 0:
+            print(f"FIXED: Auto-spanned {splits} overlong dialogue node(s) across multiple frames")
 
     # Report
     print(f"VIDEO DIRECTION VALIDATION: {total} frames checked")

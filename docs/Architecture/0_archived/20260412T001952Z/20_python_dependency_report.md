@@ -1,0 +1,222 @@
+# Python Dependency Report
+
+- Generated at: `2026-04-11T23:29:30.608595+00:00`
+- Repo root: `/home/nikoles16/Documents/ScreenWire Environments/screenwire-pipeline`
+- Python modules indexed: `38`
+- Internal dependency edges: `78`
+- External packages referenced: `47`
+
+## Mermaid Graph
+
+See `21_python_dependency_graph.mmd` for the standalone graph artifact.
+
+## Highest Fan-Out Modules
+
+- `run_pipeline` -> `12` internal imports
+- `handlers` -> `7` internal imports
+- `tests.test_pipeline_smoke_e2e` -> `7` internal imports
+- `tests.test_alignment_contracts` -> `6` internal imports
+- `tests.test_prompt_refactor_unit` -> `4` internal imports
+- `graph.prompt_pair_validator` -> `3` internal imports
+- `server` -> `3` internal imports
+- `graph.grok_tagger` -> `3` internal imports
+- `graph.continuity_validator` -> `3` internal imports
+- `handlers.cast_image` -> `2` internal imports
+- `handlers.storyboard` -> `2` internal imports
+- `graph.haiku_enricher` -> `2` internal imports
+- `handlers.frame` -> `2` internal imports
+- `graph.reference_collector` -> `2` internal imports
+- `graph.prompt_assembler` -> `2` internal imports
+- `handlers.video_clip` -> `2` internal imports
+- `graph.api` -> `2` internal imports
+- `graph.materializer` -> `2` internal imports
+- `graph.cc_parser` -> `2` internal imports
+- `tests.test_corrective_fixes` -> `2` internal imports
+
+## Highest Fan-In Modules
+
+- `graph.schema` <- `13` internal dependents
+- `graph.api` <- `11` internal dependents
+- `graph.store` <- `8` internal dependents
+- `handlers.models` <- `7` internal dependents
+- `handlers.base` <- `6` internal dependents
+- `graph.prompt_assembler` <- `5` internal dependents
+- `graph.materializer` <- `3` internal dependents
+- `graph.frame_prompt_refiner` <- `3` internal dependents
+- `handlers` <- `2` internal dependents
+- `image_tagger` <- `2` internal dependents
+- `graph.grid_generate` <- `2` internal dependents
+- `run_pipeline` <- `2` internal dependents
+- `handlers.storyboard` <- `2` internal dependents
+- `tests.test_pipeline_smoke_e2e` <- `2` internal dependents
+- `graph.haiku_enricher` <- `1` internal dependents
+- `handlers.location_grid` <- `1` internal dependents
+- `graph.grok_tagger` <- `1` internal dependents
+- `graph.cc_parser` <- `1` internal dependents
+- `build_api_reference` <- `1` internal dependents
+- `handlers.video_clip` <- `1` internal dependents
+
+## External Packages
+
+- `pathlib` referenced `33` time(s)
+- `__future__` referenced `28` time(s)
+- `json` referenced `19` time(s)
+- `time` referenced `16` time(s)
+- `re` referenced `16` time(s)
+- `typing` referenced `16` time(s)
+- `asyncio` referenced `12` time(s)
+- `argparse` referenced `11` time(s)
+- `os` referenced `11` time(s)
+- `sys` referenced `11` time(s)
+- `datetime` referenced `9` time(s)
+- `logging` referenced `9` time(s)
+- `watchdog` referenced `8` time(s)
+- `shutil` referenced `7` time(s)
+- `httpx` referenced `5` time(s)
+- `dataclasses` referenced `4` time(s)
+- `base64` referenced `3` time(s)
+- `mimetypes` referenced `3` time(s)
+- `PIL` referenced `3` time(s)
+- `pydantic` referenced `3` time(s)
+- `subprocess` referenced `3` time(s)
+- `dotenv` referenced `3` time(s)
+- `hashlib` referenced `2` time(s)
+- `collections` referenced `2` time(s)
+- `math` referenced `2` time(s)
+- `enum` referenced `2` time(s)
+- `tempfile` referenced `2` time(s)
+- `tenacity` referenced `2` time(s)
+- `atexit` referenced `2` time(s)
+- `signal` referenced `2` time(s)
+- `urllib` referenced `2` time(s)
+- `pytest` referenced `2` time(s)
+- `ast` referenced `1` time(s)
+- `fpdf` referenced `1` time(s)
+- `anthropic` referenced `1` time(s)
+- `abc` referenced `1` time(s)
+- `concurrent` referenced `1` time(s)
+- `fcntl` referenced `1` time(s)
+- `select` referenced `1` time(s)
+- `threading` referenced `1` time(s)
+
+## Module Inventory
+
+- `build_api_reference` -> `build_api_reference.py`
+- `build_architecture_reports` -> `build_architecture_reports.py`
+- `create_project` -> `create_project.py`
+- `docs.screenwire-operational-overview.render_pdf` -> `docs/screenwire-operational-overview/render_pdf.py`
+- `graph` -> `graph/__init__.py`
+- `graph.api` -> `graph/api.py`
+- `graph.cc_parser` -> `graph/cc_parser.py`
+- `graph.continuity_validator` -> `graph/continuity_validator.py`
+- `graph.frame_prompt_refiner` -> `graph/frame_prompt_refiner.py`
+- `graph.grid_generate` -> `graph/grid_generate.py`
+- `graph.grok_tagger` -> `graph/grok_tagger.py`
+- `graph.haiku_enricher` -> `graph/haiku_enricher.py`
+- `graph.materializer` -> `graph/materializer.py`
+- `graph.prompt_assembler` -> `graph/prompt_assembler.py`
+- `graph.prompt_pair_validator` -> `graph/prompt_pair_validator.py`
+- `graph.reference_collector` -> `graph/reference_collector.py`
+- `graph.schema` -> `graph/schema.py`
+- `graph.store` -> `graph/store.py`
+- `handlers` -> `handlers/__init__.py`
+- `handlers.base` -> `handlers/base.py`
+- `handlers.cast_image` -> `handlers/cast_image.py`
+- `handlers.frame` -> `handlers/frame.py`
+- `handlers.location_grid` -> `handlers/location_grid.py`
+- `handlers.models` -> `handlers/models.py`
+- `handlers.storyboard` -> `handlers/storyboard.py`
+- `handlers.video_clip` -> `handlers/video_clip.py`
+- `image_tagger` -> `image_tagger.py`
+- `run_pipeline` -> `run_pipeline.py`
+- `server` -> `server.py`
+- `skills` -> `skills/__init__.py`
+- `tests.conftest` -> `tests/conftest.py`
+- `tests.test_alignment_contracts` -> `tests/test_alignment_contracts.py`
+- `tests.test_api_reference_builder` -> `tests/test_api_reference_builder.py`
+- `tests.test_architecture_reports` -> `tests/test_architecture_reports.py`
+- `tests.test_corrective_fixes` -> `tests/test_corrective_fixes.py`
+- `tests.test_pipeline_smoke_e2e` -> `tests/test_pipeline_smoke_e2e.py`
+- `tests.test_prompt_refactor_unit` -> `tests/test_prompt_refactor_unit.py`
+- `train_agent` -> `train_agent.py`
+
+## Internal Dependency Edges
+
+- `graph.api` -> `graph.schema`
+- `graph.api` -> `graph.store`
+- `graph.cc_parser` -> `graph.api`
+- `graph.cc_parser` -> `graph.schema`
+- `graph.continuity_validator` -> `graph.api`
+- `graph.continuity_validator` -> `graph.schema`
+- `graph.continuity_validator` -> `graph.store`
+- `graph.frame_prompt_refiner` -> `graph.prompt_assembler`
+- `graph.grid_generate` -> `handlers`
+- `graph.grok_tagger` -> `graph.api`
+- `graph.grok_tagger` -> `graph.schema`
+- `graph.grok_tagger` -> `graph.store`
+- `graph.haiku_enricher` -> `graph.schema`
+- `graph.haiku_enricher` -> `graph.store`
+- `graph.materializer` -> `graph.api`
+- `graph.materializer` -> `graph.schema`
+- `graph.prompt_assembler` -> `graph.api`
+- `graph.prompt_assembler` -> `graph.schema`
+- `graph.prompt_pair_validator` -> `graph.api`
+- `graph.prompt_pair_validator` -> `graph.schema`
+- `graph.prompt_pair_validator` -> `graph.store`
+- `graph.reference_collector` -> `graph.api`
+- `graph.reference_collector` -> `graph.schema`
+- `graph.store` -> `graph.schema`
+- `handlers` -> `handlers.base`
+- `handlers` -> `handlers.cast_image`
+- `handlers` -> `handlers.frame`
+- `handlers` -> `handlers.location_grid`
+- `handlers` -> `handlers.models`
+- `handlers` -> `handlers.storyboard`
+- `handlers` -> `handlers.video_clip`
+- `handlers.base` -> `handlers.models`
+- `handlers.cast_image` -> `handlers.base`
+- `handlers.cast_image` -> `handlers.models`
+- `handlers.frame` -> `handlers.base`
+- `handlers.frame` -> `handlers.models`
+- `handlers.location_grid` -> `handlers.base`
+- `handlers.location_grid` -> `handlers.models`
+- `handlers.storyboard` -> `handlers.base`
+- `handlers.storyboard` -> `handlers.models`
+- `handlers.video_clip` -> `handlers.base`
+- `handlers.video_clip` -> `handlers.models`
+- `run_pipeline` -> `graph.api`
+- `run_pipeline` -> `graph.cc_parser`
+- `run_pipeline` -> `graph.continuity_validator`
+- `run_pipeline` -> `graph.frame_prompt_refiner`
+- `run_pipeline` -> `graph.grid_generate`
+- `run_pipeline` -> `graph.grok_tagger`
+- `run_pipeline` -> `graph.haiku_enricher`
+- `run_pipeline` -> `graph.materializer`
+- `run_pipeline` -> `graph.prompt_assembler`
+- `run_pipeline` -> `graph.schema`
+- `run_pipeline` -> `graph.store`
+- `run_pipeline` -> `image_tagger`
+- `server` -> `graph.frame_prompt_refiner`
+- `server` -> `handlers`
+- `server` -> `image_tagger`
+- `tests.test_alignment_contracts` -> `graph.api`
+- `tests.test_alignment_contracts` -> `graph.frame_prompt_refiner`
+- `tests.test_alignment_contracts` -> `graph.materializer`
+- `tests.test_alignment_contracts` -> `graph.store`
+- `tests.test_alignment_contracts` -> `run_pipeline`
+- `tests.test_alignment_contracts` -> `tests.test_pipeline_smoke_e2e`
+- `tests.test_api_reference_builder` -> `build_api_reference`
+- `tests.test_architecture_reports` -> `build_architecture_reports`
+- `tests.test_corrective_fixes` -> `graph.prompt_assembler`
+- `tests.test_corrective_fixes` -> `run_pipeline`
+- `tests.test_pipeline_smoke_e2e` -> `graph.api`
+- `tests.test_pipeline_smoke_e2e` -> `graph.grid_generate`
+- `tests.test_pipeline_smoke_e2e` -> `graph.materializer`
+- `tests.test_pipeline_smoke_e2e` -> `graph.prompt_assembler`
+- `tests.test_pipeline_smoke_e2e` -> `graph.schema`
+- `tests.test_pipeline_smoke_e2e` -> `graph.store`
+- `tests.test_pipeline_smoke_e2e` -> `handlers.storyboard`
+- `tests.test_prompt_refactor_unit` -> `graph.api`
+- `tests.test_prompt_refactor_unit` -> `graph.prompt_assembler`
+- `tests.test_prompt_refactor_unit` -> `graph.schema`
+- `tests.test_prompt_refactor_unit` -> `tests.test_pipeline_smoke_e2e`

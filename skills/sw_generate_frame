@@ -20,8 +20,12 @@ def main():
     parser.add_argument("--prompt", required=True, help="Frame composition prompt")
     parser.add_argument("--out", required=True, help="Output file path (relative or absolute)")
     parser.add_argument("--size", default="landscape_16_9", help="Image size preset (default: landscape_16_9)")
+    parser.add_argument("--frame-id", default="", help="Canonical frame ID for telemetry and output tracking")
     parser.add_argument("--seed", type=int, default=None, help="Seed for reproducibility")
     parser.add_argument("--ref-images", default="", help="Comma-separated paths to reference images (cast composites, location refs)")
+    parser.add_argument("--storyboard-image", default="", help="Path to storyboard cell image (PRIMARY composition reference)")
+    parser.add_argument("--run-id", default=os.environ.get("SCREENWIRE_RUN_ID", ""), help="Pipeline run ID for telemetry correlation")
+    parser.add_argument("--phase", default=os.environ.get("SCREENWIRE_PHASE", ""), help="Pipeline phase label for telemetry correlation")
     args = parser.parse_args()
 
     project_dir = os.environ.get("PROJECT_DIR", PROJECT_DIR_DEFAULT)
@@ -41,13 +45,28 @@ def main():
             else:
                 print(f"WARNING: Reference image not found: {ref_abs}", file=sys.stderr)
 
+    # Resolve storyboard cell (PRIMARY composition reference — routed separately)
+    storyboard_image = None
+    if args.storyboard_image:
+        sb = args.storyboard_image.strip()
+        sb_abs = sb if os.path.isabs(sb) else os.path.join(project_dir, sb)
+        if os.path.exists(sb_abs):
+            storyboard_image = sb_abs
+        else:
+            print(f"WARNING: Storyboard image not found: {sb_abs}", file=sys.stderr)
+
     body = {
         "prompt": args.prompt,
-        "image_size": args.size,
+        "size": args.size,
         "output_path": out_abs,
         "output_format": "png",
         "reference_images": ref_images,
+        "frame_id": args.frame_id or None,
+        "run_id": args.run_id or None,
+        "phase": args.phase,
     }
+    if storyboard_image:
+        body["storyboard_image"] = storyboard_image
     if args.seed is not None:
         body["seed"] = args.seed
 
@@ -66,6 +85,8 @@ def main():
         sys.exit(1)
 
     print(f"SUCCESS: Frame generated -> {out_abs}")
+    if storyboard_image:
+        print(f"  storyboard_image: {storyboard_image}")
     if ref_images:
         print(f"  reference_images: {len(ref_images)}")
     if isinstance(data, dict):

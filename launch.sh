@@ -241,13 +241,18 @@ LOG_FILE="$LOGS_DIR/launch_$(date +%Y%m%d_%H%M%S).log"
 exec > >(tee >(sed 's/\x1b\[[0-9;]*m//g' >> "$LOG_FILE")) 2>&1
 echo -e "${DIM}Log file: ${LOG_FILE}${RESET}"
 
+LIVE_FLAG="--live"
+if [[ "${SCREENWIRE_LIVE:-1}" == "0" ]]; then
+    LIVE_FLAG=""
+fi
+
 # ───────────────────────────────────────────────────────────────
 # Run pipeline (unbuffered so python streams in real-time)
 # ───────────────────────────────────────────────────────────────
 echo ""
 echo -e "${GREEN}▸ Starting pipeline...${RESET}"
 echo -e "${CYAN}────────────────────────────────────────────${RESET}"
-PYTHONUNBUFFERED=1 python3 run_pipeline.py --project "$PROJECT_ID" ${PIPELINE_FLAGS:-}
+PYTHONUNBUFFERED=1 python3 run_pipeline.py --project "$PROJECT_ID" ${PIPELINE_FLAGS:-} ${LIVE_FLAG}
 EXIT_CODE=$?
 
 echo ""

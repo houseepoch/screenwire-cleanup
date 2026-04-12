@@ -12,7 +12,7 @@ Edges are defined separately with typed source/target constraints.
 This schema is the union of:
   - Lucid Lines context engine (entity fields, world synthesis,
     composition engine, glyph mappings, context chains, tension scoring)
-  - ScreenWire pipeline (formula tags, cast/location/prop profiles,
+  - ScreenWire pipeline (cinematic tags, cast/location/prop profiles,
     dialogue format, visual analysis, composition prompts, video prompts)
 
 Design decisions:
@@ -28,6 +28,7 @@ Design decisions:
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Optional
 from pydantic import BaseModel, Field, model_validator
@@ -36,28 +37,6 @@ from pydantic import BaseModel, Field, model_validator
 # ═══════════════════════════════════════════════════════════════════════════════
 # ENUMS — Controlled vocabularies
 # ═══════════════════════════════════════════════════════════════════════════════
-
-
-class FormulaTag(str, Enum):
-    """Frame formula tags — what kind of visual shot this frame represents."""
-    F01 = "F01"  # Single character focus, emotional portrait
-    F02 = "F02"  # Two-character interaction
-    F03 = "F03"  # Group scene (3+)
-    F04 = "F04"  # Close-up speaking shot (single)
-    F05 = "F05"  # Over-shoulder dialogue exchange
-    F06 = "F06"  # Wide dialogue (characters + environment)
-    F07 = "F07"  # Establishing shot (full location)
-    F08 = "F08"  # Detail/atmosphere shot
-    F09 = "F09"  # Transition shot (moving between spaces)
-    F10 = "F10"  # Character in motion
-    F11 = "F11"  # Interaction with prop/object
-    F12 = "F12"  # Time passage montage frame
-    F13 = "F13"  # Flashback/memory frame
-    F14 = "F14"  # Beat-synced visual (music video)
-    F15 = "F15"  # Lyric visualization (music video)
-    F16 = "F16"  # Performance shot (music video)
-    F17 = "F17"  # Narrative transition (scene bridge)
-    F18 = "F18"  # Cinematic emphasis (slow push, dramatic reveal)
 
 
 class EntityType(str, Enum):
@@ -208,6 +187,7 @@ class Provenance(BaseModel):
     last_modified_at: Optional[str] = None  # Updated on mutation
     last_modified_by: Optional[str] = None  # Which agent last touched this
     supersedes: Optional[str] = None        # ID of the node/edge this replaced (for corrections)
+    run_id: Optional[str] = None            # Pipeline run that last touched this datum
 
 
 class CastStateVariant(BaseModel):
@@ -218,6 +198,68 @@ class CastStateVariant(BaseModel):
     image_path: Optional[str] = None
     trigger_frame: Optional[str] = None
     active_through: Optional[str] = None
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _default_pose_state() -> "PoseState":
+    return PoseState(pose="standing_neutral")
+
+
+class PoseState(BaseModel):
+    """Canonical pose lock for a character at a specific frame boundary."""
+
+    pose: str = Field(
+        ...,
+        description=(
+            "Canonical pose name, e.g. 'sitting_straight_chair', "
+            "'lying_supine_ground', 'crouching_ready', 'standing_profile_left'"
+        ),
+    )
+    modifiers: list[str] = Field(
+        default_factory=list,
+        description="Pose-specific modifiers such as hands, eyeline, or screen position locks.",
+    )
+    frame_id: Optional[str] = None
+    last_seen_frame: Optional[int] = None
+    confidence: float = Field(
+        default=1.0,
+        description="0.0-1.0 how confidently the validator resolved this pose.",
+    )
+
+
+class CharacterSheet(BaseModel):
+    """Versioned cast-bible sheet for one character."""
+
+    character_id: str
+    name: str
+    description: str = ""
+    current_pose: PoseState = Field(default_factory=_default_pose_state)
+    pose_history: list[PoseState] = Field(default_factory=list)
+    frame_poses: dict[str, PoseState] = Field(default_factory=dict)
+    appearance_notes: dict[str, str] = Field(default_factory=dict)
+
+    def pose_for_frame(self, frame_id: str) -> Optional[PoseState]:
+        return self.frame_poses.get(frame_id) or self.current_pose
+
+
+class CastBible(BaseModel):
+    """Versioned sidecar store for cast pose locks and reusable appearance anchors."""
+
+    characters: dict[str, CharacterSheet] = Field(default_factory=dict)
+    locations: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    version: str = Field(default_factory=_utc_now_iso)
+    run_id: Optional[str] = None
+    sequence_id: Optional[str] = None
+
+    def to_json(self) -> str:
+        return self.model_dump_json(indent=2)
+
+    @classmethod
+    def from_json(cls, data: str) -> "CastBible":
+        return cls.model_validate_json(data)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -319,6 +361,7 @@ class ProjectNode(BaseModel):
     mood: list[str] = Field(default_factory=list)
     extra_details: str = ""
     source_files: list[str] = Field(default_factory=list)
+    provenance: Provenance = Field(default_factory=Provenance)
 
 
 # ─── Cast ────────────────────────────────────────────────────────────────────
@@ -392,8 +435,6 @@ class CastNode(BaseModel):
     # Generation tracking
     composite_path: Optional[str] = None
     composite_status: Optional[str] = None
-    voice_profile_path: Optional[str] = None
-    voice_status: Optional[str] = None
 
     # State variant tracking
     state_variants: dict[str, CastStateVariant] = Field(default_factory=dict)
@@ -532,17 +573,13 @@ class LocationFrameState(BaseModel):
 class LocationDirectionView(BaseModel):
     """A single cardinal direction view from within a location."""
     description: str = ""           # What is visible facing this direction
-    image_path: Optional[str] = None  # Generated reference image for this view
-    image_status: Optional[str] = None  # pending, generated, failed
     key_features: list[str] = Field(default_factory=list)  # Doors, windows, furniture, etc.
     depth_description: str = ""     # Foreground → midground → background layers
 
 
 class LocationDirections(BaseModel):
     """Cardinal direction views from within a location.
-    Each direction has a text description and a generated reference image.
-    The primary location image is used as the base; directional views are
-    generated from it to establish spatial consistency."""
+    Each direction is a textual spatial anchor used by downstream frame prompts."""
     north: Optional[LocationDirectionView] = None
     south: Optional[LocationDirectionView] = None
     east: Optional[LocationDirectionView] = None
@@ -580,7 +617,7 @@ class LocationNode(BaseModel):
     material_palette: list[str] = Field(default_factory=list)  # wood, stone, metal — texture anchors
     architecture_keywords: list[str] = Field(default_factory=list)
     flora: Optional[str] = None
-    location_type: Optional[str] = None     # from Lucid Lines EntityFields
+    location_type: Optional[str] = "exterior"  # "interior" or "exterior" — drives location grid template selection
 
     # Cardinal direction views
     directions: LocationDirections = Field(default_factory=LocationDirections)
@@ -624,6 +661,18 @@ class PropNode(BaseModel):
     provenance: Provenance = Field(default_factory=Provenance)
 
 
+# ─── Scene Staging ───────────────────────────────────────────────────────────
+
+class StagingBeat(BaseModel):
+    """Spatial staging plan for a single beat (start/mid/end) within a scene.
+    Populated by the CC parser from ///SCENE_STAGING tags.
+    Haiku workers interpolate between beats based on frame position."""
+
+    cast_positions: dict[str, str] = {}     # cast_id -> screen_position
+    cast_looking_at: dict[str, str] = {}    # cast_id -> looking_at target
+    cast_facing: dict[str, str] = {}        # cast_id -> facing_direction
+
+
 # ─── Scene ───────────────────────────────────────────────────────────────────
 
 class SceneNode(BaseModel):
@@ -659,6 +708,9 @@ class SceneNode(BaseModel):
     # Frame range
     frame_ids: list[str] = Field(default_factory=list)
     frame_count: int = 0
+
+    # Scene staging (from CC ///SCENE_STAGING tags)
+    staging_plan: dict[str, StagingBeat] = Field(default_factory=dict)  # 'start' | 'mid' | 'end' -> StagingBeat
 
     provenance: Provenance = Field(default_factory=Provenance)
 
@@ -740,6 +792,21 @@ class FrameComposition(BaseModel):
     rule: Optional[str] = None              # Composition rule applied
 
 
+class CinematicTag(BaseModel):
+    """Cinematic frame tag from the Grok tagging pass.
+    Assigned post-graph from the Cinematic Frame Tag Taxonomy (D/E/R/A/C/T/S/M families)."""
+
+    tag: str = ''                   # e.g. 'D01.a'
+    modifier: str = ''              # e.g. '+push'
+    full_tag: str = ''              # e.g. 'D01.a +push'
+    definition: str = ''            # Textual composition definition from taxonomy
+    family: str = ''                # D, E, R, A, C, T, S, M
+    editorial_function: str = ''
+    ai_prompt_language: str = ''
+    lens_guidance: str = ''
+    dof_guidance: str = ''
+
+
 class FrameNode(BaseModel):
     """A single visual beat — one shot, one composition, one image.
     The atomic unit of the visual pipeline."""
@@ -747,17 +814,14 @@ class FrameNode(BaseModel):
     frame_id: str
     scene_id: str
     sequence_index: int                     # Global ordering across all scenes
-    formula_tag: Optional[FormulaTag] = None
+    cinematic_tag: CinematicTag = Field(default_factory=CinematicTag)
 
     # Prose origin (preserved from decomposition)
     narrative_beat: str = ""                 # Environment-first visual description
     source_text: str = ""                   # Original prose excerpt this frame comes from
 
-    # Entity wiring — per-frame absolute snapshots
-    cast_states: list[CastFrameState] = Field(default_factory=list)
+    # Entity wiring — keyed registries on NarrativeGraph are canonical
     location_id: Optional[str] = None       # Specific location variant for this frame
-    location_state: Optional[LocationFrameState] = None  # None = pristine location state
-    prop_states: list[PropFrameState] = Field(default_factory=list)
 
     # Time of day — explicit per frame for consistency
     # Inherited from scene by default, but overridable for time-passage sequences
@@ -786,8 +850,9 @@ class FrameNode(BaseModel):
     visual_flow_element: Optional[str] = None  # motion|dialogue|reaction|action|weight|establishment
 
     # Video direction — Morpheus sets these for downstream video generation
-    suggested_duration: Optional[int] = None  # Clip duration in seconds (min 3, scales with content). None = use formula heuristic
+    suggested_duration: Optional[int] = None  # Clip duration in seconds (min 2, scales with content). None = use formula heuristic
     action_summary: str = ""                  # Concise physical action for video prompt (e.g., "Mei turns from railing, kimono catching wind")
+    video_optimized_prompt_block: str = ""   # Dense cinematic summary that preserves action+blocking+environment within Grok limits
 
     # Continuity
     continuity_chain: bool = False          # Same scene+location as previous frame
@@ -798,6 +863,7 @@ class FrameNode(BaseModel):
     composed_image_path: Optional[str] = None
     video_path: Optional[str] = None
     status: str = "pending"
+    refs_used: Optional[list[str]] = None  # Ref paths sent during frame generation (storyboard first)
 
     provenance: Provenance = Field(default_factory=Provenance)
 
@@ -848,40 +914,95 @@ class DialogueNode(BaseModel):
     env_intensity: Optional[str] = None     # whisper, quiet, normal, loud, shouting
     env_atmosphere: list[str] = Field(default_factory=list)  # wind, rain, static
 
-    # Legacy audio tracking / optional derived metadata
-    audio_path: Optional[str] = None
-    audio_duration_seconds: Optional[float] = None
-
     provenance: Provenance = Field(default_factory=Provenance)
 
 
-# ─── Voice Profile ─────────────────────────────────────────────────────────
+# ─── Shot Packet ────────────────────────────────────────────────────────────
 
-class VoiceNode(BaseModel):
-    """Voice profile for a speaking cast member.
-    Replaces the Voice Director agent — populated programmatically
-    or by Morpheus during graph construction."""
+class ShotNeighborBeat(BaseModel):
+    """Previous/next frame snapshot used when assembling continuity-aware prompts."""
 
-    voice_id: str                           # Same as cast_id for 1:1 mapping
-    cast_id: str
-    character_name: str = ""
+    frame_id: Optional[str] = None
+    narrative_beat: str = ""
+    action_summary: str = ""
+    formula_tag: Optional[str] = None
+    scene_id: Optional[str] = None
+    is_dialogue: bool = False
 
-    # Voice identity
-    voice_description: str = ""             # Full description (20-1000 chars)
-    quality_prefix: str = ""                # Media-type-derived audio quality prefix
-    tone: Optional[str] = None              # warm, guarded, analytical
-    pitch: Optional[str] = None             # low-mid register, high soprano, etc.
-    accent: Optional[str] = None            # neutral American, British RP, etc.
-    delivery_style: Optional[str] = None    # Slow, considered pacing, rapid-fire, etc.
-    tempo: Optional[str] = None             # measured, fast, drawling
-    emotional_range: Optional[str] = None   # How emotions manifest vocally
-    vocal_style: Optional[str] = None       # From source material
 
-    # Status
-    voice_profile_path: Optional[str] = None
-    voice_status: str = "pending"           # pending | profiled | confirmed
+class ShotAudioTurn(BaseModel):
+    """A single audible dialogue turn during the frame."""
 
-    provenance: Provenance = Field(default_factory=Provenance)
+    dialogue_id: str = ""
+    cast_id: str = ""
+    speaker: str = ""
+    line: str = ""
+    performance_direction: str = ""
+    env_intensity: Optional[str] = None
+    env_distance: Optional[str] = None
+    env_medium: Optional[str] = None
+    env_atmosphere: list[str] = Field(default_factory=list)
+
+
+class ShotAudioBeat(BaseModel):
+    """Audio payload for prompt assembly.
+
+    This does not imply external TTS or lip-sync assets; it is the native-audio
+    context passed into the video prompt.
+    """
+
+    dialogue_present: bool = False
+    turns: list[ShotAudioTurn] = Field(default_factory=list)
+    ambient_layers: list[str] = Field(default_factory=list)
+    background_music: Optional[str] = None
+
+
+class ShotIntent(BaseModel):
+    """The directorial intent the downstream generators should preserve."""
+
+    formula_tag: Optional[str] = None
+    shot: Optional[str] = None
+    angle: Optional[str] = None
+    movement: Optional[str] = None
+    focus: Optional[str] = None
+    dramatic_purpose: Optional[str] = None
+    beat_turn: Optional[str] = None
+    pov_owner: Optional[str] = None
+    viewer_knowledge_delta: Optional[str] = None
+    power_dynamic: Optional[str] = None
+    tension_source: Optional[str] = None
+    camera_motivation: Optional[str] = None
+    movement_motivation: Optional[str] = None
+    movement_path: Optional[str] = None
+    reaction_target: Optional[str] = None
+
+
+class ShotPacket(BaseModel):
+    """Canonical deterministic prompt packet for a frame.
+
+    Downstream prompt assembly reads this packet instead of re-deriving intent
+    ad hoc from scattered graph fields.
+    """
+
+    frame_id: str
+    scene_id: str
+    sequence_index: int
+    location_id: Optional[str] = None
+    subject_count: int = 0
+    visible_cast_ids: list[str] = Field(default_factory=list)
+    visible_prop_ids: list[str] = Field(default_factory=list)
+    previous_beat: Optional[ShotNeighborBeat] = None
+    current_beat: str = ""
+    video_optimized_prompt_block: str = ""
+    next_beat: Optional[ShotNeighborBeat] = None
+    continuity_deltas: list[str] = Field(default_factory=list)
+    cast_invariants: list[str] = Field(default_factory=list)
+    prop_invariants: list[str] = Field(default_factory=list)
+    location_invariants: list[str] = Field(default_factory=list)
+    blocking: list[str] = Field(default_factory=list)
+    background: list[str] = Field(default_factory=list)
+    shot_intent: ShotIntent = Field(default_factory=ShotIntent)
+    audio: ShotAudioBeat = Field(default_factory=ShotAudioBeat)
 
 
 # ─── Storyboard Grid ─────────────────────────────────────────────────────
@@ -896,10 +1017,12 @@ class ShotMatchGroup(BaseModel):
 
 
 class StoryboardGrid(BaseModel):
-    """Sequential batch of up to 9 frames -> one 3x3 16:9 storyboard image.
-    Splits on scene breaks / large shifts. Cascades to next grid."""
+    """Sequential guidance batch of up to 6 frames.
+
+    Used for continuity planning only. Final frames are rendered separately.
+    """
     grid_id: str                             # "grid_01"
-    frame_ids: list[str] = Field(default_factory=list)  # ordered, max 9
+    frame_ids: list[str] = Field(default_factory=list)  # ordered, max 6
     frame_count: int = 0
     rows: int = 3
     cols: int = 3
@@ -989,15 +1112,12 @@ class NarrativeGraph(BaseModel):
     locations: dict[str, LocationNode] = Field(default_factory=dict)
     props: dict[str, PropNode] = Field(default_factory=dict)
 
-    # Voice profiles (one per speaking cast member)
-    voices: dict[str, VoiceNode] = Field(default_factory=dict)
-
     # Story structure
     scenes: dict[str, SceneNode] = Field(default_factory=dict)
     frames: dict[str, FrameNode] = Field(default_factory=dict)
     dialogue: dict[str, DialogueNode] = Field(default_factory=dict)
 
-    # Storyboard grids (sequential batches of up to 9 frames -> 3x3 composites)
+    # Storyboard grids (guidance-only sequential batches of up to 6 frames)
     storyboard_grids: dict[str, StoryboardGrid] = Field(default_factory=dict)
 
     # Per-frame state snapshots (keyed by "{entity_id}@{frame_id}")
@@ -1021,7 +1141,6 @@ class NarrativeGraph(BaseModel):
         "visual_direction": False,
         "cast_identity": False,
         "cast_voice": False,
-        "voice_profiles": False,
         "locations": False,
         "props": False,
         "scenes": False,
@@ -1063,12 +1182,16 @@ class NarrativeGraph(BaseModel):
                     cd = chain_data.model_dump() if hasattr(chain_data, "model_dump") else dict(chain_data)
                 frame_ids = cd.get("frame_ids", [])
                 n = len(frame_ids)
-                if n <= 4:
+                if n <= 1:
+                    rows, cols = 1, 1
+                elif n <= 2:
+                    rows, cols = 1, 2
+                elif n <= 4:
                     rows, cols = 2, 2
-                elif n <= 9:
-                    rows, cols = 3, 3
+                elif n <= 6:
+                    rows, cols = 2, 3
                 else:
-                    rows, cols = 4, 4
+                    rows, cols = 2, 3
                 grid_id = chain_id.replace("chain_", "grid_")
                 grids[grid_id] = {
                     "grid_id": grid_id,
@@ -1103,7 +1226,6 @@ class NarrativeGraph(BaseModel):
             ("cast", self.cast),
             ("location", self.locations),
             ("prop", self.props),
-            ("voice", self.voices),
             ("scene", self.scenes),
             ("frame", self.frames),
             ("dialogue", self.dialogue),

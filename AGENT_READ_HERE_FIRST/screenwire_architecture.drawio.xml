@@ -1,0 +1,609 @@
+<mxfile version="21.0.0">
+  <diagram name="ScreenWire Architecture" id="main">
+    <mxGraphModel dx="100" dy="100" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="2400" pageHeight="1800" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- ZONE 1 — PIPELINE PHASES (top, full width swimlane)           -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <mxCell id="z1" value="&lt;b&gt;SCREENWIRE PIPELINE PHASES&lt;/b&gt;" style="swimlane;startSize=30;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;fontSize=14;fontColor=#0050a0;html=1;collapsible=0;swimlaneLine=1;rounded=1;arcSize=4;" vertex="1" parent="1">
+          <mxGeometry x="20" y="20" width="1900" height="250" as="geometry"/>
+        </mxCell>
+
+        <!-- Phase 0 -->
+        <mxCell id="p0" value="&lt;b&gt;Phase 0&lt;/b&gt;&lt;br&gt;&lt;i&gt;Project Scaffold&lt;/i&gt;&lt;hr size=&quot;1&quot;/&gt;&lt;font style=&quot;font-size:9px&quot;&gt;Verify manifest JSON&lt;br&gt;Check folder structure&lt;br&gt;Validate phase_0 status&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;verticalAlign=top;spacingTop=5;arcSize=8;" vertex="1" parent="z1">
+          <mxGeometry x="20" y="45" width="175" height="130" as="geometry"/>
+        </mxCell>
+        <mxCell id="qg01" value="" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=8;" vertex="1" parent="z1">
+          <mxGeometry x="213" y="87" width="32" height="32" as="geometry"/>
+        </mxCell>
+        <!-- Phase 1 -->
+        <mxCell id="p1" value="&lt;b&gt;Phase 1&lt;/b&gt;&lt;br&gt;&lt;i&gt;Narrative&lt;/i&gt;&lt;hr size=&quot;1&quot;/&gt;&lt;font style=&quot;font-size:9px&quot;&gt;CC writes skeleton&lt;br&gt;Parallel Haiku prose&lt;br&gt;CC assembles output&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;verticalAlign=top;spacingTop=5;arcSize=8;" vertex="1" parent="z1">
+          <mxGeometry x="263" y="45" width="175" height="130" as="geometry"/>
+        </mxCell>
+        <mxCell id="qg12" value="" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="z1">
+          <mxGeometry x="456" y="87" width="32" height="32" as="geometry"/>
+        </mxCell>
+        <!-- Phase 2 -->
+        <mxCell id="p2" value="&lt;b&gt;Phase 2&lt;/b&gt;&lt;br&gt;&lt;i&gt;Graph Construction&lt;/i&gt;&lt;hr size=&quot;1&quot;/&gt;&lt;font style=&quot;font-size:9px&quot;&gt;5-agent Morpheus Swarm&lt;br&gt;Prompt assembly&lt;br&gt;Materialize flat files&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;verticalAlign=top;spacingTop=5;arcSize=8;" vertex="1" parent="z1">
+          <mxGeometry x="506" y="45" width="175" height="130" as="geometry"/>
+        </mxCell>
+        <mxCell id="qg23" value="" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="z1">
+          <mxGeometry x="699" y="87" width="32" height="32" as="geometry"/>
+        </mxCell>
+        <!-- Phase 3 -->
+        <mxCell id="p3" value="&lt;b&gt;Phase 3&lt;/b&gt;&lt;br&gt;&lt;i&gt;Visual Assets&lt;/i&gt;&lt;hr size=&quot;1&quot;/&gt;&lt;font style=&quot;font-size:9px&quot;&gt;Cast/Loc/Prop refs&lt;br&gt;Storyboard grids&lt;br&gt;Asset quality gate&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;verticalAlign=top;spacingTop=5;arcSize=8;" vertex="1" parent="z1">
+          <mxGeometry x="749" y="45" width="175" height="130" as="geometry"/>
+        </mxCell>
+        <mxCell id="qg34" value="" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="z1">
+          <mxGeometry x="942" y="87" width="32" height="32" as="geometry"/>
+        </mxCell>
+        <!-- Phase 4 -->
+        <mxCell id="p4" value="&lt;b&gt;Phase 4&lt;/b&gt;&lt;br&gt;&lt;i&gt;Composition&lt;/i&gt;&lt;hr size=&quot;1&quot;/&gt;&lt;font style=&quot;font-size:9px&quot;&gt;Sequential frame gen&lt;br&gt;ShotPacket prompts&lt;br&gt;Ref image injection&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;verticalAlign=top;spacingTop=5;arcSize=8;" vertex="1" parent="z1">
+          <mxGeometry x="992" y="45" width="175" height="130" as="geometry"/>
+        </mxCell>
+        <mxCell id="qg45" value="" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="z1">
+          <mxGeometry x="1185" y="87" width="32" height="32" as="geometry"/>
+        </mxCell>
+        <!-- Phase 5 -->
+        <mxCell id="p5" value="&lt;b&gt;Phase 5&lt;/b&gt;&lt;br&gt;&lt;i&gt;Video Gen&lt;/i&gt;&lt;hr size=&quot;1&quot;/&gt;&lt;font style=&quot;font-size:9px&quot;&gt;Grok vision refine&lt;br&gt;Pipelined clip gen&lt;br&gt;Native audio prompts&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;verticalAlign=top;spacingTop=5;arcSize=8;" vertex="1" parent="z1">
+          <mxGeometry x="1235" y="45" width="175" height="130" as="geometry"/>
+        </mxCell>
+        <mxCell id="qg56" value="" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="z1">
+          <mxGeometry x="1428" y="87" width="32" height="32" as="geometry"/>
+        </mxCell>
+        <!-- Phase 6 -->
+        <mxCell id="p6" value="&lt;b&gt;Phase 6&lt;/b&gt;&lt;br&gt;&lt;i&gt;Export&lt;/i&gt;&lt;hr size=&quot;1&quot;/&gt;&lt;font style=&quot;font-size:9px&quot;&gt;ffmpeg normalize&lt;br&gt;Concat + loudnorm&lt;br&gt;ffprobe verify&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;verticalAlign=top;spacingTop=5;arcSize=8;" vertex="1" parent="z1">
+          <mxGeometry x="1478" y="45" width="175" height="130" as="geometry"/>
+        </mxCell>
+
+        <!-- Pipeline flow edges (within z1) -->
+        <mxCell id="pe0q" value="" edge="1" source="p0" target="qg01" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#6c8ebf;strokeWidth=2;endArrow=block;endFill=1;" parent="z1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="peq1" value="" edge="1" source="qg01" target="p1" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#6c8ebf;strokeWidth=2;endArrow=block;endFill=1;" parent="z1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="pe1q" value="" edge="1" source="p1" target="qg12" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#6c8ebf;strokeWidth=2;endArrow=block;endFill=1;" parent="z1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="peq2" value="" edge="1" source="qg12" target="p2" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#6c8ebf;strokeWidth=2;endArrow=block;endFill=1;" parent="z1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="pe2q" value="" edge="1" source="p2" target="qg23" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#6c8ebf;strokeWidth=2;endArrow=block;endFill=1;" parent="z1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="peq3" value="" edge="1" source="qg23" target="p3" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#6c8ebf;strokeWidth=2;endArrow=block;endFill=1;" parent="z1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="pe3q" value="" edge="1" source="p3" target="qg34" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#6c8ebf;strokeWidth=2;endArrow=block;endFill=1;" parent="z1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="peq4" value="" edge="1" source="qg34" target="p4" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#6c8ebf;strokeWidth=2;endArrow=block;endFill=1;" parent="z1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="pe4q" value="" edge="1" source="p4" target="qg45" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#6c8ebf;strokeWidth=2;endArrow=block;endFill=1;" parent="z1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="peq5" value="" edge="1" source="qg45" target="p5" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#6c8ebf;strokeWidth=2;endArrow=block;endFill=1;" parent="z1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="pe5q" value="" edge="1" source="p5" target="qg56" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#6c8ebf;strokeWidth=2;endArrow=block;endFill=1;" parent="z1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="peq6" value="" edge="1" source="qg56" target="p6" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#6c8ebf;strokeWidth=2;endArrow=block;endFill=1;" parent="z1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <!-- Quality gate labels -->
+        <mxCell id="qg01_lbl" value="QG" style="text;html=1;fontSize=7;fontColor=#d6b656;align=center;verticalAlign=middle;" vertex="1" parent="z1">
+          <mxGeometry x="213" y="90" width="32" height="26" as="geometry"/>
+        </mxCell>
+        <mxCell id="qg12_lbl" value="QG" style="text;html=1;fontSize=7;fontColor=#d6b656;align=center;verticalAlign=middle;" vertex="1" parent="z1">
+          <mxGeometry x="456" y="90" width="32" height="26" as="geometry"/>
+        </mxCell>
+        <mxCell id="qg23_lbl" value="QG" style="text;html=1;fontSize=7;fontColor=#d6b656;align=center;verticalAlign=middle;" vertex="1" parent="z1">
+          <mxGeometry x="699" y="90" width="32" height="26" as="geometry"/>
+        </mxCell>
+        <mxCell id="qg34_lbl" value="QG" style="text;html=1;fontSize=7;fontColor=#d6b656;align=center;verticalAlign=middle;" vertex="1" parent="z1">
+          <mxGeometry x="942" y="90" width="32" height="26" as="geometry"/>
+        </mxCell>
+        <mxCell id="qg45_lbl" value="QG" style="text;html=1;fontSize=7;fontColor=#d6b656;align=center;verticalAlign=middle;" vertex="1" parent="z1">
+          <mxGeometry x="1185" y="90" width="32" height="26" as="geometry"/>
+        </mxCell>
+        <mxCell id="qg56_lbl" value="QG" style="text;html=1;fontSize=7;fontColor=#d6b656;align=center;verticalAlign=middle;" vertex="1" parent="z1">
+          <mxGeometry x="1428" y="90" width="32" height="26" as="geometry"/>
+        </mxCell>
+        <!-- Phase sub-labels -->
+        <mxCell id="p0_sub" value="&lt;font style=&quot;font-size:8px&quot;&gt;run_pipeline.py&lt;/font&gt;" style="text;html=1;fontSize=8;fontColor=#6c8ebf;align=center;" vertex="1" parent="z1">
+          <mxGeometry x="20" y="178" width="175" height="18" as="geometry"/>
+        </mxCell>
+        <mxCell id="p1_sub" value="&lt;font style=&quot;font-size:8px&quot;&gt;creative_coordinator.md&lt;/font&gt;" style="text;html=1;fontSize=8;fontColor=#6c8ebf;align=center;" vertex="1" parent="z1">
+          <mxGeometry x="263" y="178" width="175" height="18" as="geometry"/>
+        </mxCell>
+        <mxCell id="p2_sub" value="&lt;font style=&quot;font-size:8px&quot;&gt;morpheus_swarm (5 agents)&lt;/font&gt;" style="text;html=1;fontSize=8;fontColor=#6c8ebf;align=center;" vertex="1" parent="z1">
+          <mxGeometry x="506" y="178" width="175" height="18" as="geometry"/>
+        </mxCell>
+        <mxCell id="p3_sub" value="&lt;font style=&quot;font-size:8px&quot;&gt;programmatic generation&lt;/font&gt;" style="text;html=1;fontSize=8;fontColor=#6c8ebf;align=center;" vertex="1" parent="z1">
+          <mxGeometry x="749" y="178" width="175" height="18" as="geometry"/>
+        </mxCell>
+        <mxCell id="p5_sub" value="&lt;font style=&quot;font-size:8px&quot;&gt;Grok native-audio video&lt;/font&gt;" style="text;html=1;fontSize=8;fontColor=#6c8ebf;align=center;" vertex="1" parent="z1">
+          <mxGeometry x="1235" y="178" width="175" height="18" as="geometry"/>
+        </mxCell>
+        <mxCell id="p6_sub" value="&lt;font style=&quot;font-size:8px&quot;&gt;ffmpeg deterministic&lt;/font&gt;" style="text;html=1;fontSize=8;fontColor=#6c8ebf;align=center;" vertex="1" parent="z1">
+          <mxGeometry x="1478" y="178" width="175" height="18" as="geometry"/>
+        </mxCell>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- ZONE 6 — LEGEND (top right corner)                            -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <mxCell id="z6" value="&lt;b&gt;LEGEND&lt;/b&gt;" style="swimlane;startSize=25;fillColor=#f5f5f5;strokeColor=#666666;fontStyle=1;fontSize=12;fontColor=#333333;html=1;collapsible=0;rounded=1;arcSize=6;" vertex="1" parent="1">
+          <mxGeometry x="1940" y="20" width="440" height="300" as="geometry"/>
+        </mxCell>
+        <!-- Legend: Pipeline Phase -->
+        <mxCell id="leg_pp" value="" style="rounded=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="z6">
+          <mxGeometry x="15" y="35" width="30" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="leg_pp_t" value="Pipeline Phase" style="text;html=1;align=left;verticalAlign=middle;fontSize=11;" vertex="1" parent="z6">
+          <mxGeometry x="55" y="35" width="150" height="20" as="geometry"/>
+        </mxCell>
+        <!-- Legend: Morpheus Agent -->
+        <mxCell id="leg_ma" value="" style="rounded=1;fillColor=#ffe6cc;strokeColor=#d79b00;" vertex="1" parent="z6">
+          <mxGeometry x="15" y="65" width="30" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="leg_ma_t" value="Morpheus Agent" style="text;html=1;align=left;verticalAlign=middle;fontSize=11;" vertex="1" parent="z6">
+          <mxGeometry x="55" y="65" width="150" height="20" as="geometry"/>
+        </mxCell>
+        <!-- Legend: Schema Model -->
+        <mxCell id="leg_sm" value="" style="rounded=1;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="z6">
+          <mxGeometry x="15" y="95" width="30" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="leg_sm_t" value="Schema Model (Pydantic)" style="text;html=1;align=left;verticalAlign=middle;fontSize=11;" vertex="1" parent="z6">
+          <mxGeometry x="55" y="95" width="170" height="20" as="geometry"/>
+        </mxCell>
+        <!-- Legend: API Endpoint -->
+        <mxCell id="leg_ae" value="" style="rounded=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="z6">
+          <mxGeometry x="15" y="125" width="30" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="leg_ae_t" value="API Endpoint" style="text;html=1;align=left;verticalAlign=middle;fontSize=11;" vertex="1" parent="z6">
+          <mxGeometry x="55" y="125" width="150" height="20" as="geometry"/>
+        </mxCell>
+        <!-- Legend: External Service -->
+        <mxCell id="leg_es" value="" style="rounded=1;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="z6">
+          <mxGeometry x="15" y="155" width="30" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="leg_es_t" value="External Service (Replicate / xAI)" style="text;html=1;align=left;verticalAlign=middle;fontSize=11;" vertex="1" parent="z6">
+          <mxGeometry x="55" y="155" width="220" height="20" as="geometry"/>
+        </mxCell>
+        <!-- Legend: Quality Gate -->
+        <mxCell id="leg_qg" value="" style="rhombus;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="z6">
+          <mxGeometry x="15" y="185" width="25" height="25" as="geometry"/>
+        </mxCell>
+        <mxCell id="leg_qg_t" value="Quality Gate" style="text;html=1;align=left;verticalAlign=middle;fontSize=11;" vertex="1" parent="z6">
+          <mxGeometry x="55" y="185" width="150" height="25" as="geometry"/>
+        </mxCell>
+        <!-- Legend: Data Flow -->
+        <mxCell id="leg_df_src" value="" style="rounded=1;fillColor=#f5f5f5;strokeColor=#666666;" vertex="1" parent="z6">
+          <mxGeometry x="15" y="222" width="10" height="10" as="geometry"/>
+        </mxCell>
+        <mxCell id="leg_df_tgt" value="" style="rounded=1;fillColor=#f5f5f5;strokeColor=#666666;" vertex="1" parent="z6">
+          <mxGeometry x="35" y="222" width="10" height="10" as="geometry"/>
+        </mxCell>
+        <mxCell id="leg_df_e" value="" edge="1" source="leg_df_src" target="leg_df_tgt" style="strokeColor=#666666;strokeWidth=2;endArrow=block;endFill=1;" parent="z6">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="leg_df_t" value="Data Flow" style="text;html=1;align=left;verticalAlign=middle;fontSize=11;" vertex="1" parent="z6">
+          <mxGeometry x="55" y="217" width="150" height="20" as="geometry"/>
+        </mxCell>
+        <!-- Legend: Function/Process -->
+        <mxCell id="leg_fn" value="" style="rounded=0;fillColor=#fff2cc;strokeColor=#d6b656;dashed=1;" vertex="1" parent="z6">
+          <mxGeometry x="15" y="250" width="30" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="leg_fn_t" value="Function / Process Step" style="text;html=1;align=left;verticalAlign=middle;fontSize=11;" vertex="1" parent="z6">
+          <mxGeometry x="55" y="250" width="170" height="20" as="geometry"/>
+        </mxCell>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- ZONE 2 — MORPHEUS SWARM (below pipeline, left half)           -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <mxCell id="z2" value="&lt;b&gt;MORPHEUS SWARM — Phase 2 Graph Construction&lt;/b&gt;" style="swimlane;startSize=30;fillColor=#ffe6cc;strokeColor=#d79b00;fontStyle=1;fontSize=13;fontColor=#7a5700;html=1;collapsible=0;rounded=1;arcSize=4;" vertex="1" parent="1">
+          <mxGeometry x="20" y="300" width="1080" height="530" as="geometry"/>
+        </mxCell>
+        <!-- M1 Entity Seeder -->
+        <mxCell id="m1" value="&lt;b&gt;M1 — Entity Seeder&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;Produces: Cast, Locations, Props,&lt;br&gt;Scenes, World Context, Edges&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=11;verticalAlign=middle;" vertex="1" parent="z2">
+          <mxGeometry x="370" y="45" width="320" height="70" as="geometry"/>
+        </mxCell>
+        <!-- M2 Frame Parser -->
+        <mxCell id="m2" value="&lt;b&gt;M2 — Frame Parser&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;Produces: FrameNodes,&lt;br&gt;CastFrameState, PropFrameState, LocationFrameState&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=11;verticalAlign=middle;" vertex="1" parent="z2">
+          <mxGeometry x="370" y="155" width="320" height="70" as="geometry"/>
+        </mxCell>
+        <!-- M3 Dialogue Wirer -->
+        <mxCell id="m3" value="&lt;b&gt;M3 — Dialogue Wirer&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;Produces: DialogueNodes,&lt;br&gt;Dialogue-Frame Edges,&lt;br&gt;Performance Cues&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=11;verticalAlign=middle;" vertex="1" parent="z2">
+          <mxGeometry x="80" y="290" width="300" height="75" as="geometry"/>
+        </mxCell>
+        <!-- M4 Compositor -->
+        <mxCell id="m4" value="&lt;b&gt;M4 — Compositor&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;Produces: FrameEnvironment,&lt;br&gt;Composition, Blocking,&lt;br&gt;Camera Direction&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=11;verticalAlign=middle;" vertex="1" parent="z2">
+          <mxGeometry x="680" y="290" width="300" height="75" as="geometry"/>
+        </mxCell>
+        <!-- Parallel annotation -->
+        <mxCell id="m_par" value="&lt;b&gt;PARALLEL&lt;/b&gt;" style="text;html=1;fontSize=11;fontColor=#d79b00;align=center;verticalAlign=middle;fontStyle=1;" vertex="1" parent="z2">
+          <mxGeometry x="430" y="307" width="200" height="25" as="geometry"/>
+        </mxCell>
+        <mxCell id="m_par_line" value="" style="shape=curlyBracket;whiteSpace=wrap;html=1;rounded=1;flipH=0;strokeColor=#d79b00;size=0.5;direction=south;" vertex="1" parent="z2">
+          <mxGeometry x="380" y="272" width="300" height="18" as="geometry"/>
+        </mxCell>
+        <!-- M5 Continuity Wirer -->
+        <mxCell id="m5" value="&lt;b&gt;M5 — Continuity Wirer&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;Produces: Merged Overlays, Continuity Edges,&lt;br&gt;Validation, graph_assemble_prompts, graph_materialize&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=11;verticalAlign=middle;" vertex="1" parent="z2">
+          <mxGeometry x="340" y="420" width="380" height="75" as="geometry"/>
+        </mxCell>
+
+        <!-- Morpheus flow edges -->
+        <mxCell id="me12" value="" edge="1" source="m1" target="m2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#d79b00;strokeWidth=2;endArrow=block;endFill=1;" parent="z2">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="me23" value="" edge="1" source="m2" target="m3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#d79b00;strokeWidth=2;endArrow=block;endFill=1;" parent="z2">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="me24" value="" edge="1" source="m2" target="m4" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#d79b00;strokeWidth=2;endArrow=block;endFill=1;" parent="z2">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="me35" value="overlay merge" edge="1" source="m3" target="m5" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#d79b00;strokeWidth=2;endArrow=block;endFill=1;fontSize=9;fontColor=#7a5700;" parent="z2">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="me45" value="overlay merge" edge="1" source="m4" target="m5" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#d79b00;strokeWidth=2;endArrow=block;endFill=1;fontSize=9;fontColor=#7a5700;" parent="z2">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- Context seed annotation -->
+        <mxCell id="m_ctx" value="&lt;font style=&quot;font-size:9px&quot;&gt;All agents share cached &lt;b&gt;Context Seed&lt;/b&gt;&lt;br&gt;(manifest + config + skeleton + prose)&lt;br&gt;~90% input cache discount on Agents 2-5&lt;/font&gt;" style="shape=note;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=9;align=left;spacingLeft=8;size=14;" vertex="1" parent="z2">
+          <mxGeometry x="20" y="140" width="280" height="65" as="geometry"/>
+        </mxCell>
+
+        <!-- Completion signals annotation -->
+        <mxCell id="m_sig" value="&lt;font style=&quot;font-size:9px&quot;&gt;&lt;b&gt;Completion Signals&lt;/b&gt;&lt;br&gt;logs/morpheus/*_complete.json&lt;br&gt;Each agent writes signal before next starts&lt;/font&gt;" style="shape=note;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=9;align=left;spacingLeft=8;size=14;" vertex="1" parent="z2">
+          <mxGeometry x="770" y="420" width="280" height="55" as="geometry"/>
+        </mxCell>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- ZONE 3 — SCHEMA MODEL GRAPH (below pipeline, right half)      -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <mxCell id="z3" value="&lt;b&gt;SCHEMA MODEL GRAPH — graph/schema.py&lt;/b&gt;" style="swimlane;startSize=30;fillColor=#e1d5e7;strokeColor=#9673a6;fontStyle=1;fontSize=13;fontColor=#5b3a70;html=1;collapsible=0;rounded=1;arcSize=4;" vertex="1" parent="1">
+          <mxGeometry x="1120" y="300" width="1260" height="530" as="geometry"/>
+        </mxCell>
+
+        <!-- NarrativeGraph (root) -->
+        <mxCell id="s_ng" value="&lt;b&gt;NarrativeGraph&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;(root container)&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=12;fontStyle=0;strokeWidth=2;" vertex="1" parent="z3">
+          <mxGeometry x="480" y="40" width="220" height="45" as="geometry"/>
+        </mxCell>
+
+        <!-- Entity nodes row -->
+        <mxCell id="s_cn" value="&lt;b&gt;CastNode&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="z3">
+          <mxGeometry x="30" y="135" width="150" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="s_ln" value="&lt;b&gt;LocationNode&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="z3">
+          <mxGeometry x="210" y="135" width="150" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="s_pn" value="&lt;b&gt;PropNode&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="z3">
+          <mxGeometry x="390" y="135" width="150" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="s_sn" value="&lt;b&gt;SceneNode&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="z3">
+          <mxGeometry x="570" y="135" width="150" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="s_fn" value="&lt;b&gt;FrameNode&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=10;strokeWidth=2;" vertex="1" parent="z3">
+          <mxGeometry x="750" y="135" width="150" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="s_dn" value="&lt;b&gt;DialogueNode&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="z3">
+          <mxGeometry x="930" y="135" width="150" height="40" as="geometry"/>
+        </mxCell>
+
+        <!-- NarrativeGraph → contains → entity nodes -->
+        <mxCell id="se_ng_cn" value="contains" edge="1" source="s_ng" target="s_cn" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#9673a6;strokeWidth=1;endArrow=open;endFill=0;fontSize=8;fontColor=#9673a6;" parent="z3">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="se_ng_ln" value="contains" edge="1" source="s_ng" target="s_ln" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#9673a6;strokeWidth=1;endArrow=open;endFill=0;fontSize=8;fontColor=#9673a6;" parent="z3">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="se_ng_pn" value="contains" edge="1" source="s_ng" target="s_pn" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#9673a6;strokeWidth=1;endArrow=open;endFill=0;fontSize=8;fontColor=#9673a6;" parent="z3">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="se_ng_sn" value="contains" edge="1" source="s_ng" target="s_sn" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#9673a6;strokeWidth=1;endArrow=open;endFill=0;fontSize=8;fontColor=#9673a6;" parent="z3">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="se_ng_fn" value="contains" edge="1" source="s_ng" target="s_fn" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#9673a6;strokeWidth=1;endArrow=open;endFill=0;fontSize=8;fontColor=#9673a6;" parent="z3">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="se_ng_dn" value="contains" edge="1" source="s_ng" target="s_dn" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#9673a6;strokeWidth=1;endArrow=open;endFill=0;fontSize=8;fontColor=#9673a6;" parent="z3">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- CastNode children -->
+        <mxCell id="s_ci" value="CastIdentity" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=9;fontStyle=2;" vertex="1" parent="z3">
+          <mxGeometry x="30" y="230" width="130" height="35" as="geometry"/>
+        </mxCell>
+        <mxCell id="s_cv" value="CastVoice" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=9;fontStyle=2;" vertex="1" parent="z3">
+          <mxGeometry x="30" y="280" width="130" height="35" as="geometry"/>
+        </mxCell>
+        <mxCell id="se_cn_ci" value="has" edge="1" source="s_cn" target="s_ci" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#9673a6;strokeWidth=1;endArrow=open;endFill=0;fontSize=8;fontColor=#9673a6;" parent="z3">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="se_cn_cv" value="has" edge="1" source="s_cn" target="s_cv" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#9673a6;strokeWidth=1;endArrow=open;endFill=0;fontSize=8;fontColor=#9673a6;" parent="z3">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- FrameNode children (state snapshots) -->
+        <mxCell id="s_cfs" value="CastFrameState" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=9;fontStyle=2;" vertex="1" parent="z3">
+          <mxGeometry x="700" y="230" width="140" height="35" as="geometry"/>
+        </mxCell>
+        <mxCell id="s_pfs" value="PropFrameState" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=9;fontStyle=2;" vertex="1" parent="z3">
+          <mxGeometry x="860" y="230" width="140" height="35" as="geometry"/>
+        </mxCell>
+        <mxCell id="s_lfs" value="LocationFrameState" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=9;fontStyle=2;" vertex="1" parent="z3">
+          <mxGeometry x="1020" y="230" width="150" height="35" as="geometry"/>
+        </mxCell>
+        <mxCell id="se_fn_cfs" value="has" edge="1" source="s_fn" target="s_cfs" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#9673a6;strokeWidth=1;endArrow=open;endFill=0;fontSize=8;fontColor=#9673a6;" parent="z3">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="se_fn_pfs" value="has" edge="1" source="s_fn" target="s_pfs" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#9673a6;strokeWidth=1;endArrow=open;endFill=0;fontSize=8;fontColor=#9673a6;" parent="z3">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="se_fn_lfs" value="has" edge="1" source="s_fn" target="s_lfs" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#9673a6;strokeWidth=1;endArrow=open;endFill=0;fontSize=8;fontColor=#9673a6;" parent="z3">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- State snapshot annotation -->
+        <mxCell id="s_snap_note" value="&lt;font style=&quot;font-size:8px&quot;&gt;States are &lt;b&gt;absolute snapshots&lt;/b&gt;,&lt;br&gt;not deltas. Full state per frame.&lt;/font&gt;" style="shape=note;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=8;align=left;spacingLeft=6;size=12;" vertex="1" parent="z3">
+          <mxGeometry x="700" y="280" width="200" height="40" as="geometry"/>
+        </mxCell>
+
+        <!-- ShotPacket (assembled from multiple nodes) -->
+        <mxCell id="s_sp" value="&lt;b&gt;ShotPacket&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;Assembled per-frame from FrameNode + CastNode&lt;br&gt;+ LocationNode + PropNode + DialogueNode&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=11;strokeWidth=2;" vertex="1" parent="z3">
+          <mxGeometry x="330" y="395" width="520" height="55" as="geometry"/>
+        </mxCell>
+
+        <!-- Assembly edges into ShotPacket (dashed) -->
+        <mxCell id="se_fn_sp" value="primary" edge="1" source="s_fn" target="s_sp" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#9673a6;strokeWidth=1.5;endArrow=block;endFill=1;dashed=1;dashPattern=6 3;fontSize=8;fontColor=#9673a6;" parent="z3">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="se_cn_sp" value="" edge="1" source="s_cn" target="s_sp" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#9673a6;strokeWidth=1;endArrow=open;endFill=0;dashed=1;dashPattern=6 3;" parent="z3">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="se_ln_sp" value="" edge="1" source="s_ln" target="s_sp" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#9673a6;strokeWidth=1;endArrow=open;endFill=0;dashed=1;dashPattern=6 3;" parent="z3">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="se_pn_sp" value="" edge="1" source="s_pn" target="s_sp" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#9673a6;strokeWidth=1;endArrow=open;endFill=0;dashed=1;dashPattern=6 3;" parent="z3">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="se_dn_sp" value="" edge="1" source="s_dn" target="s_sp" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#9673a6;strokeWidth=1;endArrow=open;endFill=0;dashed=1;dashPattern=6 3;" parent="z3">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- Additional schema models -->
+        <mxCell id="s_edge" value="&lt;b&gt;GraphEdge&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:8px&quot;&gt;source/target/type/provenance&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=9;" vertex="1" parent="z3">
+          <mxGeometry x="1070" y="135" width="160" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="s_prov" value="&lt;b&gt;Provenance&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:8px&quot;&gt;source_prose_chunk&lt;br&gt;generated_by / confidence&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=9;" vertex="1" parent="z3">
+          <mxGeometry x="1070" y="280" width="160" height="50" as="geometry"/>
+        </mxCell>
+        <mxCell id="se_edge_prov" value="carries" edge="1" source="s_edge" target="s_prov" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#9673a6;strokeWidth=1;endArrow=open;endFill=0;fontSize=8;fontColor=#9673a6;" parent="z3">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- Enums annotation -->
+        <mxCell id="s_enums" value="&lt;font style=&quot;font-size:8px&quot;&gt;&lt;b&gt;Key Enums:&lt;/b&gt; FormulaTag, ShotSize,&lt;br&gt;CameraAngle, CameraMotion,&lt;br&gt;LightingDirection, EmotionalArc,&lt;br&gt;Posture, EdgeType&lt;/font&gt;" style="shape=note;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=8;align=left;spacingLeft=6;size=12;" vertex="1" parent="z3">
+          <mxGeometry x="210" y="260" width="210" height="60" as="geometry"/>
+        </mxCell>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- ZONE 4 — PROMPT ASSEMBLY FLOW (below schema, right)           -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <mxCell id="z4" value="&lt;b&gt;PROMPT ASSEMBLY FLOW — graph/prompt_assembler.py&lt;/b&gt;" style="swimlane;startSize=30;fillColor=#f5f5f5;strokeColor=#666666;fontStyle=1;fontSize=13;fontColor=#333333;html=1;collapsible=0;rounded=1;arcSize=4;" vertex="1" parent="1">
+          <mxGeometry x="1120" y="860" width="1260" height="430" as="geometry"/>
+        </mxCell>
+
+        <!-- Graph Nodes source -->
+        <mxCell id="pa_gn" value="&lt;b&gt;Graph Nodes&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;FrameNode +&lt;br&gt;entity states&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="z4">
+          <mxGeometry x="25" y="55" width="140" height="65" as="geometry"/>
+        </mxCell>
+        <!-- build_shot_packet() -->
+        <mxCell id="pa_bsp" value="&lt;b&gt;build_shot_packet()&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;graph/api.py&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;dashed=1;" vertex="1" parent="z4">
+          <mxGeometry x="215" y="55" width="175" height="55" as="geometry"/>
+        </mxCell>
+        <!-- ShotPacket result -->
+        <mxCell id="pa_sp" value="&lt;b&gt;ShotPacket&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;Per-frame data&lt;br&gt;bundle&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=11;strokeWidth=2;" vertex="1" parent="z4">
+          <mxGeometry x="440" y="45" width="150" height="130" as="geometry"/>
+        </mxCell>
+        <!-- assemble_image_prompt() -->
+        <mxCell id="pa_aip" value="&lt;b&gt;assemble_image_prompt()&lt;/b&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;dashed=1;" vertex="1" parent="z4">
+          <mxGeometry x="640" y="50" width="210" height="45" as="geometry"/>
+        </mxCell>
+        <!-- Image Prompt output -->
+        <mxCell id="pa_ip" value="&lt;b&gt;Image Prompt&lt;/b&gt;&lt;hr size=&quot;1&quot;/&gt;&lt;font style=&quot;font-size:9px&quot;&gt;SHOT INTENT&lt;br&gt;CONTINUITY ANCHORS&lt;br&gt;BLOCKING &amp;amp; STAGING&lt;br&gt;ENVIRONMENT&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;verticalAlign=top;spacingTop=3;" vertex="1" parent="z4">
+          <mxGeometry x="900" y="40" width="230" height="130" as="geometry"/>
+        </mxCell>
+        <!-- assemble_video_prompt() -->
+        <mxCell id="pa_avp" value="&lt;b&gt;assemble_video_prompt()&lt;/b&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;dashed=1;" vertex="1" parent="z4">
+          <mxGeometry x="640" y="135" width="210" height="45" as="geometry"/>
+        </mxCell>
+        <!-- Video Prompt output -->
+        <mxCell id="pa_vp" value="&lt;b&gt;Video Prompt&lt;/b&gt;&lt;hr size=&quot;1&quot;/&gt;&lt;font style=&quot;font-size:9px&quot;&gt;CAMERA MOTION&lt;br&gt;SHOT DYNAMICS&lt;br&gt;CONTINUITY&lt;br&gt;&lt;b&gt;AUDIO:&lt;/b&gt;&lt;br&gt;- Native spoken dialogue&lt;br&gt;- Ambient layers&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;verticalAlign=top;spacingTop=3;" vertex="1" parent="z4">
+          <mxGeometry x="900" y="185" width="230" height="140" as="geometry"/>
+        </mxCell>
+
+        <!-- Formula system -->
+        <mxCell id="pa_fs" value="&lt;b&gt;Formula System&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;FormulaTag enum&lt;br&gt;(CU, MCU, MS, WS...)&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="z4">
+          <mxGeometry x="300" y="250" width="200" height="55" as="geometry"/>
+        </mxCell>
+        <!-- Duration calculation -->
+        <mxCell id="pa_dc" value="&lt;b&gt;Duration Calc&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;base_duration_for_formula()&lt;br&gt;+ dialogue_duration_s&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="z4">
+          <mxGeometry x="560" y="250" width="220" height="55" as="geometry"/>
+        </mxCell>
+        <!-- Media style prefix -->
+        <mxCell id="pa_ms" value="&lt;b&gt;Media Style Prefix&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;MEDIA_STYLE_PREFIX lookup&lt;br&gt;(anime, live retro, etc.)&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="z4">
+          <mxGeometry x="300" y="330" width="200" height="55" as="geometry"/>
+        </mxCell>
+
+        <!-- Prompt assembly edges -->
+        <mxCell id="pae_gn_bsp" value="" edge="1" source="pa_gn" target="pa_bsp" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#666666;strokeWidth=2;endArrow=block;endFill=1;" parent="z4">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="pae_bsp_sp" value="" edge="1" source="pa_bsp" target="pa_sp" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#666666;strokeWidth=2;endArrow=block;endFill=1;" parent="z4">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="pae_sp_aip" value="" edge="1" source="pa_sp" target="pa_aip" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#666666;strokeWidth=2;endArrow=block;endFill=1;exitX=1;exitY=0.25;exitDx=0;exitDy=0;" parent="z4">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="pae_aip_ip" value="" edge="1" source="pa_aip" target="pa_ip" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#666666;strokeWidth=2;endArrow=block;endFill=1;" parent="z4">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="pae_sp_avp" value="" edge="1" source="pa_sp" target="pa_avp" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#666666;strokeWidth=2;endArrow=block;endFill=1;exitX=1;exitY=0.75;exitDx=0;exitDy=0;" parent="z4">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="pae_avp_vp" value="" edge="1" source="pa_avp" target="pa_vp" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#666666;strokeWidth=2;endArrow=block;endFill=1;" parent="z4">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="pae_fs_dc" value="feeds" edge="1" source="pa_fs" target="pa_dc" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#d6b656;strokeWidth=1.5;endArrow=block;endFill=1;fontSize=8;fontColor=#d6b656;" parent="z4">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="pae_dc_vp" value="duration" edge="1" source="pa_dc" target="pa_vp" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#d6b656;strokeWidth=1.5;endArrow=block;endFill=1;dashed=1;dashPattern=6 3;fontSize=8;fontColor=#d6b656;" parent="z4">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="pae_ms_ip" value="style prefix" edge="1" source="pa_ms" target="pa_ip" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#d6b656;strokeWidth=1.5;endArrow=block;endFill=1;dashed=1;dashPattern=6 3;fontSize=8;fontColor=#d6b656;" parent="z4">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- ZONE 5 — API INTEGRATIONS (bottom left)                       -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <mxCell id="z5" value="&lt;b&gt;API INTEGRATIONS — server.py&lt;/b&gt;" style="swimlane;startSize=30;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;fontSize=13;fontColor=#3a6b35;html=1;collapsible=0;rounded=1;arcSize=4;" vertex="1" parent="1">
+          <mxGeometry x="20" y="860" width="1080" height="430" as="geometry"/>
+        </mxCell>
+
+        <!-- FastAPI Server -->
+        <mxCell id="api_srv" value="&lt;b&gt;FastAPI Server&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;localhost:8000&lt;br&gt;server.py&lt;br&gt;&lt;br&gt;Manifest reconciler&lt;br&gt;File sentinel watcher&lt;br&gt;Agent process mgmt&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;verticalAlign=top;spacingTop=5;" vertex="1" parent="z5">
+          <mxGeometry x="20" y="50" width="170" height="160" as="geometry"/>
+        </mxCell>
+
+        <!-- Endpoints -->
+        <mxCell id="api_ep1" value="&lt;b&gt;POST /internal/generate-image&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;" vertex="1" parent="z5">
+          <mxGeometry x="250" y="50" width="270" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="api_ep2" value="&lt;b&gt;POST /internal/generate-frame&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;" vertex="1" parent="z5">
+          <mxGeometry x="250" y="110" width="270" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="api_ep3" value="&lt;b&gt;POST /internal/generate-video&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;" vertex="1" parent="z5">
+          <mxGeometry x="250" y="170" width="270" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="api_ep4" value="&lt;b&gt;POST /internal/refine-video-prompts&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;" vertex="1" parent="z5">
+          <mxGeometry x="250" y="230" width="270" height="40" as="geometry"/>
+        </mxCell>
+
+        <!-- External services -->
+        <mxCell id="api_ext1" value="&lt;b&gt;prunaai/p-image&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:8px&quot;&gt;Replicate API&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=10;" vertex="1" parent="z5">
+          <mxGeometry x="600" y="45" width="200" height="45" as="geometry"/>
+        </mxCell>
+        <mxCell id="api_ext3" value="&lt;b&gt;xai/grok-imagine-video&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:8px&quot;&gt;Replicate API&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=10;" vertex="1" parent="z5">
+          <mxGeometry x="600" y="165" width="200" height="45" as="geometry"/>
+        </mxCell>
+        <mxCell id="api_ext4" value="&lt;b&gt;Grok Vision&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:8px&quot;&gt;xAI API (XAI_API_KEY)&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=10;" vertex="1" parent="z5">
+          <mxGeometry x="600" y="225" width="200" height="45" as="geometry"/>
+        </mxCell>
+
+        <!-- Phase trigger labels -->
+        <mxCell id="api_ph3" value="&lt;font style=&quot;font-size:9px;color:#6c8ebf&quot;&gt;&lt;b&gt;Phase 3&lt;/b&gt;&lt;/font&gt;" style="text;html=1;align=center;verticalAlign=middle;" vertex="1" parent="z5">
+          <mxGeometry x="860" y="52" width="70" height="30" as="geometry"/>
+        </mxCell>
+        <mxCell id="api_ph4" value="&lt;font style=&quot;font-size:9px;color:#6c8ebf&quot;&gt;&lt;b&gt;Phase 4&lt;/b&gt;&lt;/font&gt;" style="text;html=1;align=center;verticalAlign=middle;" vertex="1" parent="z5">
+          <mxGeometry x="860" y="112" width="70" height="30" as="geometry"/>
+        </mxCell>
+        <mxCell id="api_ph5a" value="&lt;font style=&quot;font-size:9px;color:#6c8ebf&quot;&gt;&lt;b&gt;Phase 5&lt;/b&gt;&lt;/font&gt;" style="text;html=1;align=center;verticalAlign=middle;" vertex="1" parent="z5">
+          <mxGeometry x="860" y="172" width="70" height="30" as="geometry"/>
+        </mxCell>
+        <mxCell id="api_ph5b" value="&lt;font style=&quot;font-size:9px;color:#6c8ebf&quot;&gt;&lt;b&gt;Phase 5&lt;/b&gt;&lt;/font&gt;" style="text;html=1;align=center;verticalAlign=middle;" vertex="1" parent="z5">
+          <mxGeometry x="860" y="232" width="70" height="30" as="geometry"/>
+        </mxCell>
+
+        <!-- API internal edges -->
+        <mxCell id="apie_srv1" value="" edge="1" source="api_srv" target="api_ep1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#82b366;strokeWidth=1.5;endArrow=block;endFill=1;" parent="z5">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="apie_srv2" value="" edge="1" source="api_srv" target="api_ep2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#82b366;strokeWidth=1.5;endArrow=block;endFill=1;" parent="z5">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="apie_srv3" value="" edge="1" source="api_srv" target="api_ep3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#82b366;strokeWidth=1.5;endArrow=block;endFill=1;" parent="z5">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="apie_srv4" value="" edge="1" source="api_srv" target="api_ep4" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#82b366;strokeWidth=1.5;endArrow=block;endFill=1;" parent="z5">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="apie_ep1_ext1" value="" edge="1" source="api_ep1" target="api_ext1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#b85450;strokeWidth=1.5;endArrow=block;endFill=1;" parent="z5">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="apie_ep3_ext3" value="" edge="1" source="api_ep3" target="api_ext3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#b85450;strokeWidth=1.5;endArrow=block;endFill=1;" parent="z5">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="apie_ep4_ext4" value="" edge="1" source="api_ep4" target="api_ext4" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#b85450;strokeWidth=1.5;endArrow=block;endFill=1;" parent="z5">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- Auth annotation -->
+        <mxCell id="api_auth" value="&lt;font style=&quot;font-size:9px&quot;&gt;&lt;b&gt;Auth Keys:&lt;/b&gt;&lt;br&gt;REPLICATE_API_TOKEN (Replicate)&lt;br&gt;XAI_API_KEY (Grok Vision)&lt;/font&gt;" style="shape=note;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=9;align=left;spacingLeft=6;size=14;" vertex="1" parent="z5">
+          <mxGeometry x="250" y="305" width="250" height="55" as="geometry"/>
+        </mxCell>
+
+        <!-- Skills annotation -->
+        <mxCell id="api_skills" value="&lt;font style=&quot;font-size:9px&quot;&gt;&lt;b&gt;CLI Skills:&lt;/b&gt;&lt;br&gt;sw_generate_image&lt;br&gt;sw_generate_video&lt;br&gt;sw_generate_frame (via generate-frame endpoint)&lt;/font&gt;" style="shape=note;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=9;align=left;spacingLeft=6;size=14;" vertex="1" parent="z5">
+          <mxGeometry x="600" y="295" width="290" height="65" as="geometry"/>
+        </mxCell>
+
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+        <!-- CROSS-ZONE EDGES (parent="1" — connect across containers)     -->
+        <!-- ═══════════════════════════════════════════════════════════════ -->
+
+        <!-- Phase 2 → Morpheus Swarm zone -->
+        <mxCell id="x_p2_morph" value="triggers" edge="1" source="p2" target="m1" style="edgeStyle=orthogonalEdgeStyle;curved=1;strokeColor=#666666;strokeWidth=2;dashed=1;dashPattern=8 4;endArrow=open;endFill=0;fontSize=9;fontColor=#666666;" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- Morpheus M5 → Schema NarrativeGraph -->
+        <mxCell id="x_m5_schema" value="populates graph" edge="1" source="m5" target="s_ng" style="edgeStyle=orthogonalEdgeStyle;curved=1;strokeColor=#666666;strokeWidth=2;dashed=1;dashPattern=8 4;endArrow=open;endFill=0;fontSize=9;fontColor=#666666;" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- Schema ShotPacket → Prompt Assembly -->
+        <mxCell id="x_sp_prompt" value="feeds into" edge="1" source="s_sp" target="pa_gn" style="edgeStyle=orthogonalEdgeStyle;curved=1;strokeColor=#666666;strokeWidth=2;dashed=1;dashPattern=8 4;endArrow=open;endFill=0;fontSize=9;fontColor=#666666;" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- Prompt Assembly Image Prompt → API generate-frame -->
+        <mxCell id="x_ip_api" value="image prompt" edge="1" source="pa_ip" target="api_ep2" style="edgeStyle=orthogonalEdgeStyle;curved=1;strokeColor=#666666;strokeWidth=1.5;dashed=1;dashPattern=8 4;endArrow=open;endFill=0;fontSize=8;fontColor=#666666;" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- Prompt Assembly Video Prompt → API generate-video -->
+        <mxCell id="x_vp_api" value="video prompt" edge="1" source="pa_vp" target="api_ep3" style="edgeStyle=orthogonalEdgeStyle;curved=1;strokeColor=#666666;strokeWidth=1.5;dashed=1;dashPattern=8 4;endArrow=open;endFill=0;fontSize=8;fontColor=#666666;" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- Phase 3 → API generate-image -->
+        <mxCell id="x_p3_api" value="" edge="1" source="p3" target="api_ep1" style="edgeStyle=orthogonalEdgeStyle;curved=1;strokeColor=#82b366;strokeWidth=1.5;dashed=1;dashPattern=6 3;endArrow=open;endFill=0;" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- Phase 4 → API generate-frame -->
+        <mxCell id="x_p4_api" value="" edge="1" source="p4" target="api_ep2" style="edgeStyle=orthogonalEdgeStyle;curved=1;strokeColor=#82b366;strokeWidth=1.5;dashed=1;dashPattern=6 3;endArrow=open;endFill=0;" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- Phase 5 → API generate-video + refine -->
+        <mxCell id="x_p5_api3" value="" edge="1" source="p5" target="api_ep3" style="edgeStyle=orthogonalEdgeStyle;curved=1;strokeColor=#82b366;strokeWidth=1.5;dashed=1;dashPattern=6 3;endArrow=open;endFill=0;" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="x_p5_api4" value="" edge="1" source="p5" target="api_ep4" style="edgeStyle=orthogonalEdgeStyle;curved=1;strokeColor=#82b366;strokeWidth=1.5;dashed=1;dashPattern=6 3;endArrow=open;endFill=0;" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

@@ -20,6 +20,9 @@ def main():
     graph = store.load()
 
     counts = assemble_all_prompts(graph, args.project_dir)
+    # Prompt assembly mutates grid metadata (for example storyboard_prompt_path).
+    # Persist those updates so later phases and manifest refreshes can see them.
+    store.save(graph)
 
     print(f"SUCCESS: Prompts assembled")
     for k, v in counts.items():

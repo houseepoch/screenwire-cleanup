@@ -7,7 +7,6 @@ ScreenWire skills and downstream agents expect:
   - cast/{cast_id}.json
   - locations/{location_id}.json
   - props/{prop_id}.json
-  - voices/{voice_id}.json
   - dialogue.json
   - project_manifest.json updates
   - logs/scene_coordinator/visual_analysis.json
@@ -20,6 +19,8 @@ from pathlib import Path
 
 from .api import get_frame_cast_state_models, get_frame_prop_state_models
 from .schema import NarrativeGraph
+from .reference_collector import ReferenceImageCollector, cast_bible_snapshot_for_frame
+from .store import GraphStore
 
 
 def materialize_all(graph: NarrativeGraph, project_dir: str | Path) -> dict:
@@ -30,7 +31,6 @@ def materialize_all(graph: NarrativeGraph, project_dir: str | Path) -> dict:
     counts["cast"] = materialize_cast_profiles(graph, project_dir)
     counts["locations"] = materialize_location_profiles(graph, project_dir)
     counts["props"] = materialize_prop_profiles(graph, project_dir)
-    counts["voices"] = materialize_voice_profiles(graph, project_dir)
     counts["dialogue"] = materialize_dialogue(graph, project_dir / "dialogue.json")
     counts["visual_analysis"] = materialize_visual_analysis(
         graph, project_dir / "logs" / "scene_coordinator" / "visual_analysis.json"
@@ -100,8 +100,6 @@ def materialize_cast_profiles(graph: NarrativeGraph, project_dir: Path) -> int:
             # Generation tracking
             "compositePath": cast.composite_path,
             "compositeStatus": cast.composite_status,
-            "voiceProfilePath": cast.voice_profile_path,
-            "voiceStatus": cast.voice_status,
         }
         path = cast_dir / f"{cast_id}.json"
         path.write_text(json.dumps(profile, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -170,36 +168,6 @@ def materialize_prop_profiles(graph: NarrativeGraph, project_dir: Path) -> int:
             "imagePath": prop.image_path,
         }
         path = prop_dir / f"{prop_id}.json"
-        path.write_text(json.dumps(profile, indent=2, ensure_ascii=False), encoding="utf-8")
-        count += 1
-
-    return count
-
-
-def materialize_voice_profiles(graph: NarrativeGraph, project_dir: Path) -> int:
-    """Write voices/{voice_id}.json for each voice profile."""
-    voice_dir = project_dir / "voices"
-    voice_dir.mkdir(parents=True, exist_ok=True)
-
-    count = 0
-    for voice_id, voice in graph.voices.items():
-        profile = {
-            "voiceId": voice.voice_id,
-            "castId": voice.cast_id,
-            "characterName": voice.character_name,
-            "voiceDescription": voice.voice_description,
-            "qualityPrefix": voice.quality_prefix,
-            "tone": voice.tone,
-            "pitch": voice.pitch,
-            "accent": voice.accent,
-            "deliveryStyle": voice.delivery_style,
-            "tempo": voice.tempo,
-            "emotionalRange": voice.emotional_range,
-            "vocalStyle": voice.vocal_style,
-            "voiceProfilePath": voice.voice_profile_path,
-            "voiceStatus": voice.voice_status,
-        }
-        path = voice_dir / f"{voice_id}.json"
         path.write_text(json.dumps(profile, indent=2, ensure_ascii=False), encoding="utf-8")
         count += 1
 
@@ -277,7 +245,7 @@ def materialize_visual_analysis(graph: NarrativeGraph, output_path: Path) -> int
 
 
 def materialize_manifest(graph: NarrativeGraph, manifest_path: Path) -> int:
-    """Update project_manifest.json with frames, cast, locations, props, voices arrays."""
+    """Update project_manifest.json with frames, cast, locations, props, and storyboard grids."""
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Load existing manifest or create new — ALWAYS preserve phases and status
@@ -290,6 +258,19 @@ def materialize_manifest(graph: NarrativeGraph, manifest_path: Path) -> int:
     existing_phases = manifest.get("phases", {})
     existing_status = manifest.get("status", "")
     existing_version = manifest.get("version", 0)
+    existing_frames_by_id = {
+        frame.get("frameId"): frame
+        for frame in manifest.get("frames", [])
+        if isinstance(frame, dict) and frame.get("frameId")
+    }
+
+    store = GraphStore(manifest_path.parent)
+    sequence_id = getattr(graph.project, "project_id", "") or ""
+    cast_bible = store.load_latest_cast_bible(sequence_id=sequence_id)
+    if cast_bible is None:
+        cast_bible = ReferenceImageCollector(graph, manifest_path.parent).build_cast_bible(
+            sequence_id=sequence_id
+        )
 
     # Project metadata from onboarding
     manifest["mediaStyle"] = graph.project.media_style
@@ -305,7 +286,6 @@ def materialize_manifest(graph: NarrativeGraph, manifest_path: Path) -> int:
             "role": c.role.value if hasattr(c.role, 'value') else c.role,
             "profilePath": f"cast/{c.cast_id}.json",
             "compositePath": c.composite_path,
-            "voiceProfilePath": c.voice_profile_path,
             "dialogueLineCount": c.dialogue_line_count,
         }
         for c in graph.cast.values()
@@ -332,20 +312,45 @@ def materialize_manifest(graph: NarrativeGraph, manifest_path: Path) -> int:
         }
         for p in graph.props.values()
     ]
-
-    # Voices array
-    manifest["voices"] = [
-        {
-            "voiceId": v.voice_id,
-            "castId": v.cast_id,
-            "characterName": v.character_name,
-            "voiceProfilePath": f"voices/{v.voice_id}.json",
-            "voiceStatus": v.voice_status,
-        }
-        for v in graph.voices.values()
-    ]
+    manifest["castBible"] = {
+        "version": cast_bible.version if cast_bible else None,
+        "runId": cast_bible.run_id if cast_bible else None,
+        "sequenceId": cast_bible.sequence_id if cast_bible else None,
+        "characterCount": len(cast_bible.characters) if cast_bible else 0,
+        "locationCount": len(cast_bible.locations) if cast_bible else 0,
+    }
 
     # Frames array
+    projected_frame_keys = {
+        "frameId",
+        "sceneId",
+        "sequenceIndex",
+        "cinematicTag",
+        "castIds",
+        "locationId",
+        "propIds",
+        "narrativeBeat",
+        "actionSummary",
+        "videoOptimizedPromptBlock",
+        "suggestedDuration",
+        "isDialogue",
+        "dialogueIds",
+        "dialogueRef",
+        "sourceText",
+        "timeOfDay",
+        "emotionalArc",
+        "visualFlowElement",
+        "composition",
+        "background",
+        "directing",
+        "castBibleSnapshot",
+        "continuityChain",
+        "previousFrameId",
+        "nextFrameId",
+        "status",
+        "generatedImagePath",
+        "videoPath",
+    }
     manifest["frames"] = []
     for fid in graph.frame_order:
         frame = graph.frames.get(fid)
@@ -359,16 +364,29 @@ def materialize_manifest(graph: NarrativeGraph, manifest_path: Path) -> int:
                     if cs.frame_role not in ("referenced",)]
         prop_ids = [ps.prop_id for ps in prop_states]
 
-        manifest["frames"].append({
+        existing_frame = existing_frames_by_id.get(frame.frame_id, {})
+        runtime_fields = {
+            key: value
+            for key, value in existing_frame.items()
+            if key not in projected_frame_keys
+        }
+
+        ct = frame.cinematic_tag
+        projected_frame = {
             "frameId": frame.frame_id,
             "sceneId": frame.scene_id,
             "sequenceIndex": frame.sequence_index,
-            "formulaTag": frame.formula_tag.value if frame.formula_tag else None,
+            "cinematicTag": {
+                "tag": ct.tag,
+                "family": ct.family,
+                "ai_prompt_language": ct.ai_prompt_language,
+            },
             "castIds": cast_ids,
             "locationId": frame.location_id,
             "propIds": prop_ids,
             "narrativeBeat": frame.narrative_beat,
             "actionSummary": frame.action_summary,
+            "videoOptimizedPromptBlock": frame.video_optimized_prompt_block,
             "suggestedDuration": frame.suggested_duration,
             "isDialogue": frame.is_dialogue,
             "dialogueIds": frame.dialogue_ids,
@@ -380,13 +398,21 @@ def materialize_manifest(graph: NarrativeGraph, manifest_path: Path) -> int:
             "composition": frame.composition.model_dump(),
             "background": frame.background.model_dump(),
             "directing": frame.directing.model_dump(),
+            "castBibleSnapshot": cast_bible_snapshot_for_frame(
+                cast_bible,
+                graph,
+                frame.frame_id,
+                cast_ids=cast_ids,
+            ),
             "continuityChain": frame.continuity_chain,
             "previousFrameId": frame.previous_frame_id,
             "nextFrameId": frame.next_frame_id,
             "status": frame.status,
             "generatedImagePath": frame.composed_image_path,
             "videoPath": frame.video_path,
-        })
+        }
+        projected_frame.update(runtime_fields)
+        manifest["frames"].append(projected_frame)
 
     # Storyboard grids
     manifest["storyboardGrids"] = [
@@ -428,8 +454,10 @@ def materialize_manifest(graph: NarrativeGraph, manifest_path: Path) -> int:
     manifest["version"] = existing_version + 1
 
     # Write
-    manifest_path.write_text(
+    tmp_path = manifest_path.with_suffix(".json.tmp")
+    tmp_path.write_text(
         json.dumps(manifest, indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
+    tmp_path.replace(manifest_path)
     return len(manifest.get("frames", []))

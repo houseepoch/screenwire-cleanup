@@ -13,6 +13,7 @@ It intentionally exercises the current graph-driven path:
 from __future__ import annotations
 
 import json
+import os
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,7 +21,8 @@ from pathlib import Path
 import httpx
 
 from graph.api import build_storyboard_grids, get_frame_context
-from graph.grid_generate import GRID_SPECS, PROMPT_TEMPLATE, generate_grid_guide, split_grid
+from graph.grid_generate import GRID_SPECS, PROMPT_TEMPLATE, generate_grid_guide
+from handlers.storyboard import StoryboardHandler
 from graph.materializer import materialize_all
 from graph.prompt_assembler import assemble_all_prompts
 from graph.schema import (
@@ -30,7 +32,6 @@ from graph.schema import (
     CastNode,
     CastVoice,
     DialogueNode,
-    FormulaTag,
     FrameAtmosphere,
     FrameBackground,
     FrameComposition,
@@ -52,7 +53,6 @@ from graph.schema import (
     Provenance,
     SceneNode,
     TimeOfDay,
-    VoiceNode,
 )
 from graph.store import GraphStore
 
@@ -195,23 +195,9 @@ def build_live_smoke_graph(project_dir: Path) -> NarrativeGraph:
         role=NarrativeRole.PROTAGONIST,
         composite_path="cast/composites/cast_nova_ref.png",
         composite_status="pending",
-        voice_profile_path="voices/voice_nova.json",
-        voice_status="profiled",
         provenance=_prov("Nova is the rooftop lookout carrying the pager."),
     )
     graph.cast[cast.cast_id] = cast
-    graph.voices["voice_nova"] = VoiceNode(
-        voice_id="voice_nova",
-        cast_id=cast.cast_id,
-        character_name=cast.name,
-        voice_description=cast.voice.voice_description,
-        tone=cast.voice.tone,
-        delivery_style=cast.voice.delivery_style,
-        tempo=cast.voice.tempo,
-        voice_profile_path=cast.voice_profile_path,
-        voice_status="profiled",
-        provenance=_prov("Nova speaks in a low controlled alto."),
-    )
 
     location = LocationNode(
         location_id="loc_rooftop",
@@ -257,7 +243,6 @@ def build_live_smoke_graph(project_dir: Path) -> NarrativeGraph:
         frame_id="f_001",
         scene_id=scene.scene_id,
         sequence_index=1,
-        formula_tag=FormulaTag.F07,
         narrative_beat="Nova scans the district from the rooftop ledge.",
         source_text="Nova holds the roofline and watches the district for movement.",
         location_id=location.location_id,
@@ -280,6 +265,7 @@ def build_live_smoke_graph(project_dir: Path) -> NarrativeGraph:
         composition=FrameComposition(
             shot="wide establishing shot",
             angle="eye_level",
+            movement="static",
             focus="character",
         ),
         background=FrameBackground(
@@ -305,7 +291,6 @@ def build_live_smoke_graph(project_dir: Path) -> NarrativeGraph:
         frame_id="f_002",
         scene_id=scene.scene_id,
         sequence_index=2,
-        formula_tag=FormulaTag.F11,
         narrative_beat="The pager vibrates and Nova reads the warning.",
         source_text="The pager vibrates in Nova's hand and she mutters that they are early.",
         location_id=location.location_id,
@@ -464,6 +449,7 @@ def _generate_storyboard_from_prompt(prompt_data: dict, project_dir: Path) -> di
     prompt = PROMPT_TEMPLATE.format(
         cols=spec["cols"],
         rows=spec["rows"],
+        global_style="",
         cell_prompts=cell_block,
     )
 
@@ -483,8 +469,9 @@ def _generate_storyboard_from_prompt(prompt_data: dict, project_dir: Path) -> di
     }
     result = _post_json(f"{SERVER_URL}/internal/generate-frame", body, IMAGE_TIMEOUT_SECONDS)
     frame_ids = prompt_data.get("frame_ids", [])
-    frame_paths = split_grid(composite_path, grid, output_dir / "frames",
-                             frame_ids=frame_ids)
+    frame_paths = StoryboardHandler._extract_cells(
+        composite_path, grid, output_dir / "frames", frame_ids
+    )
     return {
         "response": result,
         "output_path": str(composite_path),
@@ -545,8 +532,10 @@ def _write_summary(
 class PipelineSmokeE2ETest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
+        if os.getenv("SCREENWIRE_LIVE_SMOKE") != "1":
+            raise unittest.SkipTest("Set SCREENWIRE_LIVE_SMOKE=1 to run the live server smoke test.")
         if not _server_available():
-            raise RuntimeError(f"Live smoke requires a running server at {SERVER_URL}")
+            raise unittest.SkipTest(f"Live smoke requires a running server at {SERVER_URL}")
 
         PROJECT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -593,17 +582,10 @@ class PipelineSmokeE2ETest(unittest.TestCase):
 
         cls.materialize_counts, cls.prompt_counts = _materialize_and_prompt(graph, PROJECT_DIR)
 
-        # Promote storyboard cell → composed frame (no separate frame generation)
-        import shutil
-        cell_src = PROJECT_DIR / "frames" / "storyboards" / "grid_01" / "frames" / "f_002.png"
-        composed_dst = PROJECT_DIR / "frames" / "composed" / "f_002_gen.png"
-        composed_dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(cell_src, composed_dst)
-        cls.responses["frame_f_002"] = {
-            "response": {"promoted_from": str(cell_src)},
-            "output_path": str(composed_dst),
-            "size_bytes": composed_dst.stat().st_size,
-        }
+        cls.responses["frame_f_002"] = _generate_image_from_prompt(
+            _read_json(PROJECT_DIR / "frames" / "prompts" / "f_002_image.json"),
+            PROJECT_DIR,
+        )
 
         graph = cls.store.load()
         graph.frames["f_002"].composed_image_path = "frames/composed/f_002_gen.png"
@@ -676,19 +658,18 @@ class PipelineSmokeE2ETest(unittest.TestCase):
                 "props/generated/prop_signal_pager.png",
             ],
         )
-        self.assertIn("sample storyboard image provided", image_prompt["prompt"])
+        self.assertIn("SHOT INTENT:", image_prompt["prompt"])
+        self.assertIn("CONTINUITY:", image_prompt["prompt"])
         self.assertIn("reading the vibrating pager", image_prompt["prompt"])
-        self.assertIn("dramatic purpose: pivot from surveillance into immediate threat", image_prompt["prompt"])
+        self.assertIn("pivot from surveillance into immediate threat", image_prompt["prompt"])
 
         self.assertEqual(video_prompt["input_image_path"], "frames/composed/f_002_gen.png")
         self.assertEqual(video_prompt["dialogue_line"], "They're early.")
         self.assertEqual(video_prompt["target_api"], "grok-video")
-        self.assertIn(
-            'Nova(30s, female, lean build, shoulder-length auburn hair, wearing weatherproof black coat over a charcoal sweater): "They\'re early."',
-            video_prompt["prompt"],
-        )
+        self.assertIn("AUDIO:", video_prompt["prompt"])
+        self.assertIn('Nova: "They\'re early."', video_prompt["prompt"])
 
-        self.assertEqual(storyboard_prompt["grid"], "3x3")
+        self.assertEqual(storyboard_prompt["grid"], "2x1")
         self.assertEqual(storyboard_prompt["frame_ids"], ["f_001", "f_002"])
         self.assertEqual(
             storyboard_prompt["refs"],
@@ -718,13 +699,10 @@ class PipelineSmokeE2ETest(unittest.TestCase):
             self.assertIn(key, summary["responses"])
             self.assertIn("response", summary["responses"][key])
 
-        # API-generated assets have prediction_id; promoted frames do not
+        # All active generation steps are API-generated in the current runtime.
         for key in ["cast_nova", "loc_rooftop", "prop_signal_pager",
-                    "storyboard_grid_01", "video_f_002"]:
+                    "storyboard_grid_01", "frame_f_002", "video_f_002"]:
             self.assertIn("prediction_id", summary["responses"][key]["response"])
-
-        # frame_f_002 is promoted from storyboard cell, not API-generated
-        self.assertIn("promoted_from", summary["responses"]["frame_f_002"]["response"])
 
 
 if __name__ == "__main__":

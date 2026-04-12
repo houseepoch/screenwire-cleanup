@@ -1,5 +1,0 @@
-#!/usr/bin/env python3
-"""sw_design_voice — STUB (ElevenLabs voice design removed)."""
-import json, sys
-print(json.dumps({"status": "skipped", "reason": "voice design removed"}))
-sys.exit(0)

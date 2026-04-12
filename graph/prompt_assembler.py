@@ -5,9 +5,18 @@ Prompt Assembler — Deterministic graph → prompt construction
 Builds image generation prompts and video motion prompts directly
 from structured graph data. No LLM involved.
 
-Image prompts follow a storyboard-driven template with reference
-images as source of truth. Video prompts follow a layered structure
-with dialogue leading. Both are assembled from structured graph fields.
+Final image and video prompts are assembled from a canonical ShotPacket
+per frame. Storyboards remain continuity-guidance refs only and are not
+treated as final-frame outputs.
+
+Shared core sections (SHOT INTENT, CONTINUITY, VISUAL ANCHORS, AUDIO CONTEXT)
+are built once by _build_core_sections() and consumed by both
+assemble_image_prompt() and assemble_video_prompt().
+
+Video compression note: The BACKGROUND section is the first to be dropped
+during 4096-char video prompt compression. action_summary should therefore
+bake in critical environmental context (lighting, atmosphere, key location
+detail) so that context survives BACKGROUND section amputation.
 """
 
 from __future__ import annotations
@@ -21,14 +30,21 @@ from typing import Optional
 from .schema import (
     NarrativeGraph, FrameNode, CastFrameState, CastNode,
     LocationNode, SceneNode, DialogueNode, PropFrameState,
-    LocationFrameState, FormulaTag, LightingDirection, LightingQuality,
+    LocationFrameState, LightingDirection, LightingQuality,
     Posture, EmotionalArc, FrameComposition, FrameEnvironment,
 )
+from .reference_collector import (
+    ReferenceImageCollector,
+    cast_bible_snapshot_for_frame,
+)
+from .store import GraphStore
 from .api import (
     get_frame_context,
     get_frame_cast_state_models,
     get_frame_prop_state_models,
+    build_shot_packet,
 )
+from telemetry import current_run_id
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -47,49 +63,122 @@ MEDIA_STYLE_PREFIX = {
     "live_clear":         "live action, stark, high-contrast modern digital photography aesthetic defined by dramatic, directional overhead spotlighting that intensely isolates the luminous subject. The color palette is strictly minimalist, emphasizing stark whites and natural warm tones that sharply contrast with the deep, light-absorbing shadows, captured with ultra-sharp clinical resolution and pristine clarity. ",
 }
 
-# Formula tag → shot framing description (no camera hardware)
-FORMULA_SHOT = {
-    "F01": "Character portrait, emotional lighting",
-    "F02": "Two-shot, relationship staging",
-    "F03": "Wide group framing",
-    "F04": "Tight MCU, shallow DOF",
-    "F05": "Over-shoulder dialogue",
-    "F06": "Wide dialogue with environment",
-    "F07": "Deep focus wide establishing shot",
-    "F08": "Detail shot, tight on texture",
-    "F09": "Movement through space, doorway framing",
-    "F10": "Dynamic action, motion energy",
-    "F11": "Character-object interaction",
-    "F12": "Time passage, symbolic",
-    "F13": "Dreamlike, soft edges",
-    "F14": "Beat-synced visual",
-    "F15": "Lyric visualization",
-    "F16": "Performance shot",
-    "F17": "Liminal transition",
-    "F18": "Dramatic emphasis",
+# Media style → kinetic motion physics hint for video lead lines.
+# Injected as a 2-3 word constraint so motion physics survive style_prefix omission in video.
+KINETIC_STYLE_HINT: dict[str, str] = {
+    # Live-action variants
+    "live_action":        "Motion physics: live-action",
+    "live_retro_grain":   "Motion physics: live-action",
+    "chiaroscuro_live":   "Motion physics: live-action",
+    "live_soft_light":    "Motion physics: live-action",
+    "live_clear":         "Motion physics: live-action",
+    # Anime-cel variants
+    "anime":              "Motion physics: anime-cel",
+    "anime_cel":          "Motion physics: anime-cel",
+    "new_digital_anime":  "Motion physics: anime-cel",
+    "chiaroscuro_anime":  "Motion physics: anime-cel",
+    "black_ink_anime":    "Motion physics: anime-cel",
+    # 3D render variants
+    "3d_render":          "Motion physics: 3d-render",
+    "chiaroscuro_3d":     "Motion physics: 3d-render",
 }
 
-# Video formula tag → shot type + camera defaults
-FORMULA_VIDEO = {
-    "F01": ("Medium close-up", "Static or very slow push", "Character expression, subtle body language"),
-    "F02": ("Medium two-shot", "Static", "Character-to-character dynamics"),
-    "F03": ("Wide group shot", "Slow pan or static", "Group movement"),
-    "F04": ("Close-up", "Static, subtle drift", "Speaking emotional delivery"),
-    "F05": ("Over-shoulder", "Static", "Speaker + listener reaction"),
-    "F06": ("Medium wide", "Static or gentle tracking", "Both characters + environment"),
-    "F07": ("Wide establishing", "Slow pan or gentle crane", "Environmental motion, atmosphere"),
-    "F08": ("Extreme close-up", "Static or very slow push", "Texture, light, detail"),
-    "F09": ("Medium", "Tracking or dolly", "Movement through space"),
-    "F10": ("Medium or wide", "Tracking alongside", "Full body locomotion"),
-    "F11": ("Medium close-up", "Static, push into detail", "Hands + object"),
-    "F12": ("Variable", "Time-lapse suggestion", "Light shift, symbolic change"),
-    "F13": ("Close-up or medium", "Gentle drift, soft focus", "Dreamlike, slow subtle movement"),
-    "F17": ("Medium", "Slow, liminal", "Bridge motion"),
-    "F18": ("Dramatic angle", "Slow push or crane", "Dramatic weight"),
-}
-
-# Native runtime ceiling enforced by server.py for grok-video clips.
+# Native runtime floor/ceiling enforced by server.py for grok-video clips.
+MIN_VIDEO_DURATION_SECONDS = 2
 MAX_VIDEO_DURATION_SECONDS = 15
+MAX_VIDEO_PROMPT_CHARS = 4096
+
+# Cinematic tag family → default duration (seconds)
+# D=dialogue, E=establishment, R=revealer, A=action, C=cast/portrait,
+# T=transitional, S=stylistic, M=music
+DURATION_BY_CINEMATIC_FAMILY = {
+    "D": 5,
+    "E": 7,
+    "R": 5,
+    "A": 5,
+    "C": 4,
+    "T": 4,
+    "S": 5,
+    "M": 4,
+}
+
+# Cinematic tag modifier → camera movement directive
+_CINEMATIC_MODIFIER_CAMERA: dict[str, str] = {
+    "+push":     "Slow forward dolly",
+    "+pull":     "Slow backward dolly",
+    "+pan":      "Slow pan",
+    "+pan_l":    "Slow pan left",
+    "+pan_r":    "Slow pan right",
+    "+tilt":     "Slow tilt",
+    "+tilt_up":  "Slow tilt up",
+    "+tilt_dn":  "Slow tilt down",
+    "+crane":    "Slow crane",
+    "+static":   "Static",
+    "+handheld": "Handheld",
+    "+orbit":    "Slow orbit",
+    "+zoom_in":  "Slow zoom in",
+    "+zoom_out": "Slow zoom out",
+}
+
+
+def _ct_field(ct: dict | object, key: str) -> str:
+    """Safe accessor for cinematic_tag dict or model."""
+    if isinstance(ct, dict):
+        return (ct.get(key) or "")
+    return (getattr(ct, key, None) or "")
+
+
+def _modifier_to_camera_movement(modifier: str) -> str:
+    """Translate a cinematic tag modifier string (+push, etc.) to camera movement prose."""
+    if not modifier:
+        return ""
+    return _CINEMATIC_MODIFIER_CAMERA.get(modifier.strip(), "")
+
+
+def _resolve_shot_description(frame: dict) -> str:
+    """Return the shot/composition directive from cinematic_tag.ai_prompt_language."""
+    ct = frame.get("cinematic_tag") if isinstance(frame, dict) else getattr(frame, "cinematic_tag", {})
+    ct = ct or {}
+    return _ct_field(ct, "ai_prompt_language")
+
+
+DIALOGUE_SHOT_COMPOSITION_LIBRARY = {
+    "speaker_sync": {
+        "label": "speaker sync",
+        "image_rule": "Keep the active speaker dominant and fully readable; the listener can stay secondary or partial, but eyelines and geography must stay locked.",
+        "video_rule": "Let expression, breath, and small hand behavior carry the line. Preserve staging and vary only crop, angle, or a gentle push.",
+        "duration_weight": 1.35,
+        "padding_weight": 0.75,
+    },
+    "listener_reaction": {
+        "label": "listener reaction",
+        "image_rule": "Hold on the listener's response while dialogue continues under the shot. The speaker can fall off-camera or remain only as soft partial coverage.",
+        "video_rule": "Treat this as a reaction hold: tiny eye shifts, breath, and posture changes only. Do not restage the room.",
+        "duration_weight": 1.0,
+        "padding_weight": 0.45,
+    },
+    "prelap_entry": {
+        "label": "prelap entry",
+        "image_rule": "The voice can begin before the speaker becomes the visual focus. Frame the receiver or space so the upcoming line feels motivated without a hard staging reset.",
+        "video_rule": "Use this as the dialogue lead-in. Keep motion minimal and let the audio cue pull the shot into the next angle.",
+        "duration_weight": 0.8,
+        "padding_weight": 0.35,
+    },
+    "carryover_tail": {
+        "label": "carryover tail",
+        "image_rule": "Let the spoken line finish over aftermath or reaction coverage. Preserve the established blocking and avoid introducing a new visual idea.",
+        "video_rule": "Use a restrained hold so the end of the line lands cleanly before the cut.",
+        "duration_weight": 0.9,
+        "padding_weight": 0.4,
+    },
+    "bridge_coverage": {
+        "label": "bridge coverage",
+        "image_rule": "Bridge between adjacent dialogue angles while holding the same cast positions, prop placement, and room geography.",
+        "video_rule": "This clip should stitch the exchange together with minimal variation: one visual axis may change, but not the whole blocking plan.",
+        "duration_weight": 1.05,
+        "padding_weight": 0.5,
+    },
+}
 
 # DialogueNode.env_medium → audio quality modifier for delivery instructions
 ENV_MEDIUM_AUDIO = {
@@ -325,7 +414,8 @@ def _resolve_directing_ref(graph: NarrativeGraph, ctx: dict, ref: str | None) ->
 
 def _extract_directing_data(graph: NarrativeGraph, ctx: dict, frame: dict) -> dict[str, str]:
     """Normalize the optional FrameDirecting block for prompt assembly."""
-    directing = frame.get("directing") or {}
+    directing = frame.get("directing") if isinstance(frame, dict) else getattr(frame, "directing", None)
+    directing = directing or {}
     if not isinstance(directing, dict):
         directing = {}
 
@@ -344,264 +434,813 @@ def _extract_directing_data(graph: NarrativeGraph, ctx: dict, frame: dict) -> di
     }
 
 
+SIZE_PRESET_MAP = {
+    "16:9": "landscape_16_9",
+    "9:16": "portrait_9_16",
+    "4:3": "landscape_4_3",
+    "3:2": "landscape_3_2",
+    "1:1": "square_hd",
+}
+
+
+def _format_section(title: str, lines: list[str]) -> str:
+    cleaned = [_compact_text(line) for line in lines if _compact_text(line)]
+    if not cleaned:
+        return ""
+    return f"{title}:\n" + "\n".join(f"- {line}" for line in cleaned)
+
+
+def _shot_intent_lines(packet) -> list[str]:
+    intent = packet.shot_intent
+    return [
+        " | ".join(part for part in [
+            intent.shot,
+            f"{intent.angle} angle" if intent.angle else "",
+            intent.movement,
+            f"focus on {intent.focus}" if intent.focus else "",
+        ] if part),
+        intent.dramatic_purpose or "",
+        intent.beat_turn or "",
+        f"POV owner: {intent.pov_owner}" if intent.pov_owner else "",
+        f"Viewer learns: {intent.viewer_knowledge_delta}" if intent.viewer_knowledge_delta else "",
+        f"Power dynamic: {intent.power_dynamic}" if intent.power_dynamic else "",
+        f"Tension source: {intent.tension_source}" if intent.tension_source else "",
+        f"Camera motivation: {intent.camera_motivation}" if intent.camera_motivation else "",
+        f"Movement motivation: {intent.movement_motivation}" if intent.movement_motivation else "",
+        f"Movement path: {intent.movement_path}" if intent.movement_path else "",
+        f"Reaction target: {intent.reaction_target}" if intent.reaction_target else "",
+    ]
+
+
+def _continuity_lines(packet) -> list[str]:
+    lines = []
+    if packet.previous_beat:
+        lines.append(f"Previous beat: {packet.previous_beat.narrative_beat or packet.previous_beat.action_summary or packet.previous_beat.frame_id}")
+    lines.append(f"Current beat: {packet.current_beat}")
+    if packet.next_beat:
+        lines.append(f"Next beat: {packet.next_beat.narrative_beat or packet.next_beat.action_summary or packet.next_beat.frame_id}")
+    lines.extend(packet.continuity_deltas)
+    return lines
+
+
+def _negative_constraints(packet, *, dialogue_present: bool, guidance_only: bool = False) -> list[str]:
+    lines = [
+        "Do not add or remove cast, props, wardrobe, architecture, or light sources.",
+        "No subtitles, captions, speech bubbles, lyric text, labels, watermarks, or UI overlays.",
+        "Keep anatomy, hands, faces, prop scale, and object physics coherent.",
+    ]
+    if guidance_only:
+        lines.append("This is a storyboard guidance panel, not a final polished hero frame.")
+    if dialogue_present:
+        lines.append("Dialogue is conveyed through performance and native audio only; do not render spoken words visually.")
+    else:
+        lines.append("No spoken dialogue should be implied visually through text.")
+    if packet.subject_count:
+        lines.append(f"Do not exceed {packet.subject_count} visible subject(s).")
+    return lines
+
+
+def _span_frame_ids(graph: NarrativeGraph, start_frame: str, end_frame: str) -> list[str]:
+    if not start_frame:
+        return []
+    if not end_frame or start_frame == end_frame:
+        return [start_frame]
+    try:
+        si = graph.frame_order.index(start_frame)
+        ei = graph.frame_order.index(end_frame)
+    except ValueError:
+        return [start_frame]
+    if ei < si:
+        return [start_frame]
+    return graph.frame_order[si:ei + 1]
+
+
+def _split_span_text_chunk(text: str, chunk_index: int, total_chunks: int) -> str:
+    sentences = [s.strip() for s in re.split(r"(?<=[.!?…])\s+", text or "") if s.strip()]
+    if len(sentences) >= total_chunks > 0:
+        per_chunk = len(sentences) / total_chunks
+        start = round(chunk_index * per_chunk)
+        end = round((chunk_index + 1) * per_chunk)
+        return " ".join(sentences[start:end])
+
+    words = (text or "").split()
+    if not words or total_chunks <= 0:
+        return ""
+    per_chunk = len(words) / total_chunks
+    start = round(chunk_index * per_chunk)
+    end = max(round((chunk_index + 1) * per_chunk), start + 1)
+    if start >= len(words):
+        return ""
+    return " ".join(words[start:end])
+
+
+def _dialogue_role_for_frame(dialogue_node: DialogueNode, frame_id: str, span_frames: list[str]) -> str:
+    if frame_id == dialogue_node.primary_visual_frame:
+        return "speaker_sync"
+    if frame_id in (dialogue_node.reaction_frame_ids or []):
+        return "listener_reaction"
+    if span_frames:
+        if frame_id == span_frames[0]:
+            return "prelap_entry"
+        if frame_id == span_frames[-1]:
+            return "carryover_tail"
+    return "bridge_coverage"
+
+
+def _dialogue_scene_stitch_lines() -> list[str]:
+    return [
+        "Hold cast positions, eyelines, and prop geography stable across the dialogue run.",
+        "Between adjacent dialogue clips, change only one visual axis at a time: angle, crop, or camera distance.",
+        "Prefer readable coverage progression such as speaker close coverage, listener reaction, then a wider re-anchor shot instead of restaging the room.",
+    ]
+
+
+def _build_dialogue_coverage(
+    graph: NarrativeGraph,
+    frame_id: str,
+    ctx: dict,
+    packet,
+) -> list[dict[str, object]]:
+    if not packet.audio.dialogue_present:
+        return []
+
+    visible_cast_ids = set(packet.visible_cast_ids)
+    cast_name_by_id = {cast.cast_id: cast.name for cast in graph.cast.values()}
+
+    coverage: list[dict[str, object]] = []
+    for turn in packet.audio.turns:
+        dnode = graph.dialogue.get(turn.dialogue_id)
+        if dnode is None:
+            continue
+
+        span_frames = _span_frame_ids(graph, dnode.start_frame, dnode.end_frame)
+        if not span_frames:
+            span_frames = [frame_id]
+        try:
+            span_index = span_frames.index(frame_id) + 1
+        except ValueError:
+            span_index = 1
+        role = _dialogue_role_for_frame(dnode, frame_id, span_frames)
+        role_policy = DIALOGUE_SHOT_COMPOSITION_LIBRARY[role]
+        listener_ids = [cast_id for cast_id in sorted(visible_cast_ids) if cast_id != dnode.cast_id]
+        listener_names = [cast_name_by_id.get(cast_id, cast_id) for cast_id in listener_ids]
+
+        coverage.append({
+            "dialogue_id": dnode.dialogue_id,
+            "speaker": dnode.speaker,
+            "speaker_cast_id": dnode.cast_id,
+            "speaker_visible": dnode.cast_id in visible_cast_ids,
+            "listener_names": listener_names,
+            "span_frames": span_frames,
+            "span_index": span_index,
+            "span_length": len(span_frames),
+            "role": role,
+            "role_label": role_policy["label"],
+            "image_rule": role_policy["image_rule"],
+            "video_rule": role_policy["video_rule"],
+            "duration_weight": role_policy["duration_weight"],
+            "padding_weight": role_policy["padding_weight"],
+            "line_chunk": turn.line or "",
+            "env_intensity": turn.env_intensity or "",
+        })
+
+    coverage.sort(key=lambda item: next(
+        (idx for idx, turn in enumerate(packet.audio.turns) if turn.dialogue_id == item["dialogue_id"]),
+        0,
+    ))
+    return coverage
+
+
+def _dialogue_coverage_lines(coverage: list[dict[str, object]], *, for_video: bool) -> list[str]:
+    if not coverage:
+        return []
+
+    lines = _dialogue_scene_stitch_lines()
+    seen_dialogues: set[str] = set()
+    for item in coverage:
+        dialogue_id = str(item["dialogue_id"])
+        if dialogue_id in seen_dialogues:
+            continue
+        seen_dialogues.add(dialogue_id)
+        listener_names = item.get("listener_names") or []
+        listener_text = ""
+        if listener_names:
+            listener_text = " | listener coverage: " + ", ".join(str(name) for name in listener_names[:2])
+        lines.append(
+            f'{item["speaker"]} | {item["role_label"]} | span {item["span_index"]}/{item["span_length"]}{listener_text}'
+        )
+        policy_line = item["video_rule"] if for_video else item["image_rule"]
+        if policy_line:
+            lines.append(str(policy_line))
+    return lines
+
+
+def _motion_continuity_lines(frame: dict, packet) -> list[str]:
+    lines: list[str] = []
+    composition = frame.get("composition") if isinstance(frame, dict) else getattr(frame, "composition", None)
+    composition = composition or {}
+    transition = _compact_text(composition.get("transition") if isinstance(composition, dict) else getattr(composition, "transition", None))
+    if transition:
+        lines.append(f"Transition from previous frame: {transition}")
+    visual_flow = frame.get("visual_flow_element") if isinstance(frame, dict) else getattr(frame, "visual_flow_element", None)
+    if visual_flow:
+        lines.append(f'Visual flow emphasis: {visual_flow}')
+    next_beat = packet.next_beat.narrative_beat if packet.next_beat else ""
+    if next_beat:
+        lines.append(f"End the clip ready to cut into: {next_beat}")
+    return lines
+
+
+def _require_video_shot_payload(frame_id: str, packet) -> None:
+    missing = []
+    if not _compact_text(packet.shot_intent.shot):
+        missing.append("shot")
+    if not _compact_text(packet.shot_intent.angle):
+        missing.append("angle")
+    if not _compact_text(packet.shot_intent.movement):
+        missing.append("movement")
+    if missing:
+        raise ValueError(
+            f"{frame_id}: incomplete shot packet for video prompt assembly; missing {', '.join(missing)}"
+        )
+
+
+def _assemble_prompt_sections(
+    packet,
+    lead_lines: list[str],
+    *,
+    audio_title: str,
+    audio_lines: list[str],
+    dialogue_coverage_lines: list[str] | None = None,
+    motion_lines: list[str] | None = None,
+) -> list[str]:
+    sections = [
+        "\n".join(_compact_text(line) for line in lead_lines if _compact_text(line)),
+        _format_section("SHOT INTENT", _shot_intent_lines(packet)),
+        _format_section("CONTINUITY", _continuity_lines(packet)),
+        _format_section("SUBJECT COUNT", [f"Exactly {packet.subject_count} visible subject(s)."]),
+        _format_section("CAST INVARIANTS", packet.cast_invariants),
+        _format_section("PROP INVARIANTS", packet.prop_invariants),
+        _format_section("LOCATION INVARIANTS", packet.location_invariants),
+        _format_section("DIALOGUE COVERAGE", dialogue_coverage_lines or []),
+        _format_section("BLOCKING", packet.blocking),
+        _format_section("BACKGROUND", packet.background),
+        _format_section("MOTION CONTINUITY", motion_lines or []),
+        _format_section(audio_title, audio_lines),
+        _format_section(
+            "NEGATIVE CONSTRAINTS",
+            _negative_constraints(packet, dialogue_present=packet.audio.dialogue_present),
+        ),
+    ]
+    return [section for section in sections if section]
+
+
+def _load_cast_bible_snapshot(
+    graph: NarrativeGraph,
+    *,
+    frame_id: str,
+    project_dir: str | Path | None = None,
+    cast_ids: list[str] | None = None,
+):
+    if project_dir is None:
+        return None
+
+    base = Path(project_dir)
+    store = GraphStore(base)
+    run_id = current_run_id("")
+    sequence_id = getattr(graph.project, "project_id", "") or ""
+    cast_bible = store.load_latest_cast_bible(run_id=run_id, sequence_id=sequence_id)
+    if cast_bible is None:
+        collector = ReferenceImageCollector(graph, base)
+        cast_bible = collector.build_cast_bible(run_id=run_id, sequence_id=sequence_id)
+
+    return cast_bible_snapshot_for_frame(cast_bible, graph, frame_id, cast_ids=cast_ids)
+
+
+def _pose_lock_lines(snapshot: dict | None) -> list[str]:
+    if not snapshot:
+        return []
+
+    lines: list[str] = []
+    for character in snapshot.get("characters", []):
+        pose = character.get("pose") or {}
+        pose_name = _compact_text(str(pose.get("pose") or ""))
+        if not pose_name:
+            continue
+
+        name = _compact_text(str(character.get("name") or character.get("character_id") or "Character"))
+        modifiers = [
+            _compact_text(str(item))
+            for item in pose.get("modifiers", [])
+            if _compact_text(str(item))
+        ]
+        line = f"{name}: exactly match locked pose {pose_name}."
+        if modifiers:
+            line += " Locked modifiers: " + ", ".join(modifiers) + "."
+
+        recent_history = character.get("recent_pose_history") or []
+        if recent_history:
+            trail = [
+                _compact_text(str(item.get("pose") or ""))
+                for item in recent_history
+                if _compact_text(str(item.get("pose") or ""))
+            ]
+            if trail:
+                line += " Recent transition trail: " + " -> ".join(trail + [pose_name]) + "."
+
+        line += " Do not change posture unless the blocking explicitly calls for a transition."
+        lines.append(line)
+
+    return lines
+
+
+def _build_core_sections(
+    packet,
+    frame_node,
+    graph: "NarrativeGraph",
+    refs: dict | None = None,
+    pose_snapshot: dict | None = None,
+) -> dict[str, str]:
+    """Build the shared prompt sections consumed by both image and video assembly.
+
+    Returns a dict with keys:
+        shot_intent    — SHOT INTENT section string
+        continuity     — CONTINUITY section string
+        visual_anchors — VISUAL ANCHORS section string (empty string when refs is None)
+        audio_context  — AUDIO CONTEXT section string (dialogue presence + performance
+                         direction; no raw dialogue text, safe for image prompts)
+
+    Args:
+        packet:      ShotPacket for the frame.
+        frame_node:  Frame dict or FrameNode object (reserved for future per-frame hints).
+        graph:       NarrativeGraph (reserved for entity lookups).
+        refs:        Optional dict from ReferenceImageCollector.get_frame_references(),
+                     mapping role label strings to image path(s). Each entry becomes a
+                     VISUAL ANCHORS bullet so the generator knows each ref's purpose.
+                     Pass None (default) to skip the section — fully backward compatible.
+    """
+    # SHOT INTENT — cinematic tag, directing, composition
+    shot_intent = _format_section("SHOT INTENT", _shot_intent_lines(packet))
+
+    # CONTINUITY — beat context (cast/prop/location invariants remain separate sections
+    # built by each caller so their section keys are preserved for video compression)
+    continuity = _format_section("CONTINUITY", _continuity_lines(packet))
+
+    pose_lock = _format_section("POSE LOCK", _pose_lock_lines(pose_snapshot))
+
+    # VISUAL ANCHORS — reference images listed with their role labels
+    visual_anchors = ""
+    if refs:
+        anchor_lines: list[str] = []
+        for role, path in refs.items():
+            if isinstance(path, (list, tuple)):
+                for p in path:
+                    if p:
+                        anchor_lines.append(f"{role}: {p}")
+            elif path:
+                anchor_lines.append(f"{role}: {path}")
+        visual_anchors = _format_section("VISUAL ANCHORS", anchor_lines)
+
+    # AUDIO CONTEXT — dialogue presence + performance direction (no raw line text;
+    # raw dialogue text is intentionally excluded so this section is safe for image
+    # prompts where visible dialogue words must not be rendered)
+    audio_ctx_lines: list[str] = []
+    if packet.audio.dialogue_present:
+        audio_ctx_lines.append(
+            "Dialogue is happening in this frame; preserve the speaking beat through expression and body language only."
+        )
+        for turn in packet.audio.turns:
+            if turn.performance_direction:
+                audio_ctx_lines.append(f"Performance: {turn.performance_direction}")
+        audio_ctx_lines.append(
+            "Do not render subtitles, captions, lyric text, speech bubbles, or visible dialogue words."
+        )
+    else:
+        audio_ctx_lines.append("No spoken dialogue in this frame.")
+    audio_context = _format_section("AUDIO CONTEXT", audio_ctx_lines)
+
+    return {
+        "shot_intent": shot_intent,
+        "continuity": continuity,
+        "pose_lock": pose_lock,
+        "visual_anchors": visual_anchors,
+        "audio_context": audio_context,
+    }
+
+
+_VIDEO_PROMPT_LEAD_KEY = "__LEAD__"
+_VIDEO_PROMPT_TIER1_KEYS = {"AUDIO:", "MOTION CONTINUITY:"}
+_VIDEO_PROMPT_TIER3_DROP_ORDER = (
+    "VISUAL ANCHORS:",
+    "BACKGROUND:",
+    "LOCATION INVARIANTS:",
+    "PROP INVARIANTS:",
+)
+_VIDEO_PROMPT_TIER2_SHRINK_ORDER = (
+    _VIDEO_PROMPT_LEAD_KEY,
+    "BLOCKING:",
+    "DIALOGUE COVERAGE:",
+    "CONTINUITY:",
+    "SHOT INTENT:",
+    "CAST INVARIANTS:",
+    "SUBJECT COUNT:",
+    "NEGATIVE CONSTRAINTS:",
+)
+_VIDEO_PROMPT_TIER2_DROP_ORDER = (
+    "NEGATIVE CONSTRAINTS:",
+    "DIALOGUE COVERAGE:",
+    "CAST INVARIANTS:",
+)
+
+
+def _parse_prompt_section(section: str) -> dict[str, object]:
+    lines = [_compact_text(line) for line in section.splitlines() if _compact_text(line)]
+    if not lines:
+        return {"key": _VIDEO_PROMPT_LEAD_KEY, "heading": "", "lines": []}
+    heading = lines[0] if lines[0].endswith(":") else ""
+    return {
+        "key": heading or _VIDEO_PROMPT_LEAD_KEY,
+        "heading": heading,
+        "lines": lines[1:] if heading else lines,
+    }
+
+
+def _render_prompt_section(section_info: dict[str, object]) -> str:
+    lines = [str(line) for line in section_info.get("lines", []) if _compact_text(str(line))]
+    heading = str(section_info.get("heading", "") or "")
+    if heading:
+        if not lines:
+            return ""
+        return "\n".join([heading, *lines])
+    return "\n".join(lines)
+
+
+def _serialize_prompt_sections(section_infos: list[dict[str, object]]) -> str:
+    return "\n\n".join(
+        rendered for rendered in (_render_prompt_section(info) for info in section_infos) if rendered
+    ).strip()
+
+
+def _drop_section(section_infos: list[dict[str, object]], key: str) -> bool:
+    for idx, info in enumerate(section_infos):
+        if info.get("key") == key:
+            section_infos.pop(idx)
+            return True
+    return False
+
+
+def _shrink_section(section_infos: list[dict[str, object]], key: str) -> bool:
+    for info in section_infos:
+        if info.get("key") != key:
+            continue
+        lines = info.get("lines", [])
+        if isinstance(lines, list) and len(lines) > 1:
+            lines.pop()
+            return True
+    return False
+
+
+def _serialize_video_prompt_sections(sections: list[str]) -> str:
+    """Fit the assembled video prompt without damaging Tier 1 continuity blocks."""
+    prompt = "\n\n".join(section for section in sections if section).strip()
+    if len(prompt) <= MAX_VIDEO_PROMPT_CHARS:
+        return prompt
+
+    section_infos = [_parse_prompt_section(section) for section in sections if section]
+
+    for key in _VIDEO_PROMPT_TIER3_DROP_ORDER:
+        if _drop_section(section_infos, key):
+            prompt = _serialize_prompt_sections(section_infos)
+            if len(prompt) <= MAX_VIDEO_PROMPT_CHARS:
+                return prompt
+
+    changed = True
+    while len(prompt) > MAX_VIDEO_PROMPT_CHARS and changed:
+        changed = False
+        for key in _VIDEO_PROMPT_TIER2_SHRINK_ORDER:
+            if _shrink_section(section_infos, key):
+                prompt = _serialize_prompt_sections(section_infos)
+                changed = True
+                if len(prompt) <= MAX_VIDEO_PROMPT_CHARS:
+                    return prompt
+                break
+
+    for key in _VIDEO_PROMPT_TIER2_DROP_ORDER:
+        if _drop_section(section_infos, key):
+            prompt = _serialize_prompt_sections(section_infos)
+            if len(prompt) <= MAX_VIDEO_PROMPT_CHARS:
+                return prompt
+
+    tier1_sizes = {
+        str(info["key"]).rstrip(":").lower().replace(" ", "_"): len(_render_prompt_section(info))
+        for info in section_infos
+        if info.get("key") in _VIDEO_PROMPT_TIER1_KEYS
+    }
+    raise ValueError(
+        "Video prompt exceeds "
+        f"{MAX_VIDEO_PROMPT_CHARS} chars after dropping Tier 3 blocks and shrinking Tier 2 blocks; "
+        f"tier1_block_sizes={tier1_sizes}"
+    )
+
+
+def _tempo_units_per_second(tempo: str = "", env_intensity: str = "") -> float:
+    tempo_lower = (tempo or "").lower()
+    env_lower = (env_intensity or "").lower()
+    units_per_second = 2.15
+
+    if "fast" in tempo_lower:
+        units_per_second = 2.75
+    elif any(token in tempo_lower for token in ("slow", "measured", "deliberate", "careful")):
+        units_per_second = 1.8
+
+    if any(token in env_lower for token in ("whisper", "quiet", "soft", "hushed")):
+        units_per_second = min(units_per_second, 1.75)
+    elif any(token in env_lower for token in ("loud", "shouting", "shout", "yelling", "urgent")):
+        units_per_second = max(units_per_second, 2.45)
+
+    return units_per_second
+
+
+def _allocate_dialogue_span_duration(
+    graph: NarrativeGraph,
+    dialogue_node: DialogueNode,
+    *,
+    frame_id: str,
+    tempo: str = "",
+    env_intensity: str = "",
+) -> float:
+    span_frames = _span_frame_ids(graph, dialogue_node.start_frame, dialogue_node.end_frame)
+    if not span_frames:
+        span_frames = [frame_id]
+
+    full_line = _normalize_ws(dialogue_node.raw_line or dialogue_node.line)
+    full_timing = _estimate_dialogue_timing(
+        [full_line] if full_line else [],
+        tempo=tempo,
+        env_intensity=env_intensity or dialogue_node.env_intensity or "",
+    )
+
+    extra_budget = max(
+        float(full_timing["recommended_duration"]) - (MIN_VIDEO_DURATION_SECONDS * len(span_frames)),
+        0.0,
+    )
+
+    weighted_frames: list[tuple[str, float]] = []
+    for idx, span_frame_id in enumerate(span_frames):
+        role = _dialogue_role_for_frame(dialogue_node, span_frame_id, span_frames)
+        role_policy = DIALOGUE_SHOT_COMPOSITION_LIBRARY[role]
+        chunk_text = _split_span_text_chunk(full_line, idx, len(span_frames)) if full_line else ""
+        chunk_units = max(_count_dialogue_units(chunk_text), 1)
+        weight = (
+            chunk_units * float(role_policy["duration_weight"]) +
+            float(role_policy["padding_weight"])
+        )
+        weighted_frames.append((span_frame_id, weight))
+
+    total_weight = sum(weight for _, weight in weighted_frames) or 1.0
+    allocation = next(
+        (
+            MIN_VIDEO_DURATION_SECONDS + (extra_budget * weight / total_weight)
+            for span_frame_id, weight in weighted_frames
+            if span_frame_id == frame_id
+        ),
+        float(MIN_VIDEO_DURATION_SECONDS),
+    )
+    return allocation
+
+
+def _formula_default_duration(frame: dict, tag: str) -> int:
+    ct = frame.get("cinematic_tag") if isinstance(frame, dict) else getattr(frame, "cinematic_tag", {})
+    ct = ct or {}
+    family = _ct_field(ct, "family")
+    duration = DURATION_BY_CINEMATIC_FAMILY.get(family, 4)
+    visual_flow = frame.get("visual_flow_element") if isinstance(frame, dict) else getattr(frame, "visual_flow_element", "")
+    visual_flow = (visual_flow or "").lower()
+    if visual_flow in {"establishment", "transition", "weight"}:
+        duration += 1
+    elif visual_flow in {"reaction", "dialogue"}:
+        duration = max(duration, 3)
+
+    composition = frame.get("composition") if isinstance(frame, dict) else getattr(frame, "composition", {})
+    composition = composition or {}
+    transition = _compact_text(composition.get("transition") if isinstance(composition, dict) else getattr(composition, "transition", "")).lower()
+    if transition and any(token in transition for token in ("match", "carry", "linger", "hold")):
+        duration += 1
+    return min(max(duration, MIN_VIDEO_DURATION_SECONDS), MAX_VIDEO_DURATION_SECONDS)
+
+
+def _resolve_video_duration(
+    graph: NarrativeGraph,
+    frame_id: str,
+    frame: dict,
+    packet,
+    dialogue_coverage: list[dict[str, object]],
+    primary_voice_tempo: str,
+) -> dict[str, object]:
+    tag = frame.get("cinematic_tag", {}) if isinstance(frame, dict) else getattr(frame, "cinematic_tag", {})
+    formula_duration = _formula_default_duration(frame, "")
+    authored_duration = frame.get("suggested_duration") if isinstance(frame, dict) else getattr(frame, "suggested_duration", None)
+    dialogue_lines = [turn.line for turn in packet.audio.turns if _normalize_ws(turn.line)]
+    dialogue_turns = packet.audio.turns
+    env_intensity = dialogue_turns[0].env_intensity if dialogue_turns else ""
+    multi_frame_dialogue = any(int(item.get("span_length", 1)) > 1 for item in dialogue_coverage)
+    if dialogue_lines:
+        dialogue_floor = 3 if multi_frame_dialogue else max(MIN_VIDEO_DURATION_SECONDS, min(formula_duration, 4))
+        duration_candidates: list[tuple[str, float]] = [("dialogue_floor", float(dialogue_floor))]
+    else:
+        duration_candidates = [("formula_default", float(formula_duration))]
+    if authored_duration and MIN_VIDEO_DURATION_SECONDS <= authored_duration <= 30:
+        duration_candidates.append(("authored_duration", float(authored_duration)))
+
+    dialogue_timing: dict[str, float | int | bool] | None = None
+    duration_allocation_details: list[dict[str, object]] = []
+
+    if dialogue_lines:
+        if multi_frame_dialogue:
+            pass
+        else:
+            dialogue_timing = _estimate_dialogue_timing(
+                dialogue_lines,
+                tempo=primary_voice_tempo,
+                env_intensity=env_intensity or "",
+            )
+            duration_candidates.append(("dialogue_timing", float(dialogue_timing["recommended_duration"])))
+
+        seen_dialogues: set[str] = set()
+        for item in dialogue_coverage:
+            dialogue_id = str(item["dialogue_id"])
+            if dialogue_id in seen_dialogues:
+                continue
+            seen_dialogues.add(dialogue_id)
+            dnode = graph.dialogue.get(dialogue_id)
+            if dnode is None:
+                continue
+            allocated = _allocate_dialogue_span_duration(
+                graph,
+                dnode,
+                frame_id=frame_id,
+                tempo=primary_voice_tempo,
+                env_intensity=str(item.get("env_intensity") or env_intensity or ""),
+            )
+            duration_candidates.append(("dialogue_span_allocation", allocated))
+            duration_allocation_details.append({
+                "dialogue_id": dialogue_id,
+                "role": item["role"],
+                "span_index": item["span_index"],
+                "span_length": item["span_length"],
+                "allocated_seconds": round(allocated, 2),
+            })
+
+        if dialogue_timing is None:
+            dialogue_timing = _estimate_dialogue_timing(
+                dialogue_lines,
+                tempo=primary_voice_tempo,
+                env_intensity=env_intensity or "",
+            )
+
+    reason, recommended_duration = max(duration_candidates, key=lambda item: item[1])
+    recommended_duration = max(recommended_duration, float(MIN_VIDEO_DURATION_SECONDS))
+    actual_duration = int(min(MAX_VIDEO_DURATION_SECONDS, math.ceil(recommended_duration)))
+
+    if dialogue_lines:
+        if recommended_duration > MAX_VIDEO_DURATION_SECONDS:
+            dialogue_fit_status = "capped_to_model_max"
+        elif multi_frame_dialogue:
+            dialogue_fit_status = "span_allocated"
+        else:
+            dialogue_fit_status = "fits"
+    else:
+        dialogue_fit_status = "no_dialogue"
+
+    return {
+        "duration": actual_duration,
+        "recommended_duration": round(recommended_duration, 2),
+        "duration_reason": reason,
+        "dialogue_fit_status": dialogue_fit_status,
+        "dialogue_timing": dialogue_timing,
+        "duration_allocation_details": duration_allocation_details,
+    }
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # IMAGE PROMPT ASSEMBLY
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
 def assemble_image_prompt(graph: NarrativeGraph, frame_id: str,
-                          project_dir: str | Path | None = None) -> dict:
-    """Build a complete image composition prompt for a frame.
+                          project_dir: str | Path | None = None,
+                          refs: dict | None = None) -> dict:
+    """Build the final single-frame prompt for a frame.
 
-    Returns dict with:
-        prompt: str — the full prompt
-        ref_images: list[str] — reference image paths
-        size: str — aspect ratio size param
-        out_path: str — output file path
+    Storyboards act only as continuity guidance through `ref_images`. The
+    prompt itself is assembled from the canonical shot packet.
+
+    Args:
+        refs: Optional dict from ReferenceImageCollector.get_frame_references(),
+              mapping role label strings to image paths. When provided, a VISUAL
+              ANCHORS section is injected so the generator knows each ref's purpose.
     """
     ctx = get_frame_context(graph, frame_id)
     frame = ctx["frame"]
     scene = ctx["scene"] or {}
-    directing = _extract_directing_data(graph, ctx, frame)
+    packet = build_shot_packet(graph, frame_id)
 
     style_prefix = _resolve_style_prefix(graph)
-
-    # ── Instruction bridge (leads the prompt)
-    instruction_bridge = (
-        "Generate an image staying true to the storyboard grids composition. "
-        "Generate a single image frame based on the sample storyboard image provided "
-        "and comprised of the reference images as the cast and sources of truth to "
-        "recreate a still image of this scene. Logically make sure all elements are "
-        "well placed consistent to the storyboard and nothing is illogical or appears "
-        "accidental, all objects follow their desired physics, such as disfigurement, unnatural artifacts, use your logic to "
-        "process the information and build an assembled accurate scene. This prompt defines a frame in the grid identify it and rebuild it with these new material reference. "
-        "Use the reference images of the cast and storyboard to determine the "
-        "appropriate styling qualities to match. Do not add overlay text, labels or "
-        "notes on the images, text that exists within the scene is ok, ensure there "
-        "is not leakage of instruction generated on the image. You are to ensure that the final image matches a frame withing the example grid provided."
+    collector = ReferenceImageCollector(graph, Path(project_dir)) if project_dir else None
+    storyboard_image = None
+    reference_images: list[str] = []
+    reference_manifest = None
+    cast_bible_snapshot = _load_cast_bible_snapshot(
+        graph,
+        frame_id=frame_id,
+        project_dir=project_dir,
+        cast_ids=packet.visible_cast_ids,
     )
+    if collector is not None:
+        collected = collector.get_frame_references(frame_id)
+        if collected.storyboard_cell and collected.storyboard_cell.exists():
+            storyboard_image = str(collected.storyboard_cell.relative_to(Path(project_dir)).as_posix())
+        reference_images = [
+            str(path.relative_to(Path(project_dir)).as_posix())
+            for path in collector.get_flat_reference_list(frame_id)
+            if path.exists()
+        ]
+        reference_manifest = collector.build_reference_manifest_entry(frame_id)
 
-    # ── Character action & emotion (name-driven, no appearance — ref images carry identity)
-    char_segments = []
-    for cs in ctx.get("cast_states", []):
-        if cs.get("frame_role") in ("referenced", None):
-            continue
-        name = _get_cast_name(ctx["cast"], cs["cast_id"]) or cs.get("cast_id", "Character")
-        action = cs.get("action", "")
-        emotion = cs.get("emotion", "")
-        emotion_intensity = cs.get("emotion_intensity")
-        posture = cs.get("posture", "")
-        screen_position = cs.get("screen_position")
-        looking_at = cs.get("looking_at")
-        spatial_position = cs.get("spatial_position")
-        eye_direction = cs.get("eye_direction")
-        facing_direction = cs.get("facing_direction")
-        injury = cs.get("injury")
-        props_held = cs.get("props_held", [])
-
-        parts = [name]
-        # Screen position & spatial placement
-        if screen_position:
-            parts.append(f"at {screen_position}")
-        elif spatial_position:
-            parts.append(f"at {spatial_position}")
-        # World-space spatial anchor
-        _img_camera_facing = frame.get("background", {}).get("camera_facing")
-        if _img_camera_facing and screen_position:
-            _world_dir = _resolve_world_position(_img_camera_facing, screen_position)
-            if _world_dir:
-                parts.append(f"on {_world_dir} side of the space")
-        # Facing direction
-        if facing_direction:
-            parts.append(f"facing {facing_direction}")
-        # Injury
-        if injury:
-            parts.append(injury)
-        # Action/posture
-        if action:
-            parts.append(action)
-        elif posture:
-            parts.append(posture)
-        # Props held
-        if props_held:
-            _prop_state_lookup = {ps["prop_id"]: ps for ps in ctx.get("prop_states", [])}
-            prop_names = []
-            for pid in props_held[:3]:
-                prop = graph.props.get(pid)
-                base_name = prop.name if prop else pid
-                _ps = _prop_state_lookup.get(pid, {})
-                _cond = (_ps.get("condition") or "").strip().lower()
-                if _cond and _cond not in ("intact", "base", "normal", ""):
-                    prop_names.append(f"{_cond} {base_name}")
-                else:
-                    prop_names.append(base_name)
-            parts.append(f"holding {', '.join(prop_names)}")
-        # Emotion — translated to concrete facial/body descriptors
-        if emotion:
-            expression = _resolve_expression(emotion, emotion_intensity if emotion_intensity is not None else 0.5)
-            parts.append(expression)
-        # Eye direction / looking at
-        if looking_at:
-            parts.append(f"looking at {looking_at}")
-        elif eye_direction:
-            parts.append(f"eyes {eye_direction}")
-
-        if parts:
-            char_segments.append(", ".join(parts))
-
-    char_desc = ". ".join(char_segments) if char_segments else ""
-
-    # ── Environmental details
-    env = frame.get("environment", {})
-    env_parts = []
-    fg = env.get("foreground_objects", [])
-    if fg:
-        env_parts.append("Foreground: " + ", ".join(fg[:3]))
-    mid = env.get("midground_detail")
-    if mid:
-        env_parts.append(f"Midground: {mid}")
-    bg = env.get("background_depth")
-    if bg:
-        env_parts.append(f"Background depth: {bg}")
-    atmo = env.get("atmosphere", {})
-    particles = atmo.get("particles")
-    if particles:
-        env_parts.append(f"{particles} drifting in the air")
-    ambient = atmo.get("ambient_motion")
-    if ambient:
-        env_parts.append(ambient)
-
-    # Weather & temperature
-    weather = atmo.get("weather")
-    if weather:
-        env_parts.append(f"Weather: {weather}")
-    temp_feel = atmo.get("temperature_feel")
-    if temp_feel:
-        env_parts.append(f"Temperature: {temp_feel}")
-
-    # Background enrichment from FrameBackground + location directions
-    location = ctx["location"] or {}
-    bg_data = frame.get("background", {})
-    camera_facing = bg_data.get("camera_facing")
-    if camera_facing:
-        env_parts.append(f"Camera facing {camera_facing}")
-    # Auto-resolve visible_description from location directions if not explicitly set
-    visible_desc = bg_data.get("visible_description", "")
-    if not visible_desc and camera_facing and location:
-        directions = location.get("directions", {})
-        if isinstance(directions, dict):
-            dir_view = directions.get(camera_facing)
-            if isinstance(dir_view, dict):
-                visible_desc = dir_view.get("description", "")
-            elif isinstance(dir_view, str):
-                visible_desc = dir_view
-    if visible_desc:
-        env_parts.append(f"Background: {visible_desc}")
-    if bg_data.get("background_action"):
-        env_parts.append(f"Background action: {bg_data['background_action']}")
-    if directing.get("background_life"):
-        env_parts.append(f"Background life: {directing['background_life']}")
-    if bg_data.get("depth_layers"):
-        for layer in bg_data["depth_layers"][:2]:
-            env_parts.append(layer)
-
-    env_desc = ". ".join(env_parts) if env_parts else ""
-
-    # ── Shot framing from FrameComposition (no camera hardware)
-    tag = frame.get("formula_tag", "F07")
-    shot_desc = FORMULA_SHOT.get(tag, "Medium shot")
-    comp = frame.get("composition", {})
-
-    # Enrich shot description from FrameComposition fields
-    comp_extras = []
-    if comp.get("shot"):
-        shot_desc = comp["shot"]  # Override formula default with graph data
-    if comp.get("angle"):
-        comp_extras.append(f"angle: {comp['angle']}")
-    if comp.get("placement"):
-        comp_extras.append(f"subject {comp['placement']}")
-    if comp.get("grouping"):
-        comp_extras.append(f"grouping: {comp['grouping']}")
-    if comp.get("blocking"):
-        comp_extras.append(f"blocking: {comp['blocking']}")
-    if comp.get("focus"):
-        comp_extras.append(f"focus on {comp['focus']}")
-    if comp.get("rule"):
-        comp_extras.append(comp["rule"])
-    if comp.get("transition"):
-        comp_extras.append(f"transition: {comp['transition']}")
-    if directing.get("camera_motivation"):
-        comp_extras.append(f"motivation: {directing['camera_motivation']}")
-    if directing.get("movement_path"):
-        comp_extras.append(f"path: {directing['movement_path']}")
-
-    comp_suffix = f" ({', '.join(comp_extras)})" if comp_extras else ""
-    framing_suffix = f"{shot_desc}{comp_suffix}." if shot_desc else ""
-
-    directorial_parts = []
-    if directing.get("dramatic_purpose"):
-        directorial_parts.append(f"dramatic purpose: {directing['dramatic_purpose']}")
-    if directing.get("pov_owner"):
-        directorial_parts.append(f"POV aligned with {directing['pov_owner']}")
-    if directing.get("power_dynamic"):
-        directorial_parts.append(f"power dynamic: {directing['power_dynamic']}")
-    if directing.get("beat_turn"):
-        directorial_parts.append(f"beat turn: {directing['beat_turn']}")
-    if directing.get("viewer_knowledge_delta"):
-        directorial_parts.append(f"viewer learns: {directing['viewer_knowledge_delta']}")
-    if directing.get("reaction_target"):
-        directorial_parts.append(f"reacting to {directing['reaction_target']}")
-    if directing.get("tension_source"):
-        directorial_parts.append(f"tension source: {directing['tension_source']}")
-    if directing.get("movement_motivation"):
-        directorial_parts.append(f"movement motivation: {directing['movement_motivation']}")
-    directorial_suffix = (
-        " Narrative intent: " + "; ".join(directorial_parts) + "."
-        if directorial_parts else ""
+    ref_images = (
+        ([storyboard_image] if storyboard_image else []) + reference_images
+        if collector is not None
+        else resolve_ref_images(graph, frame_id, project_dir=project_dir)
     )
+    size = SIZE_PRESET_MAP.get(graph.project.aspect_ratio, "landscape_16_9")
+    dialogue_coverage = _build_dialogue_coverage(graph, frame_id, ctx, packet)
 
-    # ── Source material excerpt (verbatim prose this frame was created from)
-    source_excerpt = ""
-    frame_obj = graph.frames.get(frame_id)
-    if frame_obj:
-        # Prefer source_text (the full prose paragraph), fall back to provenance chunk
-        raw_source = (
-            frame_obj.source_text
-            or (frame_obj.provenance.source_prose_chunk if frame_obj.provenance else "")
-        )
-        if raw_source and raw_source.strip():
-            source_excerpt = f"Source material: {_compact_text(raw_source)}"
+    lead_lines = [
+        f"{style_prefix}Generate one final cinematic frame.",
+        "This is a single finished image, not a storyboard grid or contact sheet.",
+        (frame.get("action_summary") if isinstance(frame, dict) else getattr(frame, "action_summary", None)) or packet.current_beat,
+    ]
+    if scene.get("mood_keywords"):
+        lead_lines.append("Mood: " + ", ".join(scene["mood_keywords"]))
 
-    # ── Assemble full prompt
-    # Order: instruction_bridge → style_prefix → characters → environment → framing → directorial → source
-    segments = [s for s in [char_desc, env_desc] if s]
-    body = ". ".join(segments)
-    prompt_parts = [instruction_bridge, style_prefix, body]
-    if framing_suffix:
-        prompt_parts.append(framing_suffix)
-    if directorial_suffix:
-        prompt_parts.append(directorial_suffix.strip())
-    if source_excerpt:
-        prompt_parts.append(source_excerpt)
-    full_prompt = " ".join(p for p in prompt_parts if p)
+    # Cinematic tag composition directive — inject before audio section
+    shot_desc = _resolve_shot_description(frame)
+    if shot_desc:
+        lead_lines.append(shot_desc)
+    _ct_img = frame.get("cinematic_tag") if isinstance(frame, dict) else getattr(frame, "cinematic_tag", {})
+    _ct_img = _ct_img or {}
+    _ct_img_definition = _ct_field(_ct_img, "definition")
+    if _ct_img_definition:
+        lead_lines.append(_ct_img_definition)
+    _ct_img_dof = _ct_field(_ct_img, "dof_guidance")
+    if _ct_img_dof:
+        lead_lines.append(_ct_img_dof)
+    _ct_img_lens = _ct_field(_ct_img, "lens_guidance")
+    if _ct_img_lens:
+        lead_lines.append(_ct_img_lens)
 
-    # ── Reference images
-    ref_images = resolve_ref_images(graph, frame_id, project_dir=project_dir)
+    # Shared core: SHOT INTENT, CONTINUITY, VISUAL ANCHORS, AUDIO CONTEXT
+    core = _build_core_sections(packet, frame, graph, refs=refs, pose_snapshot=cast_bible_snapshot)
 
-    # ── Size from aspect ratio
-    ar = graph.project.aspect_ratio
-    size_map = {"16:9": "landscape_16_9", "9:16": "portrait_9_16", "4:3": "landscape_4_3", "1:1": "square_hd"}
-    size = size_map.get(ar, "landscape_16_9")
+    sections = [
+        "\n".join(_compact_text(line) for line in lead_lines if _compact_text(line)),
+        core["shot_intent"],
+        core["continuity"],
+        core["pose_lock"],
+        core["visual_anchors"],
+        _format_section("SUBJECT COUNT", [f"Exactly {packet.subject_count} visible subject(s)."]),
+        _format_section("CAST INVARIANTS", packet.cast_invariants),
+        _format_section("PROP INVARIANTS", packet.prop_invariants),
+        _format_section("LOCATION INVARIANTS", packet.location_invariants),
+        _format_section("DIALOGUE COVERAGE", _dialogue_coverage_lines(dialogue_coverage, for_video=False)),
+        _format_section("BLOCKING", packet.blocking),
+        _format_section("BACKGROUND", packet.background),
+        core["audio_context"],
+        _format_section(
+            "NEGATIVE CONSTRAINTS",
+            _negative_constraints(packet, dialogue_present=packet.audio.dialogue_present),
+        ),
+    ]
+    full_prompt = "\n\n".join(section for section in sections if section).strip()
 
     return {
         "frame_id": frame_id,
+        "scene_id": frame.get("scene_id", "") if isinstance(frame, dict) else getattr(frame, "scene_id", ""),
+        "sequence_index": frame.get("sequence_index", 0) if isinstance(frame, dict) else getattr(frame, "sequence_index", 0),
         "prompt": full_prompt,
         "ref_images": ref_images,
-        "size": size,
+        "storyboard_image": storyboard_image,
+        "reference_images": reference_images,
+        "reference_manifest": reference_manifest,
+        "cast_bible_snapshot": cast_bible_snapshot,
+        "size": size,  # canonical schema key — do not use legacy 'image_size'
         "out_path": f"frames/composed/{frame_id}_gen.png",
-        "formula_tag": tag,
+        "cinematic_tag": _ct_field(_ct_img, "tag"),
         "style_prefix_used": style_prefix,
-        "directing": frame.get("directing", {}),
+        "shot_packet_path": f"frames/shot_packets/{frame_id}.json",
+        "dialogue_present": packet.audio.dialogue_present,
+        "dialogue_coverage_roles": [str(item["role"]) for item in dialogue_coverage],
+        "directing": frame.get("directing", {}) if isinstance(frame, dict) else getattr(frame, "directing", {}),
     }
 
 
@@ -610,341 +1249,134 @@ def assemble_image_prompt(graph: NarrativeGraph, frame_id: str,
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-def assemble_video_prompt(graph: NarrativeGraph, frame_id: str) -> dict:
-    """Build a video generation prompt for a frame (grok-video only).
+def assemble_video_prompt(graph: NarrativeGraph, frame_id: str,
+                          project_dir: str | Path | None = None,
+                          refs: dict | None = None) -> dict:
+    """Build a Grok native-audio video prompt for a frame.
 
-    Returns dict with:
-        prompt: str — the full video prompt (dialogue in AUDIO section)
-        duration: int — clip duration in seconds
-        target_api: str — always "grok-video"
-        input_image_path: str
-        dialogue_line: str or None — raw dialogue text if present
-        dialogue_pacing: str — pacing config (metadata, not in prompt)
-        action_summary: str — concise action description
-        frame_id, scene_id, sequence_index
+    The only behavioral branch is whether dialogue exists on the frame.
+    There are no alternate video providers or external audio inputs.
+
+    Args:
+        refs: Optional dict from ReferenceImageCollector.get_frame_references(),
+              mapping role label strings to image paths. When provided, a VISUAL
+              ANCHORS section is injected listing each reference by role.
+
+    Note on action_summary: The BACKGROUND section is the first dropped during
+    4096-char compression. Bake critical environmental context (lighting,
+    atmosphere, location atmosphere) into action_summary so it survives.
     """
     ctx = get_frame_context(graph, frame_id)
     frame = ctx["frame"]
     scene = ctx["scene"] or {}
-    location = ctx["location"] or {}
-    directing = _extract_directing_data(graph, ctx, frame)
-
-    tag = frame.get("formula_tag", "F07")
-    shot_type, camera_default, motion_focus = FORMULA_VIDEO.get(
-        tag, ("Medium shot", "Static", "General motion")
+    packet = build_shot_packet(graph, frame_id)
+    dialogue_coverage = _build_dialogue_coverage(graph, frame_id, ctx, packet)
+    cast_bible_snapshot = _load_cast_bible_snapshot(
+        graph,
+        frame_id=frame_id,
+        project_dir=project_dir,
+        cast_ids=packet.visible_cast_ids,
     )
+    _require_video_shot_payload(frame_id, packet)
 
-    # ── Continuity prefix
-    continuity_prefix = ""
-    if frame.get("continuity_chain"):
-        continuity_prefix = "Continuous scene — maintain consistent lighting, environment, and character positions."
+    _ct_vid = frame.get("cinematic_tag") if isinstance(frame, dict) else getattr(frame, "cinematic_tag", {})
+    _ct_vid = _ct_vid or {}
+    shot_type = _ct_field(_ct_vid, "ai_prompt_language")
+    camera_movement = (
+        _modifier_to_camera_movement(_ct_field(_ct_vid, "modifier"))
+        or packet.shot_intent.movement
+    )
+    tag = _ct_field(_ct_vid, "tag")
 
-    # ── Action summary (Morpheus-authored, concise physical action)
-    action_summary = frame.get("action_summary", "")
+    # Kinetic style hint — preserves motion physics constraint even without style_prefix.
+    # style_prefix is omitted from video lead lines to save tokens; KINETIC_STYLE_HINT
+    # injects a condensed 2-3 word substitute so the model keeps the right physics.
+    media_style = graph.project.media_style or "live_clear"
+    kinetic_hint = KINETIC_STYLE_HINT.get(media_style, "")
 
-    env = frame.get("environment", {})
-    atmo = env.get("atmosphere", {})
-    bg_data = frame.get("background", {})
+    frame_video_block = (
+        frame.get("video_optimized_prompt_block", "")
+        if isinstance(frame, dict)
+        else getattr(frame, "video_optimized_prompt_block", "")
+    )
+    frame_action_summary = (
+        frame.get("action_summary", "")
+        if isinstance(frame, dict)
+        else getattr(frame, "action_summary", "")
+    )
+    compressed_lead = packet.video_optimized_prompt_block or frame_video_block or frame_action_summary
 
-    # ── Background (labeled block)
-    bg = env.get("background_depth", "")
-    bg_parts = []
-    vid_camera_facing = bg_data.get("camera_facing")
-    if vid_camera_facing:
-        bg_parts.append(f"looking {vid_camera_facing}")
-    if bg:
-        bg_parts.append(bg)
-    vid_visible_desc = bg_data.get("visible_description", "")
-    if not vid_visible_desc and vid_camera_facing and location:
-        vid_directions = location.get("directions", {})
-        if isinstance(vid_directions, dict):
-            vid_dir_view = vid_directions.get(vid_camera_facing)
-            if isinstance(vid_dir_view, dict):
-                vid_visible_desc = vid_dir_view.get("description", "")
-            elif isinstance(vid_dir_view, str):
-                vid_visible_desc = vid_dir_view
-    if vid_visible_desc:
-        bg_parts.append(vid_visible_desc)
-    if bg_data.get("background_action"):
-        bg_parts.append(bg_data["background_action"])
-    if directing.get("background_life"):
-        bg_parts.append(directing["background_life"])
-    if bg_data.get("depth_layers"):
-        for layer in bg_data["depth_layers"][:2]:
-            bg_parts.append(layer)
-    bg_section = f"Background: {'. '.join(bg_parts)}." if bg_parts else ""
+    lead_lines = ["Generate a cinematic motion clip with native audio."]
+    if kinetic_hint:
+        lead_lines.append(kinetic_hint)
+    lead_lines.extend([
+        compressed_lead or packet.current_beat,
+        f"Shot type: {packet.shot_intent.shot or shot_type}.",
+        f"Camera motion: {camera_movement}.",
+    ])
+    if scene.get("mood_keywords"):
+        lead_lines.append("Mood: " + ", ".join(scene["mood_keywords"]))
+    _ct_vid_dof = _ct_field(_ct_vid, "dof_guidance")
+    if _ct_vid_dof:
+        lead_lines.append(_ct_vid_dof)
 
-    # ── Camera motion + FrameComposition
-    comp = frame.get("composition", {})
-    camera_move = comp.get("movement") or camera_default
-    camera_parts = [camera_move]
-    if comp.get("shot"):
-        camera_parts.append(comp["shot"])
-    if comp.get("angle"):
-        camera_parts.append(f"{comp['angle']} angle")
-    if comp.get("focus"):
-        camera_parts.append(f"focused on {comp['focus']}")
-    if comp.get("transition"):
-        camera_parts.append(comp["transition"])
-    if directing.get("camera_motivation"):
-        camera_parts.append(directing["camera_motivation"])
-    if directing.get("movement_path"):
-        camera_parts.append(f"tracking {directing['movement_path']}")
-    camera_section = f"{', '.join(camera_parts)}."
-
-    # ── Character performance (enriched with blocking + positioning)
-    perf_parts = []
-    for cs in ctx.get("cast_states", []):
-        if cs.get("frame_role") in ("referenced", None):
-            continue
-        name = _get_cast_name(ctx["cast"], cs["cast_id"])
-        appearance = _get_cast_appearance(ctx["cast"], cs)
-        action = cs.get("action", "")
-        emotion = cs.get("emotion", "")
-        posture = cs.get("posture", "")
-        eye_dir = cs.get("eye_direction", "")
-        intensity = cs.get("emotion_intensity", "")
-        facing = cs.get("facing_direction", "")
-        screen_pos = cs.get("screen_position", "")
-        looking_at = cs.get("looking_at", "")
-        spatial_pos = cs.get("spatial_position", "")
-        hair_state = cs.get("hair_state", "")
-        injury = cs.get("injury", "")
-        props_held = cs.get("props_held", [])
-
-        desc = f"{name} ({appearance})" if appearance else (name or "Character")
-        if screen_pos:
-            desc += f" at {screen_pos}"
-        elif spatial_pos:
-            desc += f" at {spatial_pos}"
-        _vid_camera_facing = bg_data.get("camera_facing")
-        if _vid_camera_facing and screen_pos:
-            _vid_world_dir = _resolve_world_position(_vid_camera_facing, screen_pos)
-            if _vid_world_dir:
-                desc += f", positioned on {_vid_world_dir} side of the space"
-        if facing:
-            desc += f", facing {facing}"
-        if hair_state:
-            desc += f", hair {hair_state}"
-        if injury:
-            desc += f", {injury}"
-        if action:
-            desc += f", {action}"
-        if props_held:
-            _vprop_state_lookup = {ps["prop_id"]: ps for ps in ctx.get("prop_states", [])}
-            prop_names = []
-            for pid in props_held[:3]:
-                prop = graph.props.get(pid)
-                base_name = prop.name if prop else pid
-                _vps = _vprop_state_lookup.get(pid, {})
-                _vcond = (_vps.get("condition") or "").strip().lower()
-                if _vcond and _vcond not in ("intact", "base", "normal", ""):
-                    prop_names.append(f"{_vcond} {base_name}")
-                else:
-                    prop_names.append(base_name)
-            desc += f", holding {', '.join(prop_names)}"
-        if emotion:
-            expression = _resolve_expression(emotion, float(intensity) if intensity is not None and intensity != "" else 0.5)
-            desc += f", {expression}"
-        if posture and posture not in ("standing",):
-            desc += f", {posture}"
-        if looking_at:
-            desc += f", looking at {looking_at}"
-        elif eye_dir:
-            desc += f", eyes {eye_dir}"
-        perf_parts.append(desc)
-
-    perf_section = ". ".join(perf_parts) if perf_parts else ""
-    if action_summary:
-        perf_section = f"{action_summary}. {perf_section}" if perf_section else action_summary
-
-    # ── Blocking transition (current frame → next frame)
-    blocking_parts = []
-    if frame.get("next_frame_id"):
-        try:
-            next_ctx = get_frame_context(graph, frame["next_frame_id"])
-            for cs in ctx.get("cast_states", []):
-                if cs.get("frame_role") in ("referenced", None):
-                    continue
-                name = _get_cast_name(ctx["cast"], cs["cast_id"])
-                next_cs = None
-                for ncs in next_ctx.get("cast_states", []):
-                    if ncs.get("cast_id") == cs.get("cast_id"):
-                        next_cs = ncs
-                        break
-                if next_cs:
-                    transitions = []
-                    cur_facing = cs.get("facing_direction")
-                    nxt_facing = next_cs.get("facing_direction")
-                    if cur_facing and nxt_facing and cur_facing != nxt_facing:
-                        transitions.append(f"turns from {cur_facing} to face {nxt_facing}")
-                    elif nxt_facing and not cur_facing:
-                        transitions.append(f"turns to face {nxt_facing}")
-                    cur_pos = cs.get("screen_position")
-                    nxt_pos = next_cs.get("screen_position")
-                    if cur_pos and nxt_pos and cur_pos != nxt_pos:
-                        transitions.append(f"moves from {cur_pos} to {nxt_pos}")
-                    elif nxt_pos and not cur_pos:
-                        transitions.append(f"moves to {nxt_pos}")
-                    cur_posture = cs.get("posture")
-                    nxt_posture = next_cs.get("posture")
-                    if cur_posture and nxt_posture and cur_posture != nxt_posture:
-                        transitions.append(f"shifts from {cur_posture} to {nxt_posture}")
-                    elif nxt_posture and not cur_posture:
-                        transitions.append(f"shifts to {nxt_posture}")
-                    if transitions:
-                        blocking_parts.append(f"{name}: {'; '.join(transitions)}")
-        except Exception:
-            pass
-
-    blocking_section = ""
-    if blocking_parts:
-        blocking_section = ". ".join(blocking_parts) + "."
-
-    # ── Emotional beat
-    arc = frame.get("emotional_arc", "")
-    beat_parts = []
-    if arc:
-        beat_map = {"rising": "Building tension.", "falling": "Release, exhale.",
-                    "peak": "The moment everything changes.", "static": "Held breath.",
-                    "release": "Resolution settling."}
-        mapped = beat_map.get(arc, "")
-        if mapped:
-            beat_parts.append(mapped)
-    if directing.get("dramatic_purpose"):
-        beat_parts.append(f"{directing['dramatic_purpose']}.")
-    if directing.get("beat_turn"):
-        beat_parts.append(f"{directing['beat_turn']}.")
-    if directing.get("pov_owner"):
-        beat_parts.append(f"We see this through {directing['pov_owner']}'s eyes.")
-    if directing.get("viewer_knowledge_delta"):
-        beat_parts.append(f"The audience realizes {directing['viewer_knowledge_delta']}.")
-    if directing.get("power_dynamic"):
-        beat_parts.append(f"{directing['power_dynamic']}.")
-    if directing.get("tension_source"):
-        beat_parts.append(f"{directing['tension_source']}.")
-    if directing.get("reaction_target"):
-        beat_parts.append(f"Reacting to {directing['reaction_target']}.")
-    beat_section = " ".join(beat_parts)
-
-    # ── Dialogue handling — speaker(appearance): "dialogue" format
-    dialogue_nodes = ctx.get("dialogue", [])
-    dialogue_text = ""
-    dialogue_line_raw = None
-    dialogue_line_all = []
-    dialogue_delivery = ""
+    dialogue_turn_lines: list[str] = []
+    dialogue_line_all: list[str] = []
     primary_voice_tempo = ""
-    dialogue_timing: dict[str, float | int | bool] | None = None
-    duration = 5  # default
+    dialogue_delivery = ""
+    for turn in packet.audio.turns:
+        speaker_name = _get_cast_name(ctx["cast"], turn.cast_id) or turn.speaker or turn.cast_id or "Character"
+        speaker_appearance = _get_cast_appearance(ctx["cast"], {"cast_id": turn.cast_id})
+        speaker_voice = _get_cast_voice_profile(ctx["cast"], turn.cast_id)
+        delivery, tempo = _build_dialogue_delivery({
+            "performance_direction": turn.performance_direction,
+            "env_intensity": turn.env_intensity,
+            "env_distance": turn.env_distance,
+            "env_medium": turn.env_medium,
+            "env_atmosphere": turn.env_atmosphere,
+        }, speaker_voice)
+        if not primary_voice_tempo:
+            primary_voice_tempo = tempo
+        if not dialogue_delivery:
+            dialogue_delivery = delivery
+        if turn.line:
+            dialogue_line_all.append(turn.line)
+            label = f"{speaker_name} ({speaker_appearance})" if speaker_appearance else speaker_name
+            detail = f'{label}: "{turn.line}"'
+            if delivery:
+                detail += f" | delivery {delivery}"
+            dialogue_turn_lines.append(detail)
 
-    if dialogue_nodes:
-        speakers_seen: dict[str, list[dict]] = {}
-        for dn in dialogue_nodes:
-            cid = dn.get("cast_id", "unknown")
-            speakers_seen.setdefault(cid, []).append(dn)
-
-        per_speaker_lines = []
-        for cid, speaker_dns in speakers_seen.items():
-            speaker_name = _get_cast_name(ctx["cast"], cid) or "Character"
-            speaker_voice = _get_cast_voice_profile(ctx["cast"], cid)
-            speaker_appearance = _get_cast_appearance(ctx["cast"], {"cast_id": cid})
-            lines = [dn.get("raw_line", "").strip() for dn in speaker_dns if dn.get("raw_line", "").strip()]
-            if lines:
-                combined = " ".join(lines)
-                delivery, tempo = _build_dialogue_delivery(speaker_dns[0], speaker_voice)
-                per_speaker_lines.append({
-                    "name": speaker_name,
-                    "appearance": speaker_appearance,
-                    "line": combined,
-                    "delivery": delivery,
-                    "tempo": tempo,
-                })
-
-        if per_speaker_lines:
-            dialogue_line_all = [s["line"] for s in per_speaker_lines]
-            dialogue_line_raw = " ".join(dialogue_line_all)
-
-            # Format: speaker(appearance): "dialogue"
-            dialogue_parts = []
-            for s in per_speaker_lines:
-                label = f'{s["name"]}({s["appearance"]})' if s["appearance"] else s["name"]
-                dialogue_parts.append(f'{label}: "{s["line"]}"')
-            dialogue_text = " / ".join(dialogue_parts)
-            dialogue_delivery = per_speaker_lines[0]["delivery"]
-            primary_voice_tempo = per_speaker_lines[0]["tempo"]
-
-    # ── Audio section — always build for grok-video
-    audio_section = ""
-    audio_layers = []
-    if dialogue_nodes:
-        env_tags = dialogue_nodes[0].get("env_atmosphere", [])
-        if env_tags:
-            audio_layers.append(", ".join(env_tags))
-    if not audio_layers:
-        if atmo.get("weather"):
-            audio_layers.append(atmo["weather"])
-        if atmo.get("ambient_motion"):
-            audio_layers.append(atmo["ambient_motion"])
-
-    if bg_data.get("background_sound"):
-        audio_layers.append(bg_data["background_sound"])
-    if bg_data.get("background_music"):
-        audio_layers.append(f"music: {bg_data['background_music']}")
-
-    if dialogue_text:
-        env_audio = ", ".join(audio_layers) if audio_layers else ""
-        audio_parts = [dialogue_text]
-        if dialogue_delivery:
-            audio_parts.append(f"spoken with {dialogue_delivery}")
-        if env_audio:
-            audio_parts.append(f"with ambient {env_audio}")
-        audio_section = ", ".join(audio_parts) + "."
-    elif audio_layers:
-        audio_section = "Silent scene with ambient " + ", ".join(audio_layers) + "."
+    audio_lines = []
+    if packet.audio.dialogue_present:
+        audio_lines.append("Native spoken dialogue is required in this clip.")
+        audio_lines.extend(dialogue_turn_lines)
     else:
-        audio_section = "Silent scene, no dialogue."
+        audio_lines.append("No spoken dialogue. Native audio should come only from ambience.")
+    if packet.audio.ambient_layers:
+        audio_lines.append("Ambient layers: " + ", ".join(packet.audio.ambient_layers))
+    if packet.audio.background_music:
+        audio_lines.append("Background music: " + packet.audio.background_music)
 
-    # ── Duration calculation
-    morpheus_duration = frame.get("suggested_duration")
-    if dialogue_line_all:
-        dialogue_timing = _estimate_dialogue_timing(
-            dialogue_line_all,
-            tempo=primary_voice_tempo,
-            env_intensity=dialogue_nodes[0].get("env_intensity", ""),
-        )
-        dialogue_duration = int(dialogue_timing["recommended_duration"])
-        if morpheus_duration and 3 <= morpheus_duration <= 30:
-            duration = max(morpheus_duration, dialogue_duration)
-        else:
-            duration = dialogue_duration
-    elif morpheus_duration and 3 <= morpheus_duration <= 30:
-        duration = morpheus_duration
-    else:
-        duration_map = {
-            "F07": 8, "F08": 4, "F18": 8, "F10": 5, "F12": 10, "F17": 10,
-            "F01": 5, "F04": 5, "F05": 5, "F11": 4, "F03": 6,
-        }
-        duration = duration_map.get(tag, 5)
+    duration_data = _resolve_video_duration(
+        graph,
+        frame_id,
+        frame,
+        packet,
+        dialogue_coverage,
+        primary_voice_tempo,
+    )
+    actual_duration = int(duration_data["duration"])
+    recommended_duration = duration_data["recommended_duration"]
+    duration_reason = str(duration_data["duration_reason"])
+    dialogue_fit_status = str(duration_data["dialogue_fit_status"])
+    dialogue_timing = duration_data["dialogue_timing"]
+    duration_allocation_details = duration_data["duration_allocation_details"]
 
-    actual_duration = min(duration, MAX_VIDEO_DURATION_SECONDS)
-    duration_reason = "formula_or_authored_default"
-    dialogue_fit_status = "no_dialogue"
-    if dialogue_timing:
-        duration_reason = "dialogue_timing"
-        if morpheus_duration and 3 <= morpheus_duration <= 30 and morpheus_duration >= int(dialogue_timing["recommended_duration"]):
-            duration_reason = "authored_duration_meets_or_exceeds_dialogue_timing"
-        dialogue_fit_status = "fits"
-        if duration > MAX_VIDEO_DURATION_SECONDS:
-            dialogue_fit_status = "capped_to_model_max"
-    elif morpheus_duration and 3 <= morpheus_duration <= 30:
-        duration_reason = "authored_duration"
-
-    # ── Dialogue pacing — computed as config metadata, NOT included in prompt
     dialogue_pacing = ""
     if dialogue_line_all:
-        combined_dialogue = " ".join(_normalize_ws(l) for l in dialogue_line_all if _normalize_ws(l))
-        word_count = len(combined_dialogue.split())
-        words_per_sec = word_count / max(actual_duration - 1, 1)
+        combined_dialogue = " ".join(_normalize_ws(line) for line in dialogue_line_all if _normalize_ws(line))
+        words_per_sec = len(combined_dialogue.split()) / max(actual_duration - 0.5, 1)
         if words_per_sec > 3.5:
             dialogue_pacing = "brisk"
         elif words_per_sec > 2.5:
@@ -954,47 +1386,46 @@ def assemble_video_prompt(graph: NarrativeGraph, frame_id: str) -> dict:
         else:
             dialogue_pacing = "slow"
 
-    # ── Assemble prompt
-    # Audio/dialogue leads, then continuity, background, camera, performance, blocking, beat
-    parts = []
-    if audio_section:
-        parts.append(audio_section)
-    if continuity_prefix:
-        parts.append(continuity_prefix)
-    if bg_section:
-        parts.append(bg_section)
-    if camera_section:
-        parts.append(camera_section)
-    if perf_section:
-        parts.append(perf_section)
-    if blocking_section:
-        parts.append(blocking_section)
-    if beat_section:
-        parts.append(beat_section)
+    # Shared core: SHOT INTENT, CONTINUITY, VISUAL ANCHORS.
+    # Video uses its own detailed AUDIO section rather than core["audio_context"]
+    # to include full dialogue turn lines with speaker identity and delivery.
+    core = _build_core_sections(packet, frame, graph, refs=refs, pose_snapshot=cast_bible_snapshot)
 
-    full_prompt = " ".join(parts)
-
-    # ── Grok Imagine Video enforces a 4096-char prompt limit.
-    GROK_VIDEO_CHAR_LIMIT = 4096
-    if len(full_prompt) > GROK_VIDEO_CHAR_LIMIT:
-        while len(" ".join(parts)) > GROK_VIDEO_CHAR_LIMIT and len(parts) > 1:
-            parts.pop()
-        full_prompt = " ".join(parts)
-        if len(full_prompt) > GROK_VIDEO_CHAR_LIMIT:
-            full_prompt = full_prompt[:GROK_VIDEO_CHAR_LIMIT]
+    sections = [
+        "\n".join(_compact_text(line) for line in lead_lines if _compact_text(line)),
+        core["shot_intent"],
+        core["continuity"],
+        core["pose_lock"],
+        core["visual_anchors"],
+        _format_section("SUBJECT COUNT", [f"Exactly {packet.subject_count} visible subject(s)."]),
+        _format_section("CAST INVARIANTS", packet.cast_invariants),
+        _format_section("PROP INVARIANTS", packet.prop_invariants),
+        _format_section("LOCATION INVARIANTS", packet.location_invariants),
+        _format_section("DIALOGUE COVERAGE", _dialogue_coverage_lines(dialogue_coverage, for_video=True)),
+        _format_section("BLOCKING", packet.blocking),
+        _format_section("BACKGROUND", packet.background),
+        _format_section("MOTION CONTINUITY", _motion_continuity_lines(frame, packet)),
+        _format_section("AUDIO", audio_lines),
+        _format_section(
+            "NEGATIVE CONSTRAINTS",
+            _negative_constraints(packet, dialogue_present=packet.audio.dialogue_present),
+        ),
+    ]
+    sections = [s for s in sections if s]
+    full_prompt = _serialize_video_prompt_sections(sections)
 
     return {
         "frame_id": frame_id,
-        "scene_id": frame.get("scene_id", ""),
-        "sequence_index": frame.get("sequence_index", 0),
+        "scene_id": frame.get("scene_id", "") if isinstance(frame, dict) else getattr(frame, "scene_id", ""),
+        "sequence_index": frame.get("sequence_index", 0) if isinstance(frame, dict) else getattr(frame, "sequence_index", 0),
         "prompt": full_prompt,
         "duration": actual_duration,
-        "recommended_duration": duration,
+        "recommended_duration": recommended_duration,
         "duration_reason": duration_reason,
         "dialogue_fit_status": dialogue_fit_status,
         "target_api": "grok-video",
-        "input_image_path": frame.get("composed_image_path") or f"frames/composed/{frame_id}_gen.png",
-        "dialogue_line": dialogue_line_raw,
+        "input_image_path": (frame.get("composed_image_path") if isinstance(frame, dict) else getattr(frame, "composed_image_path", None)) or f"frames/composed/{frame_id}_gen.png",
+        "dialogue_line": " ".join(dialogue_line_all) if dialogue_line_all else None,
         "voice_delivery": dialogue_delivery,
         "dialogue_pacing": dialogue_pacing,
         "voice_tempo": primary_voice_tempo,
@@ -1003,11 +1434,19 @@ def assemble_video_prompt(graph: NarrativeGraph, frame_id: str) -> dict:
         "dialogue_word_count": dialogue_timing["word_count"] if dialogue_timing else 0,
         "dialogue_turn_count": dialogue_timing["turn_count"] if dialogue_timing else 0,
         "dialogue_exceeds_model_max": bool(dialogue_timing["exceeds_model_max"]) if dialogue_timing else False,
-        "action_summary": action_summary,
-        "formula_tag": tag,
-        "shot_type": shot_type,
-        "camera_motion": camera_move,
-        "directing": frame.get("directing", {}),
+        "action_summary": frame.get("action_summary", "") if isinstance(frame, dict) else getattr(frame, "action_summary", ""),
+        "video_optimized_prompt_block": packet.video_optimized_prompt_block,
+        "cast_bible_snapshot": cast_bible_snapshot,
+        "cinematic_tag": tag,
+        "shot_type": packet.shot_intent.shot or shot_type,
+        "camera_motion": camera_movement,
+        "shot_packet_path": f"frames/shot_packets/{frame_id}.json",
+        "dialogue_present": packet.audio.dialogue_present,
+        "dialogue_coverage_roles": [str(item["role"]) for item in dialogue_coverage],
+        "duration_allocation_details": duration_allocation_details,
+        "duration_model_min_seconds": MIN_VIDEO_DURATION_SECONDS,
+        "duration_model_max_seconds": MAX_VIDEO_DURATION_SECONDS,
+        "directing": frame.get("directing", {}) if isinstance(frame, dict) else getattr(frame, "directing", {}),
     }
 
 
@@ -1070,19 +1509,13 @@ def assemble_composite_prompt(graph: NarrativeGraph, cast_id: str) -> dict:
     return {
         "cast_id": cast_id,
         "prompt": " ".join(parts),
-        "size": "portrait_9_16",
+        "size": "portrait_9_16",  # canonical schema key — cast composites are always portrait_9_16
         "out_path": f"cast/composites/{cast_id}_ref.png",
     }
 
 
 def assemble_location_prompt(graph: NarrativeGraph, location_id: str) -> dict:
-    """Build a location 4x4 directional grid prompt.
-
-    Generates a single 4x4 grid image showing the location from all four
-    cardinal directions (north, south, east, west). Each grid cell is labeled
-    with the direction. Direction descriptions from the graph are appended
-    to guide the generation of each view.
-    """
+    """Build a single primary location reference prompt."""
     loc = graph.locations.get(location_id)
     if not loc:
         raise KeyError(f"Location {location_id} not found")
@@ -1097,12 +1530,6 @@ def assemble_location_prompt(graph: NarrativeGraph, location_id: str) -> dict:
             mood = ", ".join(scene.mood_keywords)
 
     parts = [
-        (
-            "Generate a 4x4 grid demonstrating this location facing all four "
-            "directions, of north, south, east, west. Label each grid section "
-            "with the direction label. You are to use your logic and build a "
-            "360 view of this environment captured in 4 images on the grid."
-        ),
         style_prefix + "Cinematic wide establishing shot.",
         f"{loc.name}: {loc.description}." if loc.description else f"{loc.name}.",
     ]
@@ -1110,35 +1537,40 @@ def assemble_location_prompt(graph: NarrativeGraph, location_id: str) -> dict:
         parts.append(loc.atmosphere + ".")
     if mood:
         parts.append(f"Mood: {mood}.")
-    parts.append("No characters, environmental focus, professional cinematography composition.")
+    parts.append(
+        "Single coherent reference image only. No split panels, no labels, no collage, "
+        "no character presence. Environmental focus with production-design clarity."
+    )
 
-    # Append direction descriptions from graph (merged from location direction prompts)
+    # Direction descriptions remain textual spatial anchors for downstream frame prompts.
     if loc.directions:
+        direction_summaries = []
         for direction in ("north", "south", "east", "west"):
             view = getattr(loc.directions, direction, None)
             if view and view.description:
-                parts.append(f"{direction.capitalize()} view: {view.description}.")
+                direction_summaries.append(f"{direction}: {view.description}")
+        if direction_summaries:
+            parts.append(
+                "Spatial orientation anchors for later camera-facing continuity: "
+                + "; ".join(direction_summaries)
+                + "."
+            )
 
     ar = graph.project.aspect_ratio
     size_map = {"16:9": "landscape_16_9", "9:16": "portrait_9_16", "4:3": "landscape_4_3", "1:1": "square_hd"}
 
+    # Map location_type → template_type for the grid handler.
+    # Valid handler templates: "exterior", "interior".  Default to "exterior".
+    raw_type = (loc.location_type or "exterior").strip().lower()
+    template_type = raw_type if raw_type in ("interior", "exterior") else "exterior"
+
     return {
         "location_id": location_id,
         "prompt": " ".join(parts),
-        "size": size_map.get(ar, "landscape_16_9"),
+        "template_type": template_type,
+        "size": size_map.get(ar, "landscape_16_9"),  # canonical schema key — do not use legacy 'image_size'
         "out_path": f"locations/primary/{location_id}.png",
     }
-
-
-def assemble_location_direction_prompts(graph: NarrativeGraph, location_id: str) -> list[dict]:
-    """DEPRECATED — Direction views are now generated as part of the primary
-    location 4x4 grid prompt via assemble_location_prompt(). This function
-    returns an empty list for backward compatibility with callers that still
-    iterate over its results.
-    """
-    return []
-
-
 def assemble_prop_prompt(graph: NarrativeGraph, prop_id: str) -> dict:
     """Build a prop reference image prompt."""
     prop = graph.props.get(prop_id)
@@ -1159,7 +1591,7 @@ def assemble_prop_prompt(graph: NarrativeGraph, prop_id: str) -> dict:
     return {
         "prop_id": prop_id,
         "prompt": " ".join(p for p in parts if p),
-        "size": size_map.get(ar, "landscape_16_9"),
+        "size": size_map.get(ar, "landscape_16_9"),  # canonical schema key — do not use legacy 'image_size'
         "out_path": f"props/generated/{prop_id}.png",
     }
 
@@ -1178,91 +1610,22 @@ def resolve_ref_images(graph: NarrativeGraph, frame_id: str,
     still relative to project_dir for portability — the caller is responsible
     for making them absolute before handing them to the generation server.
     """
-    frame = graph.frames.get(frame_id)
-    if not frame:
+    if frame_id not in graph.frames:
+        return []
+    if project_dir is None:
         return []
 
-    base = Path(project_dir) if project_dir else None
-
-    def _exists(rel_path: str | Path) -> bool:
-        p = Path(rel_path)
-        if base and not p.is_absolute():
-            return (base / p).exists()
-        return p.exists()
-
-    refs = []
-
-    # 0. Grid cell image — find which storyboard grid this frame belongs to
-    #    The cell image is the primary leading reference for this frame.
-    from .api import get_frame_cell_image
-    cell_image = get_frame_cell_image(graph, frame_id)
-    if cell_image and _exists(cell_image):
-        refs.append(cell_image)
-    else:
-        # Fallback: grid composite image
-        for grid in graph.storyboard_grids.values():
-            if frame_id in grid.frame_ids:
-                if grid.composite_image_path and _exists(grid.composite_image_path):
-                    refs.append(grid.composite_image_path)
-                else:
-                    fallback = f"frames/storyboards/{grid.grid_id}/composite.png"
-                    if _exists(fallback):
-                        refs.append(fallback)
-                break
-
-    # 1. Continuity chain: previous composed frame FIRST
-    if frame.continuity_chain and frame.previous_frame_id:
-        prev = graph.frames.get(frame.previous_frame_id)
-        if prev and prev.composed_image_path:
-            refs.append(prev.composed_image_path)
-
-    # 2. Cast composites (max 4-5)
-    # Prefer frame-level cast_states; fall back to graph-level registry if empty
-    _cast_states = get_frame_cast_state_models(graph, frame_id)
-    cast_ids_in_frame = [cs.cast_id for cs in _cast_states
-                         if cs.frame_role not in ("referenced",)]
-    for cid in cast_ids_in_frame[:5]:
-        cast = graph.cast.get(cid)
-        if cast:
-            # Check if frame has an active state variant with its own image
-            frame_cs = None
-            for cs in _cast_states:
-                if cs.cast_id == cid:
-                    frame_cs = cs
-                    break
-            variant_path = None
-            if frame_cs and frame_cs.active_state_tag != "base":
-                variant = cast.state_variants.get(frame_cs.active_state_tag)
-                if variant and variant.image_path:
-                    variant_path = variant.image_path
-            if variant_path:
-                refs.append(variant_path)
-            elif cast.composite_path:
-                refs.append(cast.composite_path)
-
-    # 3. Location image — prefer directional view matching camera_facing
-    if frame.location_id:
-        loc = graph.locations.get(frame.location_id)
-        if loc:
-            direction_image_used = False
-            bg = frame.background
-            if bg and bg.camera_facing and loc.directions:
-                facing = bg.camera_facing.lower().replace("camera_facing_", "")
-                direction_view = getattr(loc.directions, facing, None)
-                if direction_view and direction_view.image_path and _exists(direction_view.image_path):
-                    refs.append(direction_view.image_path)
-                    direction_image_used = True
-            if not direction_image_used and loc.primary_image_path:
-                refs.append(loc.primary_image_path)
-
-    # 4. Prop reference images (max 3, avoid exceeding 14-image cap)
-    frame_prop_states = get_frame_prop_state_models(graph, frame_id)
-    if frame_prop_states:
-        for ps in frame_prop_states[:3]:
-            prop = graph.props.get(ps.prop_id)
-            if prop and prop.image_path:
-                refs.append(prop.image_path)
-
+    base = Path(project_dir)
+    collector = ReferenceImageCollector(graph, base)
+    frame_refs = collector.get_frame_references(frame_id)
+    refs: list[str] = []
+    if frame_refs.storyboard_cell and frame_refs.storyboard_cell.exists():
+        refs.append(frame_refs.storyboard_cell.relative_to(base).as_posix())
+    refs.extend(
+        path.relative_to(base).as_posix()
+        for path in collector.get_flat_reference_list(frame_id)
+        if path.exists()
+    )
     return refs
 
 
@@ -1271,7 +1634,7 @@ def resolve_ref_images(graph: NarrativeGraph, frame_id: str,
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-MAX_STORYBOARD_PANELS = 8  # Max panels a single storyboard image can usefully render
+MAX_STORYBOARD_PANELS = 6  # Guidance-only storyboard grids cap at 6 panels
 
 TAG_LABELS = {
     "F01": "Character Focus", "F02": "Two-Shot", "F03": "Group",
@@ -1281,8 +1644,8 @@ TAG_LABELS = {
     "F13": "Flashback", "F17": "Scene Bridge", "F18": "Dramatic Emphasis",
 }
 
-# Priority tags for storyboard sampling — prefer narrative-driving shots
-_KEY_TAGS = {"F07", "F01", "F02", "F18", "F09", "F10", "F17"}
+# Priority cinematic families for storyboard sampling — prefer narrative-driving shots
+_KEY_FAMILIES = {"E", "R", "A", "T"}
 
 
 def _sample_key_frames(frame_ids: list[str], graph, max_panels: int) -> list[str]:
@@ -1306,8 +1669,9 @@ def _sample_key_frames(frame_ids: list[str], graph, max_panels: int) -> list[str
     # Score frames by narrative importance
     scored = []
     for fid, frame in frames:
-        tag_str = str(frame.formula_tag.value if hasattr(frame.formula_tag, 'value') else frame.formula_tag or "F08")
-        priority = 2 if tag_str in _KEY_TAGS else 1
+        ct = getattr(frame, "cinematic_tag", None)
+        family = (ct.family if ct else "") or ""
+        priority = 2 if family in _KEY_FAMILIES else 1
         cast_states = get_frame_cast_state_models(graph, fid)
         if len(cast_states) >= 2:
             priority += 1
@@ -1340,112 +1704,41 @@ def _sample_key_frames(frame_ids: list[str], graph, max_panels: int) -> list[str
 
 
 def _build_cell_prompt(graph: NarrativeGraph, frame_id: str) -> str:
-    """Build a compact per-cell prompt for one frame inside a storyboard grid.
+    """Build a compact guidance-only prompt for one storyboard cell."""
+    packet = build_shot_packet(graph, frame_id)
+    frame = graph.frames.get(frame_id)
 
-    Uses the same data as assemble_image_prompt but strips the instruction
-    bridge and ref-image logic — those are handled at the grid level.
-    Returns a single-paragraph description suitable for a numbered cell.
-    """
-    ctx = get_frame_context(graph, frame_id)
-    frame = ctx["frame"]
-    directing = _extract_directing_data(graph, ctx, frame)
-
-    # ── Characters
-    char_segments = []
-    for cs in ctx.get("cast_states", []):
-        if cs.get("frame_role") in ("referenced", None):
-            continue
-        name = _get_cast_name(ctx["cast"], cs["cast_id"]) or cs.get("cast_id", "Character")
-        action = cs.get("action", "")
-        emotion = cs.get("emotion", "")
-        emotion_intensity = cs.get("emotion_intensity")
-        posture = cs.get("posture", "")
-        screen_position = cs.get("screen_position")
-        facing_direction = cs.get("facing_direction")
-        looking_at = cs.get("looking_at")
-        eye_direction = cs.get("eye_direction")
-        props_held = cs.get("props_held", [])
-
-        parts = [name]
-        if screen_position:
-            parts.append(f"at {screen_position}")
-        if facing_direction:
-            parts.append(f"facing {facing_direction}")
-        if action:
-            parts.append(action)
-        elif posture:
-            parts.append(posture)
-        if props_held:
-            prop_names = []
-            for pid in props_held[:3]:
-                prop = graph.props.get(pid)
-                prop_names.append(prop.name if prop else pid)
-            parts.append(f"holding {', '.join(prop_names)}")
-        if emotion:
-            expression = _resolve_expression(emotion, emotion_intensity if emotion_intensity is not None else 0.5)
-            parts.append(expression)
-        if looking_at:
-            parts.append(f"looking at {looking_at}")
-        elif eye_direction:
-            parts.append(f"eyes {eye_direction}")
-        char_segments.append(", ".join(parts))
-
-    char_desc = ". ".join(char_segments) if char_segments else ""
-
-    # ── Environment (compact)
-    env = frame.get("environment", {})
-    env_parts = []
-    bg_data = frame.get("background", {})
-    camera_facing = bg_data.get("camera_facing")
-    if camera_facing:
-        env_parts.append(f"camera facing {camera_facing}")
-    visible_desc = bg_data.get("visible_description", "")
-    if not visible_desc and camera_facing:
-        location = ctx["location"] or {}
-        directions = location.get("directions", {})
-        if isinstance(directions, dict):
-            sb_dir_view = directions.get(camera_facing)
-            if isinstance(sb_dir_view, dict):
-                visible_desc = sb_dir_view.get("description", "")
-            elif isinstance(sb_dir_view, str):
-                visible_desc = sb_dir_view
-    if visible_desc:
-        env_parts.append(visible_desc)
-    atmo = env.get("atmosphere", {})
-    if atmo.get("particles"):
-        env_parts.append(f"{atmo['particles']} in air")
-    env_desc = ". ".join(env_parts) if env_parts else ""
-
-    # ── Shot framing
-    tag = frame.get("formula_tag", "F07")
-    shot_desc = FORMULA_SHOT.get(tag, "Medium shot")
-    comp = frame.get("composition", {})
-    if comp.get("shot"):
-        shot_desc = comp["shot"]
-
-    # ── Assemble cell prompt: characters + environment + shot
-    # Shared visual style is carried once at the grid level.
-    segments = [s for s in [char_desc, env_desc, shot_desc] if s]
-    return ". ".join(segments)
+    segments = [
+        packet.current_beat,
+        f"Subjects: {packet.subject_count}.",
+        "Shot: " + " | ".join(part for part in [
+            packet.shot_intent.shot,
+            packet.shot_intent.angle,
+        ] if part),
+        "Blocking: " + "; ".join(packet.blocking[:2]) if packet.blocking else "",
+        "Background: " + "; ".join(packet.background[:2]) if packet.background else "",
+        "Continuity: " + "; ".join(packet.continuity_deltas[:2]) if packet.continuity_deltas else "",
+        (
+            "Dialogue moment only through performance, never visible text."
+            if packet.audio.dialogue_present else
+            "No spoken dialogue."
+        ),
+    ]
+    if frame and frame.action_summary and frame.action_summary != packet.current_beat:
+        segments.insert(1, frame.action_summary)
+    return " ".join(_compact_text(segment) for segment in segments if _compact_text(segment))
 
 
 def assemble_grid_storyboard_prompt(graph: NarrativeGraph, grid_id: str,
                                      project_dir: str | Path | None = None) -> dict:
-    """Build a storyboard prompt for a storyboard grid.
-
-    Programmatically stacks the individual frame image prompts into numbered
-    cell descriptions — each cell gets the full directing context from its
-    frame, giving nano-banana-pro precise per-cell instructions.
+    """Build a storyboard guidance prompt for a storyboard grid.
 
     Returns dict with:
         grid_id: str
-        grid: str — always "3x3"
-        cell_prompts: list[str] — one prompt string per cell/frame
-        scene: str — legacy compat, joined cell prompts
-        refs: list[str] — reference image paths (prev grid composite, cast, etc.)
-        output_dir: str — output directory for this grid
-        cell_map: dict[int, str] — cell index -> frame_id
-        frame_ids: list[str] — all frames in the grid
+        grid: str — layout string such as "2x2" or "3x2"
+        cell_prompts: list[str]
+        refs: list[str]
+        output_dir: str
     """
     grid = graph.storyboard_grids.get(grid_id)
     if not grid:
@@ -1454,7 +1747,7 @@ def assemble_grid_storyboard_prompt(graph: NarrativeGraph, grid_id: str,
     # All valid frames in the grid, in order
     all_frame_ids = [fid for fid in grid.frame_ids if graph.frames.get(fid)]
 
-    # Build per-cell prompts from each frame's image prompt data
+    # Build compact guidance prompts from each frame's shot packet
     cell_prompts: list[str] = []
     for fid in all_frame_ids:
         cell_prompts.append(_build_cell_prompt(graph, fid))
@@ -1486,6 +1779,11 @@ def assemble_grid_storyboard_prompt(graph: NarrativeGraph, grid_id: str,
             if loc and loc.primary_image_path and loc.primary_image_path not in seen_refs:
                 seen_refs.add(loc.primary_image_path)
                 refs.append(loc.primary_image_path)
+        for prop_state in get_frame_prop_state_models(graph, fid)[:2]:
+            prop = graph.props.get(prop_state.prop_id)
+            if prop and prop.image_path and prop.image_path not in seen_refs:
+                seen_refs.add(prop.image_path)
+                refs.append(prop.image_path)
 
     output_dir = f"frames/storyboards/{grid_id}"
 
@@ -1496,6 +1794,7 @@ def assemble_grid_storyboard_prompt(graph: NarrativeGraph, grid_id: str,
         "cell_prompts": cell_prompts,
         "scene": "\n".join(f"[Cell {i+1}] {cp}" for i, cp in enumerate(cell_prompts)),
         "refs": refs,
+        "guidance_only": True,
         "output_dir": output_dir,
         "cell_map": grid.cell_map,
         "frame_ids": all_frame_ids,
@@ -1507,6 +1806,7 @@ def assemble_all_prompts(graph: NarrativeGraph, project_dir: str | Path) -> dict
 
     Writes:
         frames/prompts/{frame_id}_image.json
+        frames/shot_packets/{frame_id}.json
         video/prompts/{frame_id}_video.json
         cast/prompts/{cast_id}_composite.json
         locations/prompts/{location_id}_location.json
@@ -1516,28 +1816,43 @@ def assemble_all_prompts(graph: NarrativeGraph, project_dir: str | Path) -> dict
     """
     project_dir = Path(project_dir)
     frame_prompt_dir = project_dir / "frames" / "prompts"
+    shot_packet_dir = project_dir / "frames" / "shot_packets"
     video_prompt_dir = project_dir / "video" / "prompts"
     cast_prompt_dir = project_dir / "cast" / "prompts"
     loc_prompt_dir = project_dir / "locations" / "prompts"
     prop_prompt_dir = project_dir / "props" / "prompts"
     storyboard_prompt_dir = project_dir / "frames" / "storyboard_prompts"
 
-    for d in [frame_prompt_dir, video_prompt_dir, cast_prompt_dir, loc_prompt_dir, prop_prompt_dir, storyboard_prompt_dir]:
+    for d in [frame_prompt_dir, shot_packet_dir, video_prompt_dir, cast_prompt_dir, loc_prompt_dir, prop_prompt_dir, storyboard_prompt_dir]:
         d.mkdir(parents=True, exist_ok=True)
 
-    counts = {"image_prompts": 0, "video_prompts": 0, "composite_prompts": 0,
+    counts = {"image_prompts": 0, "shot_packets": 0, "video_prompts": 0, "composite_prompts": 0,
               "location_prompts": 0, "prop_prompts": 0, "storyboard_prompts": 0}
+
+    try:
+        ReferenceImageCollector(graph, project_dir).sync_cast_bible(
+            run_id=current_run_id(""),
+            sequence_id=getattr(graph.project, "project_id", ""),
+        )
+    except Exception as exc:
+        print(f"WARNING: Failed to sync cast bible before prompt assembly: {exc}")
 
     # Frame prompts
     for frame_id in graph.frame_order:
         try:
+            packet = build_shot_packet(graph, frame_id)
+            (shot_packet_dir / f"{frame_id}.json").write_text(
+                json.dumps(packet.model_dump(), indent=2, ensure_ascii=False), encoding="utf-8"
+            )
+            counts["shot_packets"] += 1
+
             img = assemble_image_prompt(graph, frame_id, project_dir=project_dir)
             (frame_prompt_dir / f"{frame_id}_image.json").write_text(
                 json.dumps(img, indent=2, ensure_ascii=False), encoding="utf-8"
             )
             counts["image_prompts"] += 1
 
-            vid = assemble_video_prompt(graph, frame_id)
+            vid = assemble_video_prompt(graph, frame_id, project_dir=project_dir)
             (video_prompt_dir / f"{frame_id}_video.json").write_text(
                 json.dumps(vid, indent=2, ensure_ascii=False), encoding="utf-8"
             )
@@ -1556,11 +1871,7 @@ def assemble_all_prompts(graph: NarrativeGraph, project_dir: str | Path) -> dict
         except Exception as e:
             print(f"WARNING: Failed to assemble composite for {cast_id}: {e}")
 
-    # Location prompts — primary + directional views
-    loc_direction_prompt_dir = project_dir / "locations" / "direction_prompts"
-    loc_direction_prompt_dir.mkdir(parents=True, exist_ok=True)
-    (project_dir / "locations" / "direction").mkdir(parents=True, exist_ok=True)
-
+    # Location prompts — single primary references
     for loc_id in graph.locations:
         try:
             lp = assemble_location_prompt(graph, loc_id)
@@ -1570,19 +1881,6 @@ def assemble_all_prompts(graph: NarrativeGraph, project_dir: str | Path) -> dict
             counts["location_prompts"] += 1
         except Exception as e:
             print(f"WARNING: Failed to assemble location for {loc_id}: {e}")
-
-        # Directional view prompts
-        try:
-            dir_prompts = assemble_location_direction_prompts(graph, loc_id)
-            for dp in dir_prompts:
-                direction = dp["direction"]
-                fname = f"{loc_id}_{direction}.json"
-                (loc_direction_prompt_dir / fname).write_text(
-                    json.dumps(dp, indent=2, ensure_ascii=False), encoding="utf-8"
-                )
-                counts["location_prompts"] += 1
-        except Exception as e:
-            print(f"WARNING: Failed to assemble direction prompts for {loc_id}: {e}")
 
     # Prop prompts
     for prop_id in graph.props:
@@ -1727,7 +2025,7 @@ def _build_dialogue_delivery(dialogue_node: dict, speaker_voice: dict) -> tuple[
     # Personality grounds how this character speaks — lead with it
     if personality:
         parts.append(personality)
-    # Voice description provides holistic voice profile context
+    # Voice description provides holistic speech-style context
     if voice_desc and not _delivery_fragment_redundant(voice_desc, parts):
         parts.append(voice_desc)
     for value in (
@@ -1774,11 +2072,11 @@ def _infer_voice_tempo(*signals: str) -> str:
 
 
 def _estimate_dialogue_timing(lines: list[str], tempo: str = "", env_intensity: str = "") -> dict[str, float | int | bool]:
-    """Estimate dialogue timing with a conservative bias toward longer clips."""
+    """Estimate full-line dialogue timing for a single clip or span budget."""
     cleaned_lines = [_normalize_ws(line) for line in lines if _normalize_ws(line)]
     if not cleaned_lines:
         return {
-            "recommended_duration": 5,
+            "recommended_duration": MIN_VIDEO_DURATION_SECONDS,
             "speech_seconds": 0.0,
             "pause_seconds": 0.0,
             "word_count": 0,
@@ -1793,29 +2091,16 @@ def _estimate_dialogue_timing(lines: list[str], tempo: str = "", env_intensity: 
     clause_breaks = len(re.findall(r"[,;:—-]", combined))
     speaker_turns = max(len(cleaned_lines) - 1, 0)
 
-    tempo_lower = (tempo or "").lower()
-    env_lower = (env_intensity or "").lower()
-    units_per_second = 2.15
-
-    if "fast" in tempo_lower:
-        units_per_second = 2.75
-    elif any(token in tempo_lower for token in ("slow", "measured", "deliberate", "careful")):
-        units_per_second = 1.8
-
-    if any(token in env_lower for token in ("whisper", "quiet", "soft", "hushed")):
-        units_per_second = min(units_per_second, 1.75)
-    elif any(token in env_lower for token in ("loud", "shouting", "shout", "yelling", "urgent")):
-        units_per_second = max(units_per_second, 2.45)
-
+    units_per_second = _tempo_units_per_second(tempo=tempo, env_intensity=env_intensity)
     speech_seconds = units / units_per_second
     pause_seconds = (
         sentence_breaks * 0.55 +
         clause_breaks * 0.2 +
         speaker_turns * 0.75
     )
-    lead_in_seconds = 1.6 if speaker_turns == 0 else 2.1
+    lead_in_seconds = 0.9 if speaker_turns == 0 else 1.35
     recommended_duration = max(
-        5,
+        MIN_VIDEO_DURATION_SECONDS,
         math.ceil(speech_seconds + pause_seconds + lead_in_seconds),
     )
 

@@ -1,0 +1,109 @@
+graph TD
+    build_api_reference["build_api_reference"]
+    build_architecture_reports["build_architecture_reports"]
+    checkpoint["checkpoint"]
+    create_project["create_project"]
+    docs_screenwire_operational_overview_render_pdf["docs.screenwire-operational-overview.render_pdf"]
+    graph["graph"]
+    graph_api["graph.api"]
+    graph_cc_parser["graph.cc_parser"]
+    graph_continuity_validator["graph.continuity_validator"]
+    graph_frame_prompt_refiner["graph.frame_prompt_refiner"]
+    graph_grid_generate["graph.grid_generate"]
+    graph_grok_tagger["graph.grok_tagger"]
+    graph_haiku_enricher["graph.haiku_enricher"]
+    graph_materializer["graph.materializer"]
+    graph_prompt_assembler["graph.prompt_assembler"]
+    graph_queue["graph.queue"]
+    graph_schema["graph.schema"]
+    graph_store["graph.store"]
+    handlers["handlers"]
+    handlers_base["handlers.base"]
+    handlers_cast_image["handlers.cast_image"]
+    handlers_frame["handlers.frame"]
+    handlers_location_grid["handlers.location_grid"]
+    handlers_models["handlers.models"]
+    handlers_storyboard["handlers.storyboard"]
+    handlers_video_clip["handlers.video_clip"]
+    image_tagger["image_tagger"]
+    run_pipeline["run_pipeline"]
+    server["server"]
+    skills["skills"]
+    tests_conftest["tests.conftest"]
+    tests_test_alignment_contracts["tests.test_alignment_contracts"]
+    tests_test_api_reference_builder["tests.test_api_reference_builder"]
+    tests_test_architecture_reports["tests.test_architecture_reports"]
+    tests_test_corrective_fixes["tests.test_corrective_fixes"]
+    tests_test_pipeline_smoke_e2e["tests.test_pipeline_smoke_e2e"]
+    tests_test_prompt_refactor_unit["tests.test_prompt_refactor_unit"]
+    train_agent["train_agent"]
+    graph_api --> graph_schema
+    graph_api --> graph_store
+    graph_cc_parser --> graph_schema
+    graph_continuity_validator --> graph_schema
+    graph_continuity_validator --> graph_store
+    graph_frame_prompt_refiner --> graph_prompt_assembler
+    graph_grid_generate --> handlers
+    graph_grok_tagger --> graph_schema
+    graph_grok_tagger --> graph_store
+    graph_haiku_enricher --> graph_schema
+    graph_haiku_enricher --> graph_store
+    graph_materializer --> graph_api
+    graph_materializer --> graph_schema
+    graph_prompt_assembler --> graph_api
+    graph_prompt_assembler --> graph_schema
+    graph_store --> graph_schema
+    handlers --> handlers_base
+    handlers --> handlers_cast_image
+    handlers --> handlers_frame
+    handlers --> handlers_location_grid
+    handlers --> handlers_models
+    handlers --> handlers_storyboard
+    handlers --> handlers_video_clip
+    handlers_base --> handlers_models
+    handlers_cast_image --> handlers_base
+    handlers_cast_image --> handlers_models
+    handlers_frame --> handlers_base
+    handlers_frame --> handlers_models
+    handlers_location_grid --> handlers_base
+    handlers_location_grid --> handlers_models
+    handlers_storyboard --> handlers_base
+    handlers_storyboard --> handlers_models
+    handlers_video_clip --> handlers_base
+    handlers_video_clip --> handlers_models
+    run_pipeline --> graph_api
+    run_pipeline --> graph_cc_parser
+    run_pipeline --> graph_continuity_validator
+    run_pipeline --> graph_frame_prompt_refiner
+    run_pipeline --> graph_grid_generate
+    run_pipeline --> graph_grok_tagger
+    run_pipeline --> graph_haiku_enricher
+    run_pipeline --> graph_materializer
+    run_pipeline --> graph_prompt_assembler
+    run_pipeline --> graph_schema
+    run_pipeline --> graph_store
+    run_pipeline --> image_tagger
+    server --> graph_frame_prompt_refiner
+    server --> handlers
+    server --> image_tagger
+    tests_test_alignment_contracts --> graph_api
+    tests_test_alignment_contracts --> graph_frame_prompt_refiner
+    tests_test_alignment_contracts --> graph_materializer
+    tests_test_alignment_contracts --> graph_store
+    tests_test_alignment_contracts --> run_pipeline
+    tests_test_alignment_contracts --> tests_test_pipeline_smoke_e2e
+    tests_test_api_reference_builder --> build_api_reference
+    tests_test_architecture_reports --> build_architecture_reports
+    tests_test_corrective_fixes --> graph_prompt_assembler
+    tests_test_corrective_fixes --> run_pipeline
+    tests_test_pipeline_smoke_e2e --> graph_api
+    tests_test_pipeline_smoke_e2e --> graph_grid_generate
+    tests_test_pipeline_smoke_e2e --> graph_materializer
+    tests_test_pipeline_smoke_e2e --> graph_prompt_assembler
+    tests_test_pipeline_smoke_e2e --> graph_schema
+    tests_test_pipeline_smoke_e2e --> graph_store
+    tests_test_pipeline_smoke_e2e --> handlers_storyboard
+    tests_test_prompt_refactor_unit --> graph_api
+    tests_test_prompt_refactor_unit --> graph_prompt_assembler
+    tests_test_prompt_refactor_unit --> graph_schema
+    tests_test_prompt_refactor_unit --> tests_test_pipeline_smoke_e2e

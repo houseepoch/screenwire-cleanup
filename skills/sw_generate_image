@@ -31,7 +31,7 @@ def main():
 
     body = {
         "prompt": args.prompt,
-        "image_size": args.size,
+        "size": args.size,
         "output_path": out_abs,
         "output_format": "png",
     }

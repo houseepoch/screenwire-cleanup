@@ -71,14 +71,6 @@ def main():
                 synced += 1
                 print(f"  Synced cast composite (manifest): {cast_id} -> {comp_path}")
 
-        # Voice profiles
-        voice_path = mc.get("voiceProfilePath")
-        if cast_id and voice_path and cast_id in graph.cast:
-            if graph.cast[cast_id].voice_profile_path != voice_path:
-                graph.cast[cast_id].voice_profile_path = voice_path
-                graph.cast[cast_id].voice_status = "profiled"
-                synced += 1
-
     # ── Location primary images: scan disk first ─────────────────────────
     loc_primary_dir = project_dir / "locations" / "primary"
     if loc_primary_dir.is_dir():
@@ -104,24 +96,6 @@ def main():
                 graph.locations[loc_id].image_status = "generated"
                 synced += 1
                 print(f"  Synced location image (manifest): {loc_id} -> {img_path}")
-
-    # ── Location direction views: scan disk ──────────────────────────────
-    direction_dir = project_dir / "locations" / "direction"
-    if direction_dir.is_dir():
-        for loc_id, loc_node in graph.locations.items():
-            if not loc_node.directions:
-                continue
-            for cardinal in ("north", "south", "east", "west", "exterior"):
-                view = getattr(loc_node.directions, cardinal, None)
-                if not view or not view.description:
-                    continue
-                expected_path = f"locations/direction/{loc_id}_{cardinal}.png"
-                if (project_dir / expected_path).exists():
-                    if view.image_path != expected_path or view.image_status != "generated":
-                        view.image_path = expected_path
-                        view.image_status = "generated"
-                        synced += 1
-                        print(f"  Synced direction view: {loc_id}/{cardinal} -> {expected_path}")
 
     # ── Prop images: scan disk first ─────────────────────────────────────
     props_dir = project_dir / "props" / "generated"
@@ -187,19 +161,51 @@ def main():
                     print(f"  Synced grid composite (disk): {grid_id} -> {rel_path}")
             # Cell images directory
             frames_subdir = grid_dir / "frames"
-            if frames_subdir.is_dir() and any(frames_subdir.glob("frame_*.png")):
+            if frames_subdir.is_dir() and any(frames_subdir.glob("*.png")):
                 rel_cell_dir = f"frames/storyboards/{grid_id}/frames"
                 if grid_node.cell_image_dir != rel_cell_dir:
                     grid_node.cell_image_dir = rel_cell_dir
                     synced += 1
                     print(f"  Synced grid cell dir (disk): {grid_id} -> {rel_cell_dir}")
 
+    manifest["storyboardGrids"] = [
+        {
+            "gridId": grid.grid_id,
+            "frameIds": grid.frame_ids,
+            "frameCount": grid.frame_count,
+            "rows": grid.rows,
+            "cols": grid.cols,
+            "sceneIds": grid.scene_ids,
+            "breakReason": grid.break_reason,
+            "previousGridId": grid.previous_grid_id,
+            "nextGridId": grid.next_grid_id,
+            "compositeImagePath": grid.composite_image_path,
+            "cellImageDir": grid.cell_image_dir,
+            "cellMap": {str(k): v for k, v in grid.cell_map.items()},
+            "castPresent": grid.cast_present,
+            "propsPresent": grid.props_present,
+            "storyboardStatus": grid.storyboard_status,
+            "shotMatchGroups": [
+                {
+                    "groupId": group.group_id,
+                    "frameIds": group.frame_ids,
+                    "matchBasis": group.match_basis,
+                    "confidence": group.confidence,
+                }
+                for group in grid.shot_match_groups
+            ],
+        }
+        for grid in graph.storyboard_grids.values()
+    ]
+
     # ── Persist ──────────────────────────────────────────────────────────
     store.save(graph)
 
     # Save updated manifest
     manifest["version"] = manifest.get("version", 0) + 1
-    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    tmp_path = manifest_path.with_suffix(".json.tmp")
+    tmp_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    tmp_path.replace(manifest_path)
 
     print(f"SUCCESS: Synced {synced} asset paths (disk scan + manifest) into graph and manifest")
 

@@ -1,0 +1,208 @@
+#!/usr/bin/env python3
+"""sw_migrate_prompt_size_keys — audit and normalize prompt JSON size keys.
+
+Scans one or more roots for prompt-like JSON artifacts, preferring the
+current `size` key and treating `image_size` as legacy.
+
+Default mode is audit-only. Use `--apply` to rewrite files in place.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+
+PROMPT_HINT_KEYS = {
+    "prompt",
+    "cell_prompts",
+    "out_path",
+    "output_dir",
+    "input_image_path",
+    "ref_images",
+    "target_api",
+}
+
+
+def _looks_like_prompt_json(data: object) -> bool:
+    if not isinstance(data, dict):
+        return False
+    keys = set(data.keys())
+    return bool(keys & PROMPT_HINT_KEYS or "size" in keys or "image_size" in keys)
+
+
+def _scan_file(path: Path) -> dict:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        return {"path": str(path), "status": "error", "error": str(exc)}
+
+    if not _looks_like_prompt_json(data):
+        return {"path": str(path), "status": "skip"}
+
+    size = data.get("size")
+    legacy = data.get("image_size")
+
+    if size is not None and legacy is not None:
+        if size == legacy:
+            return {
+                "path": str(path),
+                "status": "duplicate_equal",
+                "data": data,
+                "size": size,
+            }
+        return {
+            "path": str(path),
+            "status": "conflict",
+            "size": size,
+            "image_size": legacy,
+        }
+
+    if size is not None:
+        return {"path": str(path), "status": "canonical", "size": size}
+
+    if legacy is not None:
+        return {
+            "path": str(path),
+            "status": "legacy_only",
+            "data": data,
+            "image_size": legacy,
+        }
+
+    return {"path": str(path), "status": "prompt_no_size"}
+
+
+def _normalize_file(path: Path, data: dict, *, from_legacy_only: bool) -> None:
+    normalized = dict(data)
+    if from_legacy_only:
+        normalized["size"] = normalized.pop("image_size")
+    else:
+        normalized.pop("image_size", None)
+    path.write_text(json.dumps(normalized, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
+def _build_summary(results: list[dict]) -> dict:
+    summary = {
+        "scanned_files": len(results),
+        "prompt_files": 0,
+        "size_scoped_prompt_files": 0,
+        "non_size_prompt_files": 0,
+        "canonical": 0,
+        "legacy_only": 0,
+        "duplicate_equal": 0,
+        "conflicts": 0,
+        "errors": 0,
+        "migrated": 0,
+        "cleaned_duplicates": 0,
+        "conflict_paths": [],
+        "error_paths": [],
+        "migrated_paths": [],
+        "cleaned_duplicate_paths": [],
+    }
+
+    for result in results:
+        status = result["status"]
+        if status != "skip":
+            summary["prompt_files"] += 1
+        if status == "canonical":
+            summary["size_scoped_prompt_files"] += 1
+            summary["canonical"] += 1
+        elif status == "legacy_only":
+            summary["size_scoped_prompt_files"] += 1
+            summary["legacy_only"] += 1
+        elif status == "duplicate_equal":
+            summary["size_scoped_prompt_files"] += 1
+            summary["duplicate_equal"] += 1
+        elif status == "conflict":
+            summary["size_scoped_prompt_files"] += 1
+            summary["conflicts"] += 1
+            summary["conflict_paths"].append(result["path"])
+        elif status == "prompt_no_size":
+            summary["non_size_prompt_files"] += 1
+        elif status == "error":
+            summary["errors"] += 1
+            summary["error_paths"].append(result["path"])
+
+    return summary
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Audit and normalize prompt JSON size keys.")
+    parser.add_argument(
+        "--roots",
+        nargs="+",
+        default=["projects"],
+        help="Directories to scan recursively (default: projects)",
+    )
+    parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="Rewrite files in place: image_size -> size, or remove duplicate legacy keys.",
+    )
+    parser.add_argument(
+        "--report",
+        default="",
+        help="Optional JSON report output path.",
+    )
+    args = parser.parse_args()
+
+    all_results: list[dict] = []
+    for root_str in args.roots:
+        root = Path(root_str)
+        if not root.exists():
+            all_results.append({"path": str(root), "status": "error", "error": "root does not exist"})
+            continue
+        for path in sorted(root.rglob("*.json")):
+            all_results.append(_scan_file(path))
+
+    summary = _build_summary(all_results)
+
+    if args.apply:
+        for result in all_results:
+            status = result["status"]
+            if status == "legacy_only":
+                path = Path(result["path"])
+                _normalize_file(path, result["data"], from_legacy_only=True)
+                summary["migrated"] += 1
+                summary["migrated_paths"].append(result["path"])
+            elif status == "duplicate_equal":
+                path = Path(result["path"])
+                _normalize_file(path, result["data"], from_legacy_only=False)
+                summary["cleaned_duplicates"] += 1
+                summary["cleaned_duplicate_paths"].append(result["path"])
+
+    print("Prompt size-key audit")
+    print(f"  scanned_files: {summary['scanned_files']}")
+    print(f"  prompt_files: {summary['prompt_files']}")
+    print(f"  size_scoped_prompt_files: {summary['size_scoped_prompt_files']}")
+    print(f"  non_size_prompt_files: {summary['non_size_prompt_files']}")
+    print(f"  canonical: {summary['canonical']}")
+    print(f"  legacy_only: {summary['legacy_only']}")
+    print(f"  duplicate_equal: {summary['duplicate_equal']}")
+    print(f"  conflicts: {summary['conflicts']}")
+    print(f"  errors: {summary['errors']}")
+    if args.apply:
+        print(f"  migrated: {summary['migrated']}")
+        print(f"  cleaned_duplicates: {summary['cleaned_duplicates']}")
+
+    if summary["conflict_paths"]:
+        print("  conflict_paths:")
+        for path in summary["conflict_paths"][:20]:
+            print(f"    - {path}")
+    if summary["error_paths"]:
+        print("  error_paths:")
+        for path in summary["error_paths"][:20]:
+            print(f"    - {path}")
+
+    if args.report:
+        report_path = Path(args.report)
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    return 1 if summary["conflicts"] or summary["errors"] else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

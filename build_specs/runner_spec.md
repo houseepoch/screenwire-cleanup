@@ -1,5 +1,8 @@
 # Pipeline Runner Spec — ScreenWire AI Headless MVP
 
+> Legacy planning document. The current pipeline is more programmatic than this
+> spec and does not spawn a Voice Director or external audio-generation stage.
+
 ## Task
 Build a Python script that drives the full pipeline from Phase 0→6 without any human input. This is the test harness that proves the pipeline works end-to-end.
 
@@ -68,11 +71,10 @@ SIMPLER APPROACH: Spawn CC with a prompt that tells it to do all 3 sub-phases in
 3. Verify outputs exist: dialogue.json, cast/*.json, locations/*.json, props/*.json, manifest has frames[]
 4. Update manifest: phase_2 complete, phase_3 ready
 
-#### Phase 3 — Visual & Voice Assets
-1. Spawn Scene Coordinator — generates images
-2. Spawn Voice Director — creates voices (can run in parallel with SC, but sequential is fine for MVP)
-3. Wait for both to complete
-4. Verify: all cast have composites, all locations have primaries, all props have images, all speaking chars have voice_ids
+#### Phase 3 — Visual Assets
+1. Generate visual reference assets programmatically
+2. Wait for generation and validation to complete
+3. Verify: all cast have composites, all locations have primaries, all props have images
 5. Update manifest: phase_3 complete, phase_4 ready
 
 #### Phase 4 — Production Coordination

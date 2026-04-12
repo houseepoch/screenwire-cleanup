@@ -2,7 +2,7 @@
 """sw_fresh_generation — POST to /internal/fresh-generation (google/nano-banana-2) for high-quality image gen.
 
 Generates new images from scratch using nano-banana-2 (Gemini 3.1 Flash Image).
-Higher quality than sw_generate_image (p-image/Flux) — use for hero assets,
+Higher quality than sw_generate_image (p-image) — use for hero assets,
 detailed props, and images that need precise prompt adherence.
 
 Optionally accepts reference images for style/subject guidance.
@@ -29,6 +29,8 @@ def main():
     parser.add_argument("--ref-images", default="", help="Comma-separated paths to reference images for style/subject guidance")
     parser.add_argument("--image-search", action="store_true", default=False, help="Enable Google Image Search grounding — finds web images as visual context")
     parser.add_argument("--google-search", action="store_true", default=False, help="Enable Google Web Search grounding — uses real-time web info")
+    parser.add_argument("--run-id", default=os.environ.get("SCREENWIRE_RUN_ID", ""), help="Pipeline run ID for telemetry correlation")
+    parser.add_argument("--phase", default=os.environ.get("SCREENWIRE_PHASE", ""), help="Pipeline phase label for telemetry correlation")
     args = parser.parse_args()
 
     project_dir = os.environ.get("PROJECT_DIR", PROJECT_DIR_DEFAULT)
@@ -50,12 +52,14 @@ def main():
 
     body = {
         "prompt": args.prompt,
-        "image_size": args.size,
+        "size": args.size,
         "output_path": out_abs,
         "output_format": "png",
         "reference_images": ref_images,
         "image_search": args.image_search,
         "google_search": args.google_search,
+        "run_id": args.run_id or None,
+        "phase": args.phase,
     }
     if args.seed is not None:
         body["seed"] = args.seed

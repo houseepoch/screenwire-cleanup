@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""sw_generate_video — POST to /internal/generate-video to generate a video clip via grok-video."""
+"""sw_generate_video — POST to /internal/generate-video via Grok native-audio video."""
 
 import argparse
 import os
@@ -12,11 +12,13 @@ PROJECT_DIR_DEFAULT = os.getcwd()
 
 def main():
     parser = argparse.ArgumentParser(description="Generate a video via the ScreenWire internal API.")
-    parser.add_argument("--api", default="grok-video", help="Video API (default: grok-video)")
     parser.add_argument("--image", default=None, help="Input image path (relative or absolute)")
     parser.add_argument("--prompt", required=True, help="Video generation prompt")
     parser.add_argument("--out", required=True, help="Output file path (relative or absolute)")
-    parser.add_argument("--duration", type=int, default=5, help="Duration in seconds (3-15, default: 5)")
+    parser.add_argument("--frame-id", default="", help="Canonical frame ID for telemetry and output tracking")
+    parser.add_argument("--duration", type=int, default=5, help="Duration in seconds (2-15, default: 5)")
+    parser.add_argument("--run-id", default=os.environ.get("SCREENWIRE_RUN_ID", ""), help="Pipeline run ID for telemetry correlation")
+    parser.add_argument("--phase", default=os.environ.get("SCREENWIRE_PHASE", ""), help="Pipeline phase label for telemetry correlation")
     args = parser.parse_args()
 
     project_dir = os.environ.get("PROJECT_DIR", PROJECT_DIR_DEFAULT)
@@ -28,10 +30,12 @@ def main():
     os.makedirs(os.path.dirname(out_abs), exist_ok=True)
 
     body = {
-        "model": "xai/grok-imagine-video",
         "prompt": args.prompt,
         "output_path": out_abs,
-        "duration": min(max(args.duration, 3), 15),
+        "duration": min(max(args.duration, 2), 15),
+        "frame_id": args.frame_id or None,
+        "run_id": args.run_id or None,
+        "phase": args.phase,
     }
 
     if args.image is not None:
