@@ -252,13 +252,13 @@ export function OnboardingWizard() {
         setWorkers([
           {
             id: job.jobId,
-            name: 'Skeleton Generation',
+            name: 'Preproduction Build',
             status: 'running',
-            progress: 0,
-            message: job.message || 'Generating skeleton and creative output...',
+            progress: 5,
+            message: job.message || 'Generating script, graph, and review assets...',
           },
         ]);
-        updateProjectStatus('skeleton_review');
+        updateProjectStatus('generating_assets');
         setCurrentView('project');
       } catch (error) {
         console.error('Failed to submit onboarding:', error);
@@ -305,55 +305,46 @@ export function OnboardingWizard() {
   const creativityGridCols = isMobile ? 1 : width < 900 ? 2 : 2;
 
   return (
-    <div 
+    <div
       className="onboarding-wizard"
       data-testid="onboarding-wizard"
-      style={{
-        minHeight: isMobile ? '100vh' : 'calc(100vh - 64px)',
-        padding: isMobile ? '20px 16px' : '32px 24px',
-      }}
     >
-      <div className="wizard-header" style={{ marginBottom: isMobile ? '20px' : '28px' }}>
-        <h1 
-          className="wizard-title"
-          style={{ fontSize: isMobile ? '24px' : '28px' }}
-        >
+      <div className="wizard-header">
+        <span className="wizard-overline">Project Setup</span>
+        <h1 className="wizard-title">
           {currentProject?.name || 'New Project'}
         </h1>
-        <p className="wizard-subtitle" style={{ fontSize: isMobile ? '13px' : '14px' }}>
+        <p className="wizard-subtitle">
           Configure your production settings
         </p>
+        <div className="wizard-progress">
+          {[1, 2].map((stepNumber) => (
+            <div
+              key={stepNumber}
+              className={`wizard-progress-step ${stepNumber <= step ? 'active' : ''}`}
+            >
+              <span>{stepNumber}</span>
+              <div />
+            </div>
+          ))}
+        </div>
       </div>
 
-      <div 
-        className="wizard-content"
-        style={{
-          maxWidth: '720px',
-          margin: '0 auto',
-        }}
-      >
-        {/* Step 1: Text Input + Upload */}
+      <div className="wizard-content">
+        <div className="wizard-surface glass-panel">
         {step === 1 && (
           <div className="wizard-step">
             <div className="step-label">Step 1 of 2</div>
-            <h2 className="step-title" style={{ fontSize: isMobile ? '18px' : '20px' }}>
+            <h2 className="step-title">
               Tell us your story
             </h2>
             
-            <div style={{ display: 'flex', flexDirection: 'column', gap: isMobile ? '16px' : '20px' }}>
-              {/* Text Area with Drag & Drop */}
+            <div className="wizard-stack">
               <div
+                className={`story-intake ${isDragging ? 'is-dragging' : ''}`}
                 onDragOver={handleDragOver}
                 onDragLeave={handleDragLeave}
                 onDrop={handleDrop}
-                style={{
-                  position: 'relative',
-                  border: `2px dashed ${isDragging ? 'var(--accent)' : 'var(--border-subtle)'}`,
-                  borderRadius: '12px',
-                  background: isDragging ? 'var(--accent-dim)' : 'var(--bg-secondary)',
-                  transition: 'all 0.2s ease',
-                  overflow: 'hidden',
-                }}
               >
                 <textarea
                   ref={textareaRef}
@@ -361,52 +352,16 @@ export function OnboardingWizard() {
                   value={ideaText}
                   onChange={(e) => setIdeaText(e.target.value)}
                   placeholder="Type out your idea or drag and drop your files..."
-                  style={{
-                    width: '100%',
-                    minHeight: isMobile ? '150px' : '200px',
-                    padding: '16px',
-                    paddingBottom: '60px',
-                    background: 'transparent',
-                    border: 'none',
-                    color: 'var(--text-primary)',
-                    fontSize: '14px',
-                    lineHeight: 1.6,
-                    resize: 'vertical',
-                    outline: 'none',
-                  }}
+                  className="story-intake-input"
+                  style={{ minHeight: isMobile ? '150px' : '200px' }}
                 />
                 
-                {/* Upload Button at bottom of text area */}
-                <div style={{
-                  position: 'absolute',
-                  bottom: '12px',
-                  left: '12px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '8px',
-                }}>
+                <div className="story-upload-row">
                   <button
+                    type="button"
+                    className="story-upload-btn"
                     data-testid="onboarding-upload-trigger"
                     onClick={() => document.getElementById('file-input')?.click()}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '6px',
-                      padding: '8px 14px',
-                      background: 'var(--bg-primary)',
-                      border: '1px solid var(--border-subtle)',
-                      borderRadius: '8px',
-                      color: 'var(--text-primary)',
-                      fontSize: '12px',
-                      cursor: 'pointer',
-                      transition: 'all 0.2s ease',
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.borderColor = 'var(--accent)';
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.borderColor = 'var(--border-subtle)';
-                    }}
                   >
                     <Upload size={14} />
                     Upload files
@@ -420,51 +375,33 @@ export function OnboardingWizard() {
                     style={{ display: 'none' }}
                     onChange={handleFileInput}
                   />
-                  <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                  <span className="story-upload-caption">
                     PDF, DOCX, MD, TXT, PNG, JPG
                   </span>
                 </div>
               </div>
 
-              {/* Uploaded Files List */}
               {uploadedFiles.length > 0 && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  <p style={{ fontSize: '12px', fontWeight: 500, color: 'var(--text-secondary)' }}>
+                <div className="upload-list">
+                  <p className="wizard-field-label">
                     Uploaded files ({uploadedFiles.length})
                   </p>
-                  <div style={{ maxHeight: '120px', overflowY: 'auto' }}>
+                  <div className="upload-list-body">
                     {uploadedFiles.map((file, index) => (
-                      <div
-                        key={index}
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '8px',
-                          padding: '8px 10px',
-                          background: 'var(--bg-secondary)',
-                          borderRadius: '6px',
-                          border: '1px solid var(--border-subtle)',
-                          marginBottom: '4px',
-                        }}
-                      >
-                        <span style={{ color: 'var(--accent)' }}>
+                      <div key={index} className="upload-item">
+                        <span className="upload-item-icon">
                           {getFileIcon(file.type, file.name)}
                         </span>
-                        <span style={{ flex: 1, fontSize: '12px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        <span className="upload-item-name">
                           {file.name}
                         </span>
-                        <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                        <span className="upload-item-size">
                           {formatFileSize(file.size)}
                         </span>
                         <button
+                          type="button"
                           onClick={() => removeFile(index)}
-                          style={{
-                            background: 'none',
-                            border: 'none',
-                            color: 'var(--text-muted)',
-                            cursor: 'pointer',
-                            padding: '2px',
-                          }}
+                          className="upload-item-remove"
                         >
                           <X size={14} />
                         </button>
@@ -474,110 +411,56 @@ export function OnboardingWizard() {
                 </div>
               )}
 
-              {/* Settings Grid */}
-              <div style={{ 
-                display: 'grid', 
-                gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', 
-                gap: isMobile ? '12px' : '16px' 
-              }}>
-                {/* Media Style Dropdown with Images */}
-                <div ref={mediaDropdownRef} style={{ position: 'relative' }}>
-                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 500, marginBottom: '6px', color: 'var(--text-secondary)' }}>
+              <div
+                className="wizard-settings-grid"
+                style={{ gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr' }}
+              >
+                <div ref={mediaDropdownRef} className="wizard-field media-style-field">
+                  <label className="wizard-field-label">
                     Media Style
                   </label>
                   <button
+                    type="button"
+                    className={`media-style-trigger ${showMediaDropdown ? 'open' : ''}`}
                     data-testid="onboarding-media-style-toggle"
                     onClick={() => setShowMediaDropdown(!showMediaDropdown)}
-                    style={{
-                      width: '100%',
-                      padding: '10px 12px',
-                      background: 'var(--bg-secondary)',
-                      border: `1px solid ${showMediaDropdown ? 'var(--accent)' : 'var(--border-subtle)'}`,
-                      borderRadius: '8px',
-                      color: 'var(--text-primary)',
-                      fontSize: '13px',
-                      textAlign: 'left',
-                      cursor: 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                    }}
-                    >
-                    <span style={{ color: 'var(--text-primary)' }}>
+                  >
+                    <span>
                       {MEDIA_STYLES.find(s => s.id === selectedMediaStyle)?.name || 'Select style...'}
                     </span>
                     {showMediaDropdown ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
                   </button>
                   
                   {showMediaDropdown && (
-                    <div style={{
-                      position: 'absolute',
-                      top: '100%',
-                      left: 0,
-                      right: 0,
-                      marginTop: '4px',
-                      background: 'var(--bg-secondary)',
-                      border: '1px solid var(--border-subtle)',
-                      borderRadius: '8px',
-                      zIndex: 100,
-                      maxHeight: '280px',
-                      overflowY: 'auto',
-                      boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
-                    }}>
-                      <div style={{ 
-                        display: 'grid', 
-                        gridTemplateColumns: isMobile ? '1fr 1fr' : '1fr 1fr',
-                        gap: '8px',
-                        padding: '10px',
-                      }}>
+                    <div className="media-style-menu">
+                      <div className="media-style-grid" style={{ gridTemplateColumns: isMobile ? '1fr 1fr' : '1fr 1fr' }}>
                         {MEDIA_STYLES.map((style) => (
                           <button
                             key={style.id}
+                            type="button"
                             data-testid={`media-style-${style.id}`}
                             onClick={() => {
                               setSelectedMediaStyle(style.id);
                               setShowMediaDropdown(false);
                             }}
-                            style={{
-                              display: 'flex',
-                              flexDirection: 'column',
-                              alignItems: 'center',
-                              gap: '6px',
-                              padding: '10px',
-                              background: selectedMediaStyle === style.id ? 'var(--accent-dim)' : 'var(--bg-primary)',
-                              border: `2px solid ${selectedMediaStyle === style.id ? 'var(--accent)' : 'transparent'}`,
-                              borderRadius: '8px',
-                              cursor: 'pointer',
-                              transition: 'all 0.2s ease',
-                            }}
+                            className={`media-style-option ${selectedMediaStyle === style.id ? 'selected' : ''}`}
                           >
                             <div
-                              style={{
-                                width: '100%',
-                                aspectRatio: '16/10',
-                                borderRadius: '4px',
-                                background: MEDIA_STYLE_PREVIEWS[style.id].gradient,
-                                overflow: 'hidden',
-                              }}
+                              className="media-style-preview"
+                              style={{ background: MEDIA_STYLE_PREVIEWS[style.id].gradient }}
                             >
                               {style.thumbnailUrl ? (
                                 <img
                                   src={style.thumbnailUrl}
                                   alt={style.name}
-                                  style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                                  className="media-style-preview-image"
                                   onError={(e) => {
                                     (e.currentTarget as HTMLImageElement).style.display = 'none';
                                   }}
                                 />
                               ) : null}
                             </div>
-                            <span style={{ 
-                              fontSize: '11px', 
-                              fontWeight: 500,
-                              color: selectedMediaStyle === style.id ? 'var(--accent)' : 'var(--text-primary)'
-                            }}>
-                              {style.name}
-                            </span>
+                            <span className="media-style-name">{style.name}</span>
                           </button>
                         ))}
                       </div>
@@ -585,9 +468,8 @@ export function OnboardingWizard() {
                   )}
                 </div>
 
-                {/* Frame Count */}
-                <div>
-                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 500, marginBottom: '6px', color: 'var(--text-secondary)' }}>
+                <div className="wizard-field">
+                  <label className="wizard-field-label">
                     Frame Budget
                   </label>
                   <input
@@ -597,9 +479,8 @@ export function OnboardingWizard() {
                     placeholder="auto or e.g. 60"
                     value={frameCount}
                     onChange={(e) => setFrameCount(e.target.value)}
-                    style={{ width: '100%', padding: '10px 12px' }}
                   />
-                  <p style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '6px', lineHeight: 1.4 }}>
+                  <p className="wizard-note">
                     Use <strong>auto</strong> for uncapped, highest-effort coverage, or enter a positive frame count.
                   </p>
                 </div>
@@ -610,38 +491,27 @@ export function OnboardingWizard() {
 
         {submitError && (
           <div
+            className="wizard-error"
             data-testid="onboarding-submit-error"
-            style={{
-              marginTop: '16px',
-              marginBottom: '8px',
-              padding: '10px 12px',
-              borderRadius: '12px',
-              background: 'rgba(220, 38, 38, 0.12)',
-              border: '1px solid rgba(248, 113, 113, 0.35)',
-              color: '#fecaca',
-              fontSize: '13px',
-            }}
           >
             {submitError}
           </div>
         )}
 
-        {/* Step 2: Creativity Level */}
         {step === 2 && (
           <div className="wizard-step">
             <div className="step-label">Step 2 of 2</div>
-            <h2 className="step-title" style={{ fontSize: isMobile ? '18px' : '20px' }}>
+            <h2 className="step-title">
               How much creative freedom?
             </h2>
-            <p style={{ fontSize: isMobile ? '13px' : '14px', color: 'var(--text-secondary)', marginBottom: '20px' }}>
+            <p className="wizard-step-copy">
               Choose how closely Morpheus should follow your plan versus exploring creative alternatives.
             </p>
             
-            <div style={{ 
-              display: 'grid', 
-              gridTemplateColumns: creativityGridCols === 1 ? '1fr' : '1fr 1fr',
-              gap: isMobile ? '10px' : '12px',
-            }}>
+            <div
+              className="creativity-grid"
+              style={{ gridTemplateColumns: creativityGridCols === 1 ? '1fr' : '1fr 1fr' }}
+            >
               {creativityLevels.map((level) => {
                 const Icon = level.icon;
                 const isSelected = creativityLevel === level.level;
@@ -649,37 +519,21 @@ export function OnboardingWizard() {
                 return (
                   <div
                     key={level.level}
+                    className={`creativity-card ${isSelected ? 'selected' : ''}`}
                     onClick={() => setCreativityLevel(level.level)}
-                    style={{
-                      padding: isMobile ? '14px' : '16px',
-                      background: isSelected ? 'var(--accent-dim)' : 'var(--bg-secondary)',
-                      border: `2px solid ${isSelected ? 'var(--accent)' : 'var(--border-subtle)'}`,
-                      borderRadius: '10px',
-                      cursor: 'pointer',
-                      transition: 'all 0.2s ease',
-                    }}
                   >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
-                      <div style={{ 
-                        width: '32px', 
-                        height: '32px', 
-                        borderRadius: '8px', 
-                        background: isSelected ? 'var(--accent)' : 'var(--bg-tertiary)',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        color: isSelected ? 'var(--bg-primary)' : 'var(--text-muted)',
-                      }}>
+                    <div className="creativity-card-header">
+                      <div className="creativity-card-icon">
                         <Icon size={16} />
                       </div>
-                      <span style={{ fontSize: '14px', fontWeight: 600 }}>{level.name}</span>
+                      <span className="creativity-card-title">{level.name}</span>
                     </div>
-                    <p style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '10px', lineHeight: 1.4 }}>
+                    <p className="creativity-card-description">
                       {level.description}
                     </p>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                    <div className="creativity-card-list">
                       {level.freedoms.slice(0, isMobile ? 2 : 3).map((freedom, idx) => (
-                        <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: 'var(--text-secondary)' }}>
+                        <div key={idx} className="creativity-card-item">
                           <Check size={12} style={{ color: 'var(--success)', flexShrink: 0 }} />
                           <span>{freedom}</span>
                         </div>
@@ -692,33 +546,25 @@ export function OnboardingWizard() {
           </div>
         )}
 
-        {/* Wizard Actions */}
-        <div 
-          style={{ 
-            display: 'flex', 
-            justifyContent: 'space-between', 
-            marginTop: isMobile ? '20px' : '28px',
-            paddingTop: isMobile ? '16px' : '20px',
-            borderTop: '1px solid var(--border-subtle)',
-          }}
-        >
-          <button 
+        <div className="wizard-actions">
+          <button
+            type="button"
             className="btn-secondary" 
             data-testid="onboarding-back"
             onClick={handleBack}
-            style={{ padding: isMobile ? '10px 16px' : '10px 20px', fontSize: '13px' }}
           >
             {step === 1 ? 'Back to Projects' : 'Back'}
           </button>
-          <button 
+          <button
+            type="button"
             className="btn-accent" 
             data-testid={step === 2 ? 'onboarding-submit' : 'onboarding-next'}
             onClick={handleNext}
             disabled={!canProceed() || isSubmitting}
-            style={{ padding: isMobile ? '10px 16px' : '10px 20px', fontSize: '13px' }}
           >
             {step === 2 ? (isSubmitting ? 'Starting…' : 'Create Project') : 'Next'}
           </button>
+        </div>
         </div>
       </div>
     </div>

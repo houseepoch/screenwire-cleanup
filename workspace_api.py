@@ -334,10 +334,8 @@ def _status_from_phase_files(project_dir: Path, manifest: dict[str, Any]) -> tup
         return "generating_frames", max(58, round((completed / total) * 100))
     if has_reference_assets:
         return "reference_review", max(45, round((completed / total) * 100))
-    if approvals.get("skeletonApprovedAt"):
+    if approvals.get("skeletonApprovedAt") or has_skeleton:
         return "generating_assets", max(28, round((completed / total) * 100))
-    if has_skeleton:
-        return "skeleton_review", max(20, round((completed / total) * 100))
     return "onboarding", max(0, round((completed / total) * 100))
 
 
@@ -570,6 +568,40 @@ def _graph_data(project_dir: Path) -> dict[str, Any]:
     return load_json(graph_path, {})
 
 
+def _parse_scene_drafts(project_dir: Path) -> list[dict[str, Any]]:
+    """Fallback: parse ///SCENE tags from creative_output/scenes/ when graph is empty."""
+    import re
+    scenes_dir = project_dir / "creative_output" / "scenes"
+    if not scenes_dir.is_dir():
+        return []
+    items: list[dict[str, Any]] = []
+    for scene_file in sorted(scenes_dir.glob("scene_*_draft.md")):
+        text = scene_file.read_text(encoding="utf-8", errors="replace")
+        m = re.search(r"///SCENE:\s*(.*)", text)
+        if not m:
+            continue
+        tags: dict[str, str] = {}
+        for pair in m.group(1).split("|"):
+            pair = pair.strip()
+            if "=" in pair:
+                k, v = pair.split("=", 1)
+                tags[k.strip()] = v.strip()
+        scene_id = tags.get("id", scene_file.stem)
+        cast_list = [c.strip() for c in tags.get("cast", "").split(",") if c.strip()]
+        items.append(
+            {
+                "id": scene_id,
+                "number": len(items) + 1,
+                "heading": tags.get("title", scene_id),
+                "description": f"{tags.get('mood', '')} — {tags.get('int_ext', '')}. {tags.get('time_of_day', '')}".strip(" —."),
+                "location": tags.get("location", ""),
+                "characters": cast_list,
+                "estimatedFrames": 0,
+            }
+        )
+    return items
+
+
 def _build_skeleton_plan(project_dir: Path) -> dict[str, Any]:
     graph = _graph_data(project_dir)
     scenes = graph.get("scenes") or {}
@@ -591,6 +623,10 @@ def _build_skeleton_plan(project_dir: Path) -> dict[str, Any]:
                 "estimatedFrames": int(scene.get("frame_count") or len(scene.get("frame_ids") or [])),
             }
         )
+
+    # Fallback: parse scene drafts when graph hasn't been built yet
+    if not items:
+        items = _parse_scene_drafts(project_dir)
 
     return {
         "scenes": items,

@@ -3,21 +3,16 @@ import { useEffect, useRef, useState } from 'react';
 export function CustomCursor() {
   const cursorRef = useRef<HTMLDivElement>(null);
   const [isHovering, setIsHovering] = useState(false);
-  const [isVisible, setIsVisible] = useState(false);
-  const positionRef = useRef({ x: 0, y: 0 });
-  const rafRef = useRef<number | undefined>(undefined);
+  const [isVisible] = useState(
+    () => typeof window !== 'undefined' && !window.matchMedia('(pointer: coarse)').matches
+  );
 
   useEffect(() => {
-    // Check if touch device
-    if (window.matchMedia('(pointer: coarse)').matches) {
+    if (!isVisible) {
       return;
     }
 
-    setIsVisible(true);
-
     const handleMouseMove = (e: MouseEvent) => {
-      positionRef.current = { x: e.clientX, y: e.clientY };
-      
       if (cursorRef.current) {
         cursorRef.current.style.transform = `translate(${e.clientX - 16}px, ${e.clientY - 16}px)`;
       }
@@ -57,11 +52,8 @@ export function CustomCursor() {
       window.removeEventListener('mousemove', handleMouseMove);
       document.removeEventListener('mouseover', handleMouseEnter);
       document.removeEventListener('mouseout', handleMouseLeave);
-      if (rafRef.current) {
-        cancelAnimationFrame(rafRef.current);
-      }
     };
-  }, []);
+  }, [isVisible]);
 
   if (!isVisible) return null;
 

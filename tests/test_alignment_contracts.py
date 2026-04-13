@@ -18,12 +18,13 @@ import graph.continuity_validator
 import graph.dialogue_validator
 import graph.prompt_pair_validator
 import graph.store
+from handlers.cast_image import CastImageHandler
 from handlers.location_grid import build_grid_prompt
 from handlers.frame import FrameHandler
 from handlers.video_clip import VideoClipHandler
 from handlers.reference_pack import build_reference_pack
 from handlers.base import _is_retryable_http_error, adapt_input_for_model, classify_replicate_error
-from handlers.models import FrameInput, VideoClipInput
+from handlers.models import CastImageInput, FrameInput, VideoClipInput
 from graph.api import build_shot_packet, build_storyboard_grids, get_frame_cast_state_models, get_frame_context
 from graph.cc_parser import extract_cast_tags, parse_cc_output, parse_creative_output, parse_skeleton
 from graph.continuity_validator import validate_continuity
@@ -47,7 +48,7 @@ from run_pipeline import (
     quality_gate_phase_4,
     quality_gate_phase_5,
 )
-from tests.test_pipeline_smoke_e2e import build_live_smoke_graph
+from tests.live_smoke_graph import build_live_smoke_graph
 
 
 def _write_json(path: Path, data: dict) -> None:
@@ -163,6 +164,23 @@ Mei studies the pouch while Min Zhu watches the room.
     assert state_map["cast_min_zhu"].looking_at == "loc_room"
     assert state_map["cast_mei_lin"].facing_direction == "profile_left"
     assert state_map["cast_min_zhu"].facing_direction == "three_quarter_right"
+
+
+def test_extract_dialogue_supports_single_src_line_ranges(tmp_path: Path) -> None:
+    smoke_graph = build_live_smoke_graph(tmp_path)
+    frames = [smoke_graph.frames[frame_id] for frame_id in smoke_graph.frame_order]
+    warnings: list[str] = []
+
+    dialogue = graph.cc_parser.extract_dialogue(
+        "///DLG: speaker=Nova | cast_id=cast_nova | src_lines=2 | perf=hushed\n",
+        "Action beat\nThey're early.\nAftermath beat\n",
+        frames,
+        {"nova": "cast_nova"},
+        warnings,
+    )
+
+    assert dialogue[0].raw_line == "They're early."
+    assert not any("no resolved raw_line" in warning for warning in warnings)
 
 
 def test_shot_packet_single_subject_focus_drops_offscreen_listener(tmp_path: Path) -> None:
@@ -474,6 +492,36 @@ def test_xai_image_rescue_caps_reference_count_and_writes_output(tmp_path: Path)
     assert output_path.read_bytes() == b"rescued-image"
     assert prediction["status"] == "succeeded"
     assert model == "grok-imagine-image-pro"
+
+
+def test_cast_image_handler_normalizes_non_upscaled_output_to_png(tmp_path: Path) -> None:
+    handler = CastImageHandler(replicate_token="replicate-token")
+
+    async def _fake_run_model_chain(*args, **kwargs):
+        return {"status": "succeeded"}, "prunaai/p-image"
+
+    async def _fake_download_output(url: str, path: Path):
+        Image.new("RGB", (64, 64), color="white").save(path, format="JPEG")
+
+    handler._run_model_chain = _fake_run_model_chain  # type: ignore[method-assign]
+    handler.extract_output_url = lambda prediction: "https://example.com/cast.jpg"  # type: ignore[method-assign]
+    handler.download_output = _fake_download_output  # type: ignore[method-assign]
+
+    result = asyncio.run(
+        handler.generate(
+            CastImageInput(
+                cast_id="cast_nova",
+                prompt="Nova full-body cast reference",
+                media_style="graphic_novel",
+                output_dir=tmp_path,
+            )
+        )
+    )
+
+    assert result.success is True
+    assert result.image_path is not None
+    with Image.open(result.image_path) as image:
+        assert image.format == "PNG"
 
 
 def test_reference_pack_stitches_cast_and_props_and_resizes_location(tmp_path: Path) -> None:

@@ -22,6 +22,8 @@ import logging
 import time
 from pathlib import Path
 
+from PIL import Image
+
 from .base import BaseHandler, classify_replicate_error
 from .models import (
     MODEL_ROUTES,
@@ -32,6 +34,14 @@ from .models import (
 )
 
 logger = logging.getLogger("handlers.cast_image")
+
+
+def _normalize_png_output(path: Path) -> None:
+    """Ensure the saved composite bytes match the .png contract."""
+    temp_path = path.with_name(f"{path.stem}.tmp")
+    with Image.open(path) as image:
+        image.save(temp_path, format="PNG")
+    temp_path.replace(path)
 
 
 class CastImageHandler(BaseHandler):
@@ -107,6 +117,10 @@ class CastImageHandler(BaseHandler):
             )
 
         await self.download_output(output_url, output_path)
+        try:
+            _normalize_png_output(output_path)
+        except Exception:
+            logger.warning("Failed to normalize cast image %s to PNG", output_path, exc_info=True)
         logger.info("Base image generated for cast %s via %s", inp.cast_id, model_used)
 
         # ── Step 2: Upscale if live-action ─────────────────────

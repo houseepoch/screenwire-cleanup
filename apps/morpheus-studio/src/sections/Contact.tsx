@@ -24,10 +24,10 @@ export function Contact() {
     message: '',
   });
   const [focusedField, setFocusedField] = useState<string | null>(null);
-
-  if (!contactConfig.title) return null;
+  const hasContent = Boolean(contactConfig.title);
 
   useEffect(() => {
+    if (!hasContent) return;
     const section = sectionRef.current;
     if (!section) return;
 
@@ -137,7 +137,7 @@ export function Contact() {
       triggersRef.current.forEach((t) => t.kill());
       triggersRef.current = [];
     };
-  }, []);
+  }, [hasContent]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -151,6 +151,8 @@ export function Contact() {
   ) => {
     setFormData({ ...formData, [e.target.name]: e.target.value });
   };
+
+  if (!hasContent) return null;
 
   const titleChars = contactConfig.title.split('');
 
@@ -348,7 +350,7 @@ export function Contact() {
             >
               <span className="relative z-10">{contactConfig.submitButtonText}</span>
               <Send className="w-5 h-5 relative z-10 group-hover:translate-x-1 transition-transform duration-300" />
-              <div className="absolute inset-0 bg-highlight transform -translate-x-full group-hover:translate-x-0 transition-transform duration-400 ease-[cubic-bezier(0.16,1,0.3,1)]" />
+              <div className="absolute inset-0 bg-highlight transform -translate-x-full group-hover:translate-x-0 transition-transform duration-400 ease-studio-snap" />
             </button>
           </form>
 

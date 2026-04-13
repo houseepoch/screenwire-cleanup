@@ -22,6 +22,7 @@ These fragment files are the source inputs for the generated repo-root
 | [replicate_grok-imagine-video.md](replicate_grok-imagine-video.md) | xAI Grok Imagine Video | Image-to-video | See doc |
 
 ## External APIs
-- **xAI (Grok)** — Vision refinement (grok-4-1-fast-non-reasoning) + cinematic frame tagging
+- **xAI (Grok)** — Creative Coordinator reasoning, parallel prose workers, frame enrichment, cinematic frame tagging, and vision refinement
 - **Replicate** — Image generation (p-image, nano-banana), video generation (grok-imagine-video)
-- **Anthropic** — CC (Opus), Haiku frame enrichment workers
+
+Historical note: older docs may still mention Anthropic Opus / Haiku for Phase 1 or frame enrichment. That is not the active runtime path.

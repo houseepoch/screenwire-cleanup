@@ -24,13 +24,14 @@ export function MobileAgentChat() {
   const [chatMode, setChatMode] = useState<'suggest' | 'apply' | 'regenerate'>('suggest');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const currentProjectId = currentProject?.id ?? null;
 
   // Check for injected draft from long press
   useEffect(() => {
-    const draft = (window as any).__chatDraft;
+    const draft = window.__chatDraft;
     if (draft) {
       setInputValue(draft);
-      (window as any).__chatDraft = null;
+      window.__chatDraft = null;
       inputRef.current?.focus();
     }
   }, [highlightedItem]);
@@ -54,13 +55,13 @@ export function MobileAgentChat() {
   }, [messages]);
 
   useEffect(() => {
-    if (!currentProject) {
+    if (!currentProjectId) {
       return;
     }
-    void API.chat.setFocus(currentProject.id, focusedItem).catch((error) => {
+    void API.chat.setFocus(currentProjectId, focusedItem).catch((error) => {
       console.error('Failed to sync mobile chat focus:', error);
     });
-  }, [currentProject?.id, focusedItem]);
+  }, [currentProjectId, focusedItem]);
 
   const handleSend = async () => {
     if (!inputValue.trim()) return;
@@ -136,12 +137,15 @@ export function MobileAgentChat() {
   };
 
   return (
-    <div style={{
+    <div
+      data-testid="mobile-agent-chat"
+      style={{
       display: 'flex',
       flexDirection: 'column',
       height: '100%',
       background: 'var(--bg-primary)',
-    }}>
+    }}
+    >
       {/* Header */}
       <div style={{
         display: 'flex',
@@ -152,6 +156,7 @@ export function MobileAgentChat() {
         background: 'var(--bg-secondary)',
       }}>
         <button 
+          data-testid="mobile-chat-open-details"
           onClick={() => setMobileView('details')}
           style={{
             display: 'flex',
@@ -171,6 +176,7 @@ export function MobileAgentChat() {
         <span style={{ fontSize: '14px', fontWeight: 500 }}>Morpheus Agent</span>
         
         <button 
+          data-testid="mobile-chat-open-timeline"
           onClick={() => setIsTimelineTrayOpen(true)}
           style={{
             display: 'flex',

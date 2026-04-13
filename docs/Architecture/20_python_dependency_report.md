@@ -1,10 +1,11 @@
 # Python Dependency Report
 
-- Generated at: `2026-04-12T20:30:04.418526+00:00`
+- Generated at: `2026-04-13T07:24:10.756576+00:00`
 - Repo root: `/home/nikoles16/Documents/ScreenWire Environments/screenwire-pipeline`
-- Python modules indexed: `52`
-- Internal dependency edges: `138`
-- External packages referenced: `57`
+- Python modules indexed: `54`
+- Internal dependency edges: `145`
+- Standard-library modules referenced: `44`
+- Third-party packages referenced: `12`
 
 ## Mermaid Graph
 
@@ -12,99 +13,113 @@ See `21_python_dependency_graph.mmd` for the standalone graph artifact.
 
 ## Highest Fan-Out Modules
 
+- `tests.test_alignment_contracts` -> `20` internal imports
 - `run_pipeline` -> `20` internal imports
-- `tests.test_alignment_contracts` -> `19` internal imports
-- `handlers` -> `7` internal imports
-- `server` -> `7` internal imports
 - `tests.test_pipeline_smoke_e2e` -> `7` internal imports
-- `graph.prompt_assembler` -> `6` internal imports
+- `server` -> `7` internal imports
+- `handlers` -> `7` internal imports
 - `graph.reference_collector` -> `6` internal imports
+- `graph.prompt_assembler` -> `6` internal imports
 - `tests.test_prompt_refactor_unit` -> `5` internal imports
-- `handlers.base` -> `4` internal imports
-- `graph.materializer` -> `4` internal imports
-- `graph.runtime_state` -> `4` internal imports
-- `graph.grok_tagger` -> `4` internal imports
 - `graph.continuity_validator` -> `4` internal imports
+- `graph.materializer` -> `4` internal imports
+- `graph.grok_tagger` -> `4` internal imports
+- `graph.runtime_state` -> `4` internal imports
+- `handlers.base` -> `4` internal imports
+- `handlers.storyboard` -> `3` internal imports
+- `graph.prompt_pair_validator` -> `3` internal imports
 - `graph.dialogue_validator` -> `3` internal imports
 - `handlers.frame` -> `3` internal imports
-- `graph.prompt_pair_validator` -> `3` internal imports
-- `handlers.storyboard` -> `3` internal imports
+- `llm.project_tools` -> `3` internal imports
 - `graph.frame_enricher` -> `3` internal imports
-- `handlers.cast_image` -> `2` internal imports
-- `tests.test_project_report` -> `2` internal imports
+- `handlers.video_clip` -> `2` internal imports
 
 ## Highest Fan-In Modules
 
-- `graph.schema` <- `15` internal dependents
-- `graph.store` <- `13` internal dependents
-- `graph.api` <- `12` internal dependents
+- `graph.schema` <- `16` internal dependents
+- `graph.store` <- `14` internal dependents
+- `graph.api` <- `13` internal dependents
 - `llm.xai_client` <- `9` internal dependents
 - `handlers.models` <- `8` internal dependents
 - `handlers.base` <- `7` internal dependents
 - `telemetry` <- `7` internal dependents
 - `graph.reference_collector` <- `6` internal dependents
-- `handlers.reference_pack` <- `4` internal dependents
 - `graph.prompt_assembler` <- `4` internal dependents
 - `graph.materializer` <- `4` internal dependents
+- `handlers.reference_pack` <- `4` internal dependents
+- `workspace_api` <- `3` internal dependents
 - `screenwire_contracts` <- `3` internal dependents
-- `graph.frame_prompt_refiner` <- `3` internal dependents
 - `graph.feature_flags` <- `3` internal dependents
 - `video_prompt_projection` <- `3` internal dependents
+- `llm.project_tools` <- `3` internal dependents
+- `graph.frame_prompt_refiner` <- `3` internal dependents
 - `handlers.location_grid` <- `3` internal dependents
-- `graph.frame_enricher` <- `2` internal dependents
-- `graph.continuity_validator` <- `2` internal dependents
-- `llm.project_tools` <- `2` internal dependents
-- `graph.prompt_pair_validator` <- `2` internal dependents
+- `graph.grid_generate` <- `2` internal dependents
+- `handlers.storyboard` <- `2` internal dependents
 
-## External Packages
+## Standard Library Modules
 
-- `pathlib` referenced `44` time(s)
-- `__future__` referenced `41` time(s)
-- `json` referenced `28` time(s)
-- `typing` referenced `26` time(s)
-- `re` referenced `19` time(s)
+- `pathlib` referenced `46` time(s)
+- `__future__` referenced `43` time(s)
+- `json` referenced `31` time(s)
+- `typing` referenced `27` time(s)
+- `re` referenced `20` time(s)
 - `os` referenced `18` time(s)
 - `time` referenced `16` time(s)
-- `argparse` referenced `15` time(s)
-- `datetime` referenced `14` time(s)
-- `sys` referenced `13` time(s)
+- `datetime` referenced `15` time(s)
+- `argparse` referenced `14` time(s)
+- `sys` referenced `14` time(s)
 - `asyncio` referenced `10` time(s)
-- `PIL` referenced `10` time(s)
 - `shutil` referenced `9` time(s)
 - `logging` referenced `9` time(s)
-- `watchdog` referenced `8` time(s)
 - `dataclasses` referenced `6` time(s)
+- `collections` referenced `5` time(s)
 - `hashlib` referenced `4` time(s)
-- `collections` referenced `4` time(s)
 - `base64` referenced `4` time(s)
 - `math` referenced `4` time(s)
-- `pydantic` referenced `4` time(s)
-- `httpx` referenced `4` time(s)
 - `subprocess` referenced `4` time(s)
-- `dotenv` referenced `4` time(s)
 - `mimetypes` referenced `3` time(s)
 - `tempfile` referenced `3` time(s)
-- `fastapi` referenced `3` time(s)
-- `pytest` referenced `3` time(s)
 - `itertools` referenced `2` time(s)
 - `enum` referenced `2` time(s)
-- `tenacity` referenced `2` time(s)
-- `fitz` referenced `2` time(s)
 - `atexit` referenced `2` time(s)
 - `signal` referenced `2` time(s)
 - `urllib` referenced `2` time(s)
 - `contextlib` referenced `2` time(s)
 - `ast` referenced `1` time(s)
-- `fpdf` referenced `1` time(s)
 - `difflib` referenced `1` time(s)
 - `functools` referenced `1` time(s)
+- `abc` referenced `1` time(s)
+- `textwrap` referenced `1` time(s)
+- `shlex` referenced `1` time(s)
+- `concurrent` referenced `1` time(s)
+- `fcntl` referenced `1` time(s)
+- `select` referenced `1` time(s)
+- `threading` referenced `1` time(s)
+- `queue` referenced `1` time(s)
+- `copy` referenced `1` time(s)
+- `contextvars` referenced `1` time(s)
+
+## Third-Party Packages
+
+- `PIL` referenced `11` time(s)
+- `watchdog` referenced `8` time(s)
+- `httpx` referenced `5` time(s)
+- `pydantic` referenced `4` time(s)
+- `dotenv` referenced `3` time(s)
+- `fastapi` referenced `3` time(s)
+- `pytest` referenced `3` time(s)
+- `tenacity` referenced `2` time(s)
+- `fitz` referenced `2` time(s)
+- `xai_sdk` referenced `1` time(s)
+- `openai` referenced `1` time(s)
+- `uvicorn` referenced `1` time(s)
 
 ## Module Inventory
 
 - `build_api_reference` -> `build_api_reference.py`
 - `build_architecture_reports` -> `build_architecture_reports.py`
 - `create_project` -> `create_project.py`
-- `docs.screenwire-operational-overview.render_pdf` -> `docs/screenwire-operational-overview/render_pdf.py`
 - `graph` -> `graph/__init__.py`
 - `graph.api` -> `graph/api.py`
 - `graph.cc_parser` -> `graph/cc_parser.py`
@@ -143,13 +158,16 @@ See `21_python_dependency_graph.mmd` for the standalone graph artifact.
 - `skills` -> `skills/__init__.py`
 - `telemetry` -> `telemetry.py`
 - `tests.conftest` -> `tests/conftest.py`
+- `tests.live_smoke_graph` -> `tests/live_smoke_graph.py`
 - `tests.test_alignment_contracts` -> `tests/test_alignment_contracts.py`
 - `tests.test_api_reference_builder` -> `tests/test_api_reference_builder.py`
 - `tests.test_architecture_reports` -> `tests/test_architecture_reports.py`
 - `tests.test_corrective_fixes` -> `tests/test_corrective_fixes.py`
 - `tests.test_pipeline_smoke_e2e` -> `tests/test_pipeline_smoke_e2e.py`
 - `tests.test_project_report` -> `tests/test_project_report.py`
+- `tests.test_project_tools` -> `tests/test_project_tools.py`
 - `tests.test_prompt_refactor_unit` -> `tests/test_prompt_refactor_unit.py`
+- `tests.test_workspace_api` -> `tests/test_workspace_api.py`
 - `train_agent` -> `train_agent.py`
 - `video_prompt_projection` -> `video_prompt_projection.py`
 - `workspace_api` -> `workspace_api.py`
@@ -228,6 +246,9 @@ See `21_python_dependency_graph.mmd` for the standalone graph artifact.
 - `llm` -> `llm.xai_client`
 - `llm.agent_runner` -> `llm.project_tools`
 - `llm.agent_runner` -> `llm.xai_client`
+- `llm.project_tools` -> `graph.api`
+- `llm.project_tools` -> `graph.store`
+- `llm.project_tools` -> `workspace_api`
 - `project_report` -> `video_prompt_projection`
 - `run_pipeline` -> `graph.api`
 - `run_pipeline` -> `graph.cc_parser`
@@ -256,6 +277,7 @@ See `21_python_dependency_graph.mmd` for the standalone graph artifact.
 - `server` -> `llm.xai_client`
 - `server` -> `telemetry`
 - `server` -> `workspace_api`
+- `tests.live_smoke_graph` -> `graph.schema`
 - `tests.test_alignment_contracts` -> `graph.api`
 - `tests.test_alignment_contracts` -> `graph.cc_parser`
 - `tests.test_alignment_contracts` -> `graph.continuity_validator`
@@ -268,13 +290,14 @@ See `21_python_dependency_graph.mmd` for the standalone graph artifact.
 - `tests.test_alignment_contracts` -> `graph.schema`
 - `tests.test_alignment_contracts` -> `graph.store`
 - `tests.test_alignment_contracts` -> `handlers.base`
+- `tests.test_alignment_contracts` -> `handlers.cast_image`
 - `tests.test_alignment_contracts` -> `handlers.frame`
 - `tests.test_alignment_contracts` -> `handlers.location_grid`
 - `tests.test_alignment_contracts` -> `handlers.models`
 - `tests.test_alignment_contracts` -> `handlers.reference_pack`
 - `tests.test_alignment_contracts` -> `handlers.video_clip`
 - `tests.test_alignment_contracts` -> `run_pipeline`
-- `tests.test_alignment_contracts` -> `tests.test_pipeline_smoke_e2e`
+- `tests.test_alignment_contracts` -> `tests.live_smoke_graph`
 - `tests.test_api_reference_builder` -> `build_api_reference`
 - `tests.test_architecture_reports` -> `build_architecture_reports`
 - `tests.test_corrective_fixes` -> `graph.prompt_assembler`
@@ -288,9 +311,11 @@ See `21_python_dependency_graph.mmd` for the standalone graph artifact.
 - `tests.test_pipeline_smoke_e2e` -> `handlers.storyboard`
 - `tests.test_project_report` -> `project_report`
 - `tests.test_project_report` -> `video_prompt_projection`
+- `tests.test_project_tools` -> `llm.project_tools`
 - `tests.test_prompt_refactor_unit` -> `graph.api`
 - `tests.test_prompt_refactor_unit` -> `graph.prompt_assembler`
 - `tests.test_prompt_refactor_unit` -> `graph.reference_collector`
 - `tests.test_prompt_refactor_unit` -> `graph.schema`
-- `tests.test_prompt_refactor_unit` -> `tests.test_pipeline_smoke_e2e`
+- `tests.test_prompt_refactor_unit` -> `tests.live_smoke_graph`
+- `tests.test_workspace_api` -> `workspace_api`
 - `train_agent` -> `llm.xai_client`

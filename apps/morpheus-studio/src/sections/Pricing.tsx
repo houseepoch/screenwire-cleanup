@@ -11,15 +11,15 @@ export function Pricing() {
   const titleRef = useRef<HTMLHeadingElement>(null);
   const subtitleRef = useRef<HTMLParagraphElement>(null);
   const cardsRef = useRef<(HTMLDivElement | null)[]>([]);
-  const [animatedPrices, setAnimatedPrices] = useState<number[]>([]);
+  const [animatedPrices, setAnimatedPrices] = useState<number[]>(
+    () => new Array(pricingConfig.plans.length).fill(0)
+  );
   const triggersRef = useRef<ScrollTrigger[]>([]);
-
-  if (!pricingConfig.title || pricingConfig.plans.length === 0) return null;
-
   const plans = pricingConfig.plans;
+  const hasContent = Boolean(pricingConfig.title) && plans.length > 0;
 
   useEffect(() => {
-    setAnimatedPrices(new Array(plans.length).fill(0));
+    if (!hasContent) return;
 
     const section = sectionRef.current;
     if (!section) return;
@@ -130,7 +130,7 @@ export function Pricing() {
       triggersRef.current.forEach((t) => t.kill());
       triggersRef.current = [];
     };
-  }, []);
+  }, [hasContent, plans]);
 
   const handleCardHover = (index: number, isEntering: boolean) => {
     const card = cardsRef.current[index];
@@ -156,6 +156,8 @@ export function Pricing() {
       });
     }
   };
+
+  if (!hasContent) return null;
 
   return (
     <section

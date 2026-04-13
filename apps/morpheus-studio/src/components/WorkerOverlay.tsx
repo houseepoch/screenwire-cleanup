@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useMorpheusStore } from '../store';
 import {
   Image,
@@ -20,10 +20,10 @@ function fallbackWorkers(status: string | undefined, progress: number): WorkerSt
   const workerMap: Record<string, WorkerStatus> = {
     generating_assets: {
       id: 'phase-assets',
-      name: 'Asset Preparation',
+      name: 'Preproduction Build',
       status: 'running',
       progress,
-      message: 'Building the next project phase...',
+      message: 'Generating script, graph, and review assets...',
     },
     generating_frames: {
       id: 'phase-frames',
@@ -47,6 +47,10 @@ function fallbackWorkers(status: string | undefined, progress: number): WorkerSt
 export function WorkerOverlay() {
   const { currentProject, workers } = useMorpheusStore();
   const [isVisible, setIsVisible] = useState(true);
+  const [displayProgress, setDisplayProgress] = useState(0);
+  const animationFrameRef = useRef<number | null>(null);
+  const displayProgressRef = useRef(0);
+  const projectKeyRef = useRef<string | null>(null);
 
   const displayWorkers = workers.length
     ? workers
@@ -80,33 +84,98 @@ export function WorkerOverlay() {
     return <FileText size={14} />;
   };
 
+  const activeWorkers = displayWorkers.filter((worker) => worker.status === 'running' || worker.status === 'idle');
+  const completedWorkers = displayWorkers.filter((worker) => worker.status === 'complete');
+  const primaryWorker = activeWorkers.find((worker) => worker.status === 'running') ?? activeWorkers[0] ?? displayWorkers[0];
+  const projectKey = currentProject?.id ?? 'no-project';
+  const derivedProgress = displayWorkers.reduce((total, worker) => {
+    const workerProgress = worker.status === 'complete' ? 100 : Math.max(0, Math.min(100, worker.progress));
+    return total + workerProgress;
+  }, 0) / Math.max(displayWorkers.length, 1);
+  const targetProgress = Math.max(
+    0,
+    Math.min(100, Math.max(currentProject?.progress ?? 0, derivedProgress)),
+  );
+  const statusLabel =
+    completedWorkers.length === displayWorkers.length
+      ? 'Complete'
+      : primaryWorker?.status === 'running'
+        ? 'In progress'
+        : primaryWorker?.status === 'idle'
+          ? 'Queued'
+          : 'Standby';
+  const headline =
+    completedWorkers.length === displayWorkers.length
+      ? 'All workers complete'
+      : primaryWorker?.name || 'Worker queue';
+  const supportingMessage =
+    primaryWorker?.message ||
+    (completedWorkers.length === displayWorkers.length
+      ? 'Pipeline pass finished successfully.'
+      : `${activeWorkers.length} worker${activeWorkers.length === 1 ? '' : 's'} active`);
+
+  useEffect(() => {
+    displayProgressRef.current = displayProgress;
+  }, [displayProgress]);
+
+  useEffect(() => {
+    if (projectKeyRef.current !== projectKey) {
+      projectKeyRef.current = projectKey;
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+      }
+      animationFrameRef.current = requestAnimationFrame(() => {
+        displayProgressRef.current = targetProgress;
+        setDisplayProgress(targetProgress);
+        animationFrameRef.current = null;
+      });
+      return;
+    }
+
+    const start = performance.now();
+    const from = displayProgressRef.current;
+    const to = targetProgress;
+    const duration = Math.max(600, Math.min(1800, Math.abs(to - from) * 24));
+
+    if (animationFrameRef.current) {
+      cancelAnimationFrame(animationFrameRef.current);
+    }
+
+    const step = (timestamp: number) => {
+      const elapsed = timestamp - start;
+      const progress = Math.min(elapsed / duration, 1);
+      const eased = 1 - Math.pow(1 - progress, 3);
+      const nextProgress = from + (to - from) * eased;
+      displayProgressRef.current = nextProgress;
+      setDisplayProgress(nextProgress);
+
+      if (progress < 1) {
+        animationFrameRef.current = requestAnimationFrame(step);
+      } else {
+        animationFrameRef.current = null;
+      }
+    };
+
+    animationFrameRef.current = requestAnimationFrame(step);
+
+    return () => {
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+        animationFrameRef.current = null;
+      }
+    };
+  }, [projectKey, targetProgress]);
+
   if (!displayWorkers.length) {
     return null;
   }
 
-  const activeWorkers = displayWorkers.filter((worker) => worker.status === 'running' || worker.status === 'idle');
-  const completedWorkers = displayWorkers.filter((worker) => worker.status === 'complete');
-
   if (!isVisible) {
     return (
       <button
+        type="button"
         onClick={() => setIsVisible(true)}
-        style={{
-          position: 'fixed',
-          bottom: '120px',
-          left: '24px',
-          padding: '8px 14px',
-          background: 'var(--bg-secondary)',
-          border: '1px solid var(--border-subtle)',
-          borderRadius: '20px',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '8px',
-          color: 'var(--text-primary)',
-          cursor: 'pointer',
-          zIndex: 50,
-          fontSize: '12px',
-        }}
+        className="worker-overlay-toggle"
       >
         <div className="status-dot status-active" style={{ width: '6px', height: '6px' }} />
         {activeWorkers.length || displayWorkers.length} active
@@ -115,135 +184,69 @@ export function WorkerOverlay() {
   }
 
   return (
-    <div className="worker-overlay">
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          marginBottom: '12px',
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <div
-            style={{
-              width: '24px',
-              height: '24px',
-              borderRadius: '50%',
-              background: 'var(--accent-dim)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: 'var(--accent)',
-            }}
-          >
+    <div className="worker-overlay" data-testid="worker-overlay">
+      <div className="worker-overlay-header">
+        <div className="worker-overlay-title">
+          <div className="worker-overlay-badge">
             <span style={{ fontSize: '10px', fontWeight: 600 }}>W</span>
           </div>
           <div>
-            <h4 style={{ fontSize: '12px', fontWeight: 600 }}>Workers</h4>
-            <p style={{ fontSize: '10px', color: 'var(--text-secondary)' }}>
+            <h4>Workers</h4>
+            <p>
               {completedWorkers.length}/{displayWorkers.length} done
             </p>
           </div>
         </div>
         <button
+          type="button"
           onClick={() => setIsVisible(false)}
-          style={{
-            background: 'none',
-            border: 'none',
-            color: 'var(--text-secondary)',
-            cursor: 'pointer',
-            padding: '4px',
-          }}
+          className="worker-close-btn"
         >
           <X size={14} />
         </button>
       </div>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-        {displayWorkers.slice(0, 6).map((worker) => (
-          <div
-            key={worker.id}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '8px',
-            }}
-          >
+      <div className="worker-summary">
+        <div className="worker-summary-top">
+          <div className="worker-summary-main">
             <div
-              style={{
-                width: '20px',
-                height: '20px',
-                borderRadius: '50%',
-                background:
-                  worker.status === 'complete'
-                    ? 'rgba(16, 185, 129, 0.15)'
-                    : worker.status === 'running'
-                      ? 'var(--accent-dim)'
-                      : 'var(--bg-tertiary)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                color:
-                  worker.status === 'complete'
-                    ? 'var(--success)'
-                    : worker.status === 'running'
-                      ? 'var(--accent)'
-                      : 'var(--text-muted)',
-              }}
+              className={`worker-icon-wrap ${
+                completedWorkers.length === displayWorkers.length
+                  ? 'is-complete'
+                  : primaryWorker?.status === 'running'
+                    ? 'is-running'
+                    : 'is-idle'
+              }`}
             >
-              {getWorkerIcon(worker)}
+              {primaryWorker ? getWorkerIcon(primaryWorker) : <FileText size={14} />}
             </div>
-
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div
-                style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                }}
-              >
-                <span style={{ fontSize: '11px', fontWeight: 500 }}>{worker.name}</span>
-                <span style={{ fontSize: '9px', color: 'var(--text-muted)' }}>
-                  {Math.round(worker.progress)}%
-                </span>
-              </div>
-              <div
-                style={{
-                  height: '2px',
-                  background: 'var(--bg-tertiary)',
-                  borderRadius: '1px',
-                  overflow: 'hidden',
-                  marginTop: '3px',
-                }}
-              >
-                <div
-                  style={{
-                    width: `${worker.progress}%`,
-                    height: '100%',
-                    background: worker.status === 'complete' ? 'var(--success)' : 'var(--accent)',
-                    borderRadius: '1px',
-                    transition: 'width 0.3s ease',
-                  }}
-                />
-              </div>
-              {worker.message ? (
-                <p
-                  style={{
-                    marginTop: '4px',
-                    fontSize: '10px',
-                    color: 'var(--text-secondary)',
-                    whiteSpace: 'nowrap',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                  }}
-                >
-                  {worker.message}
-                </p>
-              ) : null}
+            <div className="worker-summary-copy">
+              <span className="worker-summary-name">{headline}</span>
+              <p className="worker-summary-message">{supportingMessage}</p>
             </div>
           </div>
-        ))}
+          <div className="worker-summary-stats">
+            <span className="worker-summary-status">{statusLabel}</span>
+            <span className="worker-row-progress">{Math.round(displayProgress)}%</span>
+          </div>
+        </div>
+
+        <div className="worker-progress-track is-large">
+          <div
+            className="worker-progress-fill"
+            style={{
+              width: `${displayProgress}%`,
+              background:
+                completedWorkers.length === displayWorkers.length ? 'var(--success)' : 'var(--accent)',
+            }}
+          />
+        </div>
+
+        <div className="worker-summary-meta">
+          <span className="worker-summary-chip">{activeWorkers.length} active</span>
+          <span className="worker-summary-chip">{completedWorkers.length} complete</span>
+          <span className="worker-summary-chip">{displayWorkers.length} total</span>
+        </div>
       </div>
     </div>
   );

@@ -52,6 +52,7 @@ export function TimelineBar() {
   const [dialogueDraftText, setDialogueDraftText] = useState('');
   const [dialogueDraftCharacter, setDialogueDraftCharacter] = useState('');
   const [dialogueDraftDuration, setDialogueDraftDuration] = useState('0');
+  const [timelineActionError, setTimelineActionError] = useState<string | null>(null);
   const [dragState, setDragState] = useState<DragState>({
     frameId: null,
     isDragging: false,
@@ -62,6 +63,8 @@ export function TimelineBar() {
 
   const totalDuration = timelineFrames.reduce((acc, f) => acc + f.duration, 0);
   const isDropToUnlinkActive = dragState.isDragging && !dragState.overDialogueId;
+  const timelineHeight = isTimelineExpanded ? 'min(50vh, 520px)' : '210px';
+  const timelineMinHeight = isTimelineExpanded ? '300px' : '210px';
 
   // Group frames by dialogue
   const getFramesForDialogue = (dialogueId: string): TimelineFrame[] => {
@@ -252,11 +255,13 @@ export function TimelineBar() {
       approveTimeline();
       return;
     }
+    setTimelineActionError(null);
     try {
       const snapshot = await API.workflow.approve(currentProject.id, 'timeline');
       hydrateWorkspace(snapshot);
     } catch (error) {
       console.error('Failed to approve timeline:', error);
+      setTimelineActionError(error instanceof Error ? error.message : 'Failed to approve timeline.');
     }
   };
 
@@ -339,10 +344,9 @@ export function TimelineBar() {
     return (
       <div 
         key={frame.id}
-        className="timeline-frame"
+        className={`timeline-frame ${isTimelineExpanded ? 'expanded' : 'compact'}`}
         style={{
           position: 'relative',
-          flexShrink: 0,
         }}
         draggable
         onDragStart={() => handleDragStart(frame.id)}
@@ -446,13 +450,12 @@ export function TimelineBar() {
         </div>
         
         <div
-          className={`timeline-frame-thumb ${isSelected ? 'selected' : ''}`}
+          className={`timeline-frame-thumb ${isSelected ? 'selected' : ''} ${isTimelineExpanded ? 'expanded' : 'compact'}`}
           onClick={(e) => handleFrameClick(frame.id, e)}
           onDoubleClick={() => setShowFrameMenu(showFrameMenu === frame.id ? null : frame.id)}
           style={{
             position: 'relative',
-            width: isTimelineExpanded ? '140px' : '100px',
-            height: isTimelineExpanded ? '84px' : '56px',
+            width: '100%',
             border: isMultiSelected ? '2px solid var(--success)' : undefined,
             boxShadow: isMultiSelected ? '0 0 8px var(--success)' : undefined,
           }}
@@ -640,17 +643,7 @@ export function TimelineBar() {
     return (
       <div
         key={dialogue.id}
-        style={{
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '8px',
-          padding: '8px 12px',
-          background: isDragOver ? 'var(--accent-dim)' : 'var(--bg-secondary)',
-          border: `1px solid ${isDragOver ? 'var(--accent)' : 'var(--border-subtle)'}`,
-          borderRadius: '8px',
-          minWidth: isTimelineExpanded ? '200px' : '160px',
-          transition: 'all 0.2s ease',
-        }}
+        className={`timeline-dialogue-block ${isDragOver ? 'drag-over' : ''}`}
         onDragOver={(e) => {
           e.preventDefault();
           handleDialogueDragOver(dialogue.id);
@@ -732,20 +725,10 @@ export function TimelineBar() {
         </div>
 
         {/* Linked Frames */}
-        <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-end' }}>
+        <div className="timeline-dialogue-frames">
           {linkedFrames.map((frame) => renderFrame(frame, true))}
           {linkedFrames.length === 0 && (
-            <div
-              style={{
-                padding: '8px 12px',
-                background: 'var(--bg-tertiary)',
-                border: '1px dashed var(--border-subtle)',
-                borderRadius: '6px',
-                fontSize: '10px',
-                color: 'var(--text-muted)',
-                textAlign: 'center',
-              }}
-            >
+            <div className="timeline-empty-slot">
               Drag frame here
             </div>
           )}
@@ -757,9 +740,10 @@ export function TimelineBar() {
   return (
     <div 
       className="timeline-bar"
+      data-testid="timeline-bar"
       style={{
-        height: isTimelineExpanded ? 'calc(33.333vh - 64px)' : '140px',
-        minHeight: isTimelineExpanded ? '200px' : '140px',
+        height: timelineHeight,
+        minHeight: timelineMinHeight,
         transition: 'height 0.3s ease',
       }}
     >
@@ -781,67 +765,29 @@ export function TimelineBar() {
       {/* Header - Centered */}
       <div 
         className="timeline-bar-header"
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          position: 'relative',
-        }}
       >
-        {/* Left section */}
-        <div style={{ 
-          display: 'flex', 
-          alignItems: 'center', 
-          gap: '12px',
-          position: 'absolute',
-          left: '16px',
-        }}>
-          <button 
+        <div className="timeline-bar-side timeline-bar-side-left">
+          <button
+            type="button"
+            className="timeline-header-btn"
             onClick={() => setIsTimelineExpanded(!isTimelineExpanded)}
-            style={{ 
-              background: 'none',
-              border: 'none',
-              color: 'var(--text-secondary)',
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              padding: '4px',
-            }}
           >
             {isTimelineExpanded ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
           </button>
           <span className="timeline-bar-title">Timeline</span>
-          <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+          <span className="timeline-bar-meta">
             {timelineFrames.length} frames · {totalDuration.toFixed(1)}s
           </span>
         </div>
         
-        {/* Center section - Media View Toggle */}
-        <div style={{ 
-          display: 'flex', 
-          alignItems: 'center', 
-          gap: '2px',
-          padding: '2px',
-          background: 'var(--bg-primary)',
-          borderRadius: '4px'
-        }}>
+        <div className="timeline-media-toggle">
           {(['image', 'prompt', 'video'] as const).map((view) => (
             <button
               key={view}
+              type="button"
+              data-testid={`timeline-media-toggle-${view}`}
               onClick={() => setMediaView(view)}
-              style={{
-                padding: '4px 8px',
-                borderRadius: '3px',
-                border: 'none',
-                background: mediaView === view ? 'var(--accent)' : 'transparent',
-                color: mediaView === view ? 'var(--bg-primary)' : 'var(--text-secondary)',
-                fontSize: '10px',
-                textTransform: 'uppercase',
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '4px'
-              }}
+              className={`timeline-media-pill ${mediaView === view ? 'active' : ''}`}
             >
               {view === 'image' && <Image size={12} />}
               {view === 'prompt' && <FileText size={12} />}
@@ -851,57 +797,42 @@ export function TimelineBar() {
           ))}
         </div>
 
-        {/* Right section */}
-        <div style={{ 
-          display: 'flex', 
-          alignItems: 'center', 
-          gap: '8px',
-          position: 'absolute',
-          right: '16px',
-        }}>
+        <div className="timeline-bar-side timeline-bar-side-right">
           {currentProject?.status === 'timeline_review' && (
-            <button 
+            <button
               className="btn-accent" 
+              type="button"
+              data-testid="timeline-approve-button"
               onClick={() => void handleApproveTimeline()}
-              style={{ padding: '4px 12px', fontSize: '11px' }}
             >
               Approve
             </button>
           )}
         </div>
       </div>
+      {timelineActionError ? (
+        <div className="inline-alert" data-testid="timeline-approval-error">
+          {timelineActionError}
+        </div>
+      ) : null}
 
       {/* Content */}
       <div 
         className="timeline-bar-content"
-        style={{
-          padding: '16px',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '16px',
-        }}
       >
-        {/* Dialogue Blocks */}
-        <div style={{ display: 'flex', gap: '16px', flexWrap: 'nowrap' }}>
+        <div className="timeline-dialogue-lane">
           {dialogueBlocks.map((dialogue) => renderDialogueBlock(dialogue))}
         </div>
 
-        {/* Unlinked Frames Section */}
         {getUnlinkedFrames().length > 0 && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            <span style={{ fontSize: '10px', color: 'var(--text-muted)', textTransform: 'uppercase' }}>
+          <div className="timeline-unlinked-section">
+            <span className="timeline-unlinked-label">
               Unlinked Frames
             </span>
             <div
+              className={`timeline-unlinked-dropzone ${isDropToUnlinkActive ? 'is-active' : ''}`}
               style={{
-                display: 'flex',
-                gap: '12px',
-                minHeight: '92px',
-                padding: '8px',
-                borderRadius: '8px',
-                border: `1px dashed ${isDropToUnlinkActive ? 'var(--accent)' : 'var(--border-subtle)'}`,
-                background: isDropToUnlinkActive ? 'var(--accent-dim)' : 'transparent',
-                transition: 'all 0.2s ease',
+                minHeight: isTimelineExpanded ? '156px' : '120px',
               }}
               onDragOver={(e) => {
                 e.preventDefault();

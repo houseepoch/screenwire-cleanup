@@ -68,6 +68,7 @@ export interface SkeletonPlan {
   scenes: Scene[];
   totalScenes: number;
   estimatedDuration: number;
+  markdown?: string;
 }
 
 export interface Scene {
@@ -87,7 +88,7 @@ export interface Entity {
   description: string;
   imageUrl?: string;
   status: 'pending' | 'generating' | 'complete' | 'error';
-  metadata?: Record<string, any>;
+  metadata?: Record<string, unknown>;
 }
 
 export interface CastMember extends Entity {
@@ -160,10 +161,42 @@ export interface GraphLocationFrameState {
   damage_level?: string | null;
 }
 
+export interface SceneGraphNode {
+  scene_heading?: string | null;
+  title?: string | null;
+  emotional_arc?: string | null;
+  location_id?: string | null;
+  cast_present?: string[] | null;
+  staging_plan?: Record<string, unknown> | null;
+  [key: string]: unknown;
+}
+
+export interface FrameGraphNode {
+  scene_id?: string | null;
+  narrative_beat?: string | null;
+  source_text?: string | null;
+  action_summary?: string | null;
+  background?: ({ camera_facing?: string | null } & Record<string, unknown>) | null;
+  composition?: ({
+    shot?: string | null;
+    angle?: string | null;
+    blocking?: string | null;
+  } & Record<string, unknown>) | null;
+  directing?: ({
+    movement_path?: string | null;
+    reaction_target?: string | null;
+  } & Record<string, unknown>) | null;
+  [key: string]: unknown;
+}
+
+export interface DialogueGraphNode {
+  [key: string]: unknown;
+}
+
 export interface FrameContext {
-  frame: Record<string, any>;
-  scene: Record<string, any> | null;
-  dialogue: Record<string, any>[];
+  frame: FrameGraphNode;
+  scene: SceneGraphNode | null;
+  dialogue: DialogueGraphNode[];
   castStates: GraphCastFrameState[];
   propStates: GraphPropFrameState[];
   locationStates: GraphLocationFrameState[];

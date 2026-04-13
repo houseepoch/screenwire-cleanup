@@ -15,10 +15,10 @@ export function About() {
   const lineRef = useRef<HTMLDivElement>(null);
   const authorTextRef = useRef<HTMLDivElement>(null);
   const triggersRef = useRef<ScrollTrigger[]>([]);
-
-  if (!aboutConfig.titleLine1) return null;
+  const hasContent = Boolean(aboutConfig.titleLine1);
 
   useEffect(() => {
+    if (!hasContent) return;
     const section = sectionRef.current;
     if (!section) return;
 
@@ -152,7 +152,9 @@ export function About() {
       triggersRef.current.forEach((t) => t.kill());
       triggersRef.current = [];
     };
-  }, []);
+  }, [hasContent]);
+
+  if (!hasContent) return null;
 
   const authorTextChars = aboutConfig.authorBio.split('');
 

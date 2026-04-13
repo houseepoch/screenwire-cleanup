@@ -29,6 +29,8 @@ from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
+load_dotenv(Path(__file__).resolve().parent / ".env")
+
 from graph.feature_flags import ENABLE_STORYBOARD_GUIDANCE
 from llm.xai_client import (
     DEFAULT_REASONING_MODEL,
@@ -47,7 +49,6 @@ from screenwire_contracts import (
 )
 from telemetry import PHASE_ENV, RUN_ID_ENV, emit_event, generate_run_id, with_run_context
 from video_prompt_projection import build_video_request_projection, generate_video_prompt_projection
-load_dotenv(Path(__file__).resolve().parent / ".env")
 
 # ---------------------------------------------------------------------------
 # Process tracking & graceful shutdown

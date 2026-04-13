@@ -13,10 +13,10 @@ export function Works() {
   const cardsRef = useRef<(HTMLDivElement | null)[]>([]);
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
   const triggersRef = useRef<ScrollTrigger[]>([]);
-
-  if (!worksConfig.title || worksConfig.projects.length === 0) return null;
+  const hasContent = Boolean(worksConfig.title) && worksConfig.projects.length > 0;
 
   useEffect(() => {
+    if (!hasContent) return;
     const section = sectionRef.current;
     if (!section) return;
 
@@ -95,7 +95,7 @@ export function Works() {
       triggersRef.current.forEach((t) => t.kill());
       triggersRef.current = [];
     };
-  }, []);
+  }, [hasContent]);
 
   const handleMouseMove = (
     e: React.MouseEvent<HTMLDivElement>,
@@ -130,6 +130,8 @@ export function Works() {
   };
 
   const titleChars = worksConfig.title.split('');
+
+  if (!hasContent) return null;
 
   return (
     <section

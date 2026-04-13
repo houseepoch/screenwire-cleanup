@@ -11,10 +11,10 @@ export function Testimonials() {
   const titleRef = useRef<HTMLHeadingElement>(null);
   const cardsRef = useRef<(HTMLDivElement | null)[]>([]);
   const triggersRef = useRef<ScrollTrigger[]>([]);
-
-  if (!testimonialsConfig.title || testimonialsConfig.testimonials.length === 0) return null;
+  const hasContent = Boolean(testimonialsConfig.title) && testimonialsConfig.testimonials.length > 0;
 
   useEffect(() => {
+    if (!hasContent) return;
     const section = sectionRef.current;
     if (!section) return;
 
@@ -113,7 +113,9 @@ export function Testimonials() {
       triggersRef.current.forEach((t) => t.kill());
       triggersRef.current = [];
     };
-  }, []);
+  }, [hasContent]);
+
+  if (!hasContent) return null;
 
   return (
     <section

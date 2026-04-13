@@ -24,7 +24,7 @@ from graph.schema import (
     Posture,
     Provenance,
 )
-from tests.test_pipeline_smoke_e2e import build_live_smoke_graph
+from tests.live_smoke_graph import build_live_smoke_graph
 
 
 def _load_json(path: Path) -> dict:

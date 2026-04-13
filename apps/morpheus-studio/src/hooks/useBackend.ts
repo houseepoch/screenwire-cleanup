@@ -890,21 +890,20 @@ export function useWorkers(projectId: string | null) {
 // ============================================================================
 
 export function useWebSocket(projectId: string | null) {
-  const [isConnected, setIsConnected] = useState(false);
+  const [socketConnected, setSocketConnected] = useState(false);
   const [workers, setWorkers] = useState<WorkerStatus[]>([]);
   const [videoProgress, setVideoProgress] = useState<{ jobId: string; progress: number } | null>(null);
 
   useEffect(() => {
     if (!projectId) {
       wsService.disconnect();
-      setIsConnected(false);
       return;
     }
 
     wsService.connect(projectId);
 
-    const unsubConnected = wsService.on('connected', () => setIsConnected(true));
-    const unsubDisconnected = wsService.on('disconnected', () => setIsConnected(false));
+    const unsubConnected = wsService.on('connected', () => setSocketConnected(true));
+    const unsubDisconnected = wsService.on('disconnected', () => setSocketConnected(false));
 
     const unsubWorkerUpdate = wsService.on<WorkerStatus>('worker_update', (worker) => {
       setWorkers((prev) => {
@@ -953,7 +952,7 @@ export function useWebSocket(projectId: string | null) {
   }, [projectId, videoProgress?.jobId]);
 
   return {
-    isConnected,
+    isConnected: Boolean(projectId) && socketConnected,
     workers,
     videoProgress,
   };

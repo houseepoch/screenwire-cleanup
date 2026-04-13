@@ -16,8 +16,8 @@
 
 ### Architecture
 ```
-CC (Opus) → outline_skeleton.md  (///CAST, ///LOCATION, ///PROP, ///SCENE, ///SCENE_STAGING, ///DLG)
-           → creative_output.md   (/// frame markers — cast, cam, dlg, cast_states only)
+CC (Grok reasoning) → outline_skeleton.md  (///CAST, ///LOCATION, ///PROP, ///SCENE, ///SCENE_STAGING, ///DLG)
+                     → creative_output.md   (/// frame markers — cast, cam, dlg, cast_states only)
                  ↓
 Step 2a: Python parser (graph/cc_parser.py) — deterministic, <5 seconds
   → CastNodes, LocationNodes, PropNodes, SceneNodes (with staging_plan)
@@ -25,7 +25,7 @@ Step 2a: Python parser (graph/cc_parser.py) — deterministic, <5 seconds
   → DialogueNodes via ///DLG excerpt pointers (verbatim source text, never copied)
   → All edges (FOLLOWS, APPEARS_IN, AT_LOCATION, DIALOGUE_SPANS, etc.)
                  ↓
-Step 2b: Parallel frame enricher workers (graph/frame_enricher.py) — ~$0.005/100 frames
+Step 2b: Parallel frame enricher workers (graph/frame_enricher.py)
   → CastFrameState: screen_position, looking_at, emotion, posture, facing_direction, action
     (anchored by ///SCENE_STAGING start/mid/end beats from CC)
   → FrameComposition: shot, angle, movement, focus (from prose context)
@@ -49,19 +49,19 @@ Step 2d: Prompt assembly + materialization (existing code, unchanged)
 - **Dialogue** uses `///DLG` excerpt pointers (src_start/src_end/src_lines) — parser extracts verbatim from creative_output.md, CC never copies text
 - **Scene staging** uses `///SCENE_STAGING` with start/mid/end beats defining screen_position, looking_at, facing_direction per character — frame enricher workers anchor to these
 - **Frame markers** are lean: `cast`, `cam`, `dlg`, `cast_states` only — NO tag, shot, angle, movement, or duration
-- **Cinematic tags** assigned POST-GRAPH by Grok tagger, not by CC or Haiku. Tag definitions are textual composition directives injected into prompts
-- **visible_description REMOVED** from Haiku output — redundant with location.directions[camera_facing] (api.py fallback handles it)
+- **Cinematic tags** assigned POST-GRAPH by Grok tagger, not by the CC or the old Haiku-based design. Tag definitions are textual composition directives injected into prompts
+- **visible_description REMOVED** from frame-enricher output — redundant with location.directions[camera_facing] (api.py fallback handles it)
 - **Duration** computed downstream by prompt_assembler from tag characteristics + dialogue timing
 - **FormulaTag enum (F01-F18) REPLACED** by CinematicTag model with full taxonomy fields
 
 ### What's Eliminated
 | Old | New | Cost Impact |
 |-----|-----|-------------|
-| Agent 1 (Entity Seeder, Opus) | Python parser | $0 |
-| Agent 2 (Frame Parser, Opus) | Python parser | $0 |
-| Agent 3 (Dialogue Wirer, Opus) | Python parser | $0 |
-| Agent 4 (Compositor, Opus) | frame enricher workers | ~$0.005/100 frames |
-| Agent 5 (Continuity, Opus) | Python validator | $0 |
+| Agent 1 (Entity Seeder) | Python parser | $0 |
+| Agent 2 (Frame Parser) | Python parser | $0 |
+| Agent 3 (Dialogue Wirer) | Python parser | $0 |
+| Agent 4 (Compositor) | frame enricher workers | runtime-model-dependent |
+| Agent 5 (Continuity) | Python validator | $0 |
 | F01-F18 formula tags | Grok cinematic tagger (60+ tags) | ~$0.01/100 frames |
 
 ### Implementation Order
@@ -108,7 +108,7 @@ Step 2d: Prompt assembly + materialization (existing code, unchanged)
 ## Location Type Threading (2026-04-11)
 
 - **`LocationNode.location_type`** controls which 2×2 grid template the location grid handler uses. Valid values: `"interior"`, `"exterior"` (default `"exterior"`).
-- **Morpheus Entity Seeder** is instructed to set `location_type` on every `LocationNode` based on INT/EXT from scene headings. Interior rooms/enclosed spaces → `"interior"`. Open areas/streets/gardens → `"exterior"`.
+- **The CC parser** sets `location_type` on every `LocationNode` based on INT/EXT from scene headings. Interior rooms/enclosed spaces → `"interior"`. Open areas/streets/gardens → `"exterior"`.
 - **Prompt assembler** (`assemble_location_prompt`) maps `loc.location_type` → `template_type` in the output dict. Falls back to `"exterior"` if value is None or unrecognized.
 - **Asset generator** (`graph_generate_assets`) reads `template_type` from the prompt JSON and passes it to `/internal/generate-location-grid`.
 - **Full thread**: graph schema → entity seeder → prompt assembler → prompt JSON → asset generator → server endpoint → handler.

@@ -1,10 +1,159 @@
 // Mobile Timeline Tray Component
+import { createPortal } from 'react-dom';
 import { useMorpheusStore } from '../store';
 import { useLongPress } from '../hooks/useLongPress';
 import API from '../services/api';
 import { X, Image, FileText, Play } from 'lucide-react';
+import type { DialogueBlock, MediaView, TimelineFrame } from '../types';
+
+function TimelineFrameCard({
+  frame,
+  dialogue,
+  selectedFrameId,
+  mediaView,
+  onLongPress,
+  onSelect,
+}: {
+  frame: TimelineFrame;
+  dialogue?: DialogueBlock;
+  selectedFrameId: string | null;
+  mediaView: MediaView;
+  onLongPress: (frame: TimelineFrame) => void;
+  onSelect: (frameId: string) => void;
+}) {
+  const { handlers, isPressing } = useLongPress({
+    onLongPress: () => onLongPress(frame),
+    onClick: () => onSelect(frame.id),
+    ms: 600,
+  });
+
+  const renderMediaContent = () => {
+    switch (mediaView) {
+      case 'prompt':
+        return (
+          <div style={{
+            padding: '6px',
+            fontSize: '9px',
+            color: 'var(--text-secondary)',
+            overflow: 'hidden',
+            lineHeight: 1.2,
+          }}>
+            {frame.prompt.substring(0, 50)}...
+          </div>
+        );
+      case 'video':
+        return (
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            height: '100%',
+            background: 'var(--bg-tertiary)',
+          }}>
+            <Play size={16} style={{ color: 'var(--accent)' }} />
+          </div>
+        );
+      case 'image':
+      default:
+        return frame.imageUrl ? (
+          <img
+            src={frame.imageUrl}
+            alt={`Frame ${frame.sequence}`}
+            style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+          />
+        ) : (
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            height: '100%',
+            background: 'var(--bg-tertiary)',
+          }}>
+            <Image size={18} style={{ color: 'var(--text-muted)' }} />
+          </div>
+        );
+    }
+  };
+
+  return (
+    <div
+      {...handlers}
+      style={{
+        position: 'relative',
+        borderRadius: '8px',
+        overflow: 'hidden',
+        border: selectedFrameId === frame.id
+          ? '2px solid var(--accent)'
+          : isPressing
+            ? '2px solid var(--success)'
+            : '2px solid transparent',
+        transform: isPressing ? 'scale(0.98)' : 'scale(1)',
+        transition: 'all 0.2s ease',
+      }}
+    >
+      <div style={{ aspectRatio: '16/9' }}>
+        {renderMediaContent()}
+      </div>
+
+      <div style={{
+        position: 'absolute',
+        bottom: 0,
+        left: 0,
+        right: 0,
+        padding: '8px',
+        background: 'linear-gradient(to top, rgba(0,0,0,0.8), transparent)',
+      }}>
+        <div style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+        }}>
+          <span style={{ fontSize: '12px', fontWeight: 500 }}>
+            Frame #{frame.sequence}
+          </span>
+          <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+            {frame.duration}s
+          </span>
+        </div>
+        {dialogue && (
+          <p style={{
+            fontSize: '10px',
+            color: 'var(--text-secondary)',
+            marginTop: '4px',
+            fontStyle: 'italic',
+          }}>
+            "{dialogue.text.substring(0, 40)}..."
+          </p>
+        )}
+      </div>
+
+      {isPressing && (
+        <div style={{
+          position: 'absolute',
+          inset: 0,
+          background: 'rgba(16, 185, 129, 0.2)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}>
+          <span style={{
+            padding: '6px 12px',
+            background: 'var(--success)',
+            borderRadius: '12px',
+            fontSize: '12px',
+            fontWeight: 500,
+            color: 'var(--bg-primary)',
+          }}>
+            Hold to focus
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function MobileTimelineTray() {
+  const trayTopOffset = 84;
   const { 
     timelineFrames, 
     dialogueBlocks,
@@ -50,84 +199,44 @@ export function MobileTimelineTray() {
     }
   };
 
-  const renderMediaContent = (frame: typeof timelineFrames[0]) => {
-    switch (mediaView) {
-      case 'prompt':
-        return (
-          <div style={{ 
-            padding: '6px', 
-            fontSize: '9px', 
-            color: 'var(--text-secondary)',
-            overflow: 'hidden',
-            lineHeight: 1.2,
-          }}>
-            {frame.prompt.substring(0, 50)}...
-          </div>
-        );
-      case 'video':
-        return (
-          <div style={{ 
-            display: 'flex', 
-            alignItems: 'center', 
-            justifyContent: 'center',
-            height: '100%',
-            background: 'var(--bg-tertiary)'
-          }}>
-            <Play size={16} style={{ color: 'var(--accent)' }} />
-          </div>
-        );
-      case 'image':
-      default:
-        return frame.imageUrl ? (
-          <img 
-            src={frame.imageUrl} 
-            alt={`Frame ${frame.sequence}`}
-            style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-          />
-        ) : (
-          <div style={{ 
-            display: 'flex', 
-            alignItems: 'center', 
-            justifyContent: 'center',
-            height: '100%',
-            background: 'var(--bg-tertiary)'
-          }}>
-            <Image size={18} style={{ color: 'var(--text-muted)' }} />
-          </div>
-        );
-    }
-  };
-
   if (!isTimelineTrayOpen) return null;
 
-  return (
+  return createPortal(
     <>
       {/* Backdrop */}
       <div 
+        data-testid="mobile-timeline-backdrop"
         onClick={() => setIsTimelineTrayOpen(false)}
         style={{
           position: 'fixed',
-          inset: 0,
+          top: trayTopOffset,
+          right: 0,
+          bottom: 0,
+          left: 0,
           background: 'rgba(0, 0, 0, 0.5)',
           zIndex: 150,
         }}
       />
       
       {/* Tray */}
-      <div style={{
+      <div
+        data-testid="mobile-timeline-tray"
+        style={{
         position: 'fixed',
-        top: 0,
+        top: trayTopOffset,
         right: 0,
-        bottom: 0,
+        bottom: 12,
         width: '85%',
         maxWidth: '360px',
         background: 'var(--bg-secondary)',
         borderLeft: '1px solid var(--border-subtle)',
+        borderRadius: '24px 0 0 24px',
         zIndex: 200,
         display: 'flex',
         flexDirection: 'column',
         animation: 'slideInRight 0.3s ease',
-      }}>
+      }}
+      >
         {/* Header */}
         <div style={{
           display: 'flex',
@@ -138,6 +247,8 @@ export function MobileTimelineTray() {
         }}>
           <span style={{ fontSize: '16px', fontWeight: 600 }}>Timeline</span>
           <button
+            data-testid="mobile-timeline-close"
+            aria-label="Close timeline tray"
             onClick={() => setIsTimelineTrayOpen(false)}
             style={{
               background: 'none',
@@ -191,94 +302,17 @@ export function MobileTimelineTray() {
           padding: '12px',
         }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-            {timelineFrames.map((frame) => {
-              const dialogue = getDialogueForFrame(frame.sequence);
-              const { handlers, isPressing } = useLongPress({
-                onLongPress: () => handleFrameLongPress(frame),
-                onClick: () => handleFrameClick(frame.id),
-                ms: 600,
-              });
-
-              return (
-                <div
-                  key={frame.id}
-                  {...handlers}
-                  style={{
-                    position: 'relative',
-                    borderRadius: '8px',
-                    overflow: 'hidden',
-                    border: selectedFrameId === frame.id 
-                      ? '2px solid var(--accent)' 
-                      : isPressing 
-                        ? '2px solid var(--success)' 
-                        : '2px solid transparent',
-                    transform: isPressing ? 'scale(0.98)' : 'scale(1)',
-                    transition: 'all 0.2s ease',
-                  }}
-                >
-                  {/* Frame Thumbnail */}
-                  <div style={{ aspectRatio: '16/9' }}>
-                    {renderMediaContent(frame)}
-                  </div>
-                  
-                  {/* Frame Info Overlay */}
-                  <div style={{
-                    position: 'absolute',
-                    bottom: 0,
-                    left: 0,
-                    right: 0,
-                    padding: '8px',
-                    background: 'linear-gradient(to top, rgba(0,0,0,0.8), transparent)',
-                  }}>
-                    <div style={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      alignItems: 'center',
-                    }}>
-                      <span style={{ fontSize: '12px', fontWeight: 500 }}>
-                        Frame #{frame.sequence}
-                      </span>
-                      <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                        {frame.duration}s
-                      </span>
-                    </div>
-                    {dialogue && (
-                      <p style={{ 
-                        fontSize: '10px', 
-                        color: 'var(--text-secondary)',
-                        marginTop: '4px',
-                        fontStyle: 'italic'
-                      }}>
-                        "{dialogue.text.substring(0, 40)}..."
-                      </p>
-                    )}
-                  </div>
-
-                  {/* Long Press Indicator */}
-                  {isPressing && (
-                    <div style={{
-                      position: 'absolute',
-                      inset: 0,
-                      background: 'rgba(16, 185, 129, 0.2)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                    }}>
-                      <span style={{
-                        padding: '6px 12px',
-                        background: 'var(--success)',
-                        borderRadius: '12px',
-                        fontSize: '12px',
-                        fontWeight: 500,
-                        color: 'var(--bg-primary)',
-                      }}>
-                        Hold to focus
-                      </span>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+            {timelineFrames.map((frame) => (
+              <TimelineFrameCard
+                key={frame.id}
+                frame={frame}
+                dialogue={getDialogueForFrame(frame.sequence)}
+                selectedFrameId={selectedFrameId}
+                mediaView={mediaView}
+                onLongPress={handleFrameLongPress}
+                onSelect={handleFrameClick}
+              />
+            ))}
           </div>
         </div>
 
@@ -314,5 +348,7 @@ export function MobileTimelineTray() {
         }
       `}</style>
     </>
+    ,
+    document.body,
   );
 }

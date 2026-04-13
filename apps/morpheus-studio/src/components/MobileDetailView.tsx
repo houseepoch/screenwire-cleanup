@@ -11,7 +11,7 @@ import {
   Play,
   MessageSquare,
 } from 'lucide-react';
-import type { TabType, Entity } from '../types';
+import type { TabType, Entity, Scene, StoryboardFrame } from '../types';
 
 const tabs: { id: TabType; label: string; icon: React.ElementType }[] = [
   { id: 'outline', label: 'Outline', icon: FileText },
@@ -22,6 +22,187 @@ const tabs: { id: TabType; label: string; icon: React.ElementType }[] = [
   { id: 'storyboard', label: 'Board', icon: LayoutGrid },
   { id: 'video', label: 'Video', icon: Play },
 ];
+
+interface FocusTarget {
+  type: string;
+  id: string;
+  name: string;
+}
+
+function HoldToFocusOverlay({ isPressing }: { isPressing: boolean }) {
+  if (!isPressing) {
+    return null;
+  }
+
+  return (
+    <div style={{
+      position: 'absolute',
+      inset: 0,
+      background: 'rgba(16, 185, 129, 0.2)',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+    }}>
+      <span style={{
+        padding: '6px 12px',
+        background: 'var(--success)',
+        borderRadius: '12px',
+        fontSize: '12px',
+        fontWeight: 500,
+        color: 'var(--bg-primary)',
+      }}>
+        Hold to focus
+      </span>
+    </div>
+  );
+}
+
+function getFocusBorder(isHighlighted: boolean, isPressing: boolean) {
+  return isHighlighted || isPressing
+    ? '2px solid var(--success)'
+    : '1px solid var(--border-subtle)';
+}
+
+function OutlineSceneCard({
+  scene,
+  isHighlighted,
+  onFocus,
+}: {
+  scene: Scene;
+  isHighlighted: boolean;
+  onFocus: (item: FocusTarget) => void;
+}) {
+  const { handlers, isPressing } = useLongPress({
+    onLongPress: () => onFocus({ type: 'scene', id: scene.id, name: `Scene ${scene.number}` }),
+    ms: 600,
+  });
+
+  return (
+    <div
+      {...handlers}
+      style={{
+        padding: '14px',
+        background: 'var(--bg-secondary)',
+        borderRadius: '10px',
+        border: getFocusBorder(isHighlighted, isPressing),
+        position: 'relative',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '6px' }}>
+        <span style={{ fontSize: '12px', color: 'var(--accent)', fontWeight: 600 }}>
+          Scene {scene.number}
+        </span>
+        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+          {scene.location}
+        </span>
+      </div>
+      <p style={{ fontSize: '13px', color: 'var(--text-primary)', lineHeight: 1.5 }}>
+        {scene.description}
+      </p>
+      <HoldToFocusOverlay isPressing={isPressing} />
+    </div>
+  );
+}
+
+function EntityFocusCard({
+  entity,
+  isHighlighted,
+  onFocus,
+  icon: Icon,
+  aspectRatio,
+}: {
+  entity: Entity;
+  isHighlighted: boolean;
+  onFocus: (item: FocusTarget) => void;
+  icon: React.ElementType;
+  aspectRatio: string;
+}) {
+  const { handlers, isPressing } = useLongPress({
+    onLongPress: () => onFocus({ type: 'entity', id: entity.id, name: entity.name }),
+    ms: 600,
+  });
+
+  return (
+    <div
+      {...handlers}
+      style={{
+        position: 'relative',
+        borderRadius: '10px',
+        overflow: 'hidden',
+        border: getFocusBorder(isHighlighted, isPressing),
+      }}
+    >
+      <div style={{ aspectRatio }}>
+        {entity.imageUrl ? (
+          <img src={entity.imageUrl} alt={entity.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+        ) : (
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            height: '100%',
+            background: 'var(--bg-tertiary)',
+          }}>
+            <Icon size={28} style={{ color: 'var(--text-muted)' }} />
+          </div>
+        )}
+      </div>
+      <div style={{
+        position: 'absolute',
+        bottom: 0,
+        left: 0,
+        right: 0,
+        padding: '10px',
+        background: 'linear-gradient(to top, rgba(0,0,0,0.9), transparent)',
+      }}>
+        <span style={{ fontSize: '13px', fontWeight: 500 }}>{entity.name}</span>
+      </div>
+      <HoldToFocusOverlay isPressing={isPressing} />
+    </div>
+  );
+}
+
+function StoryboardFocusCard({
+  frame,
+  isHighlighted,
+  onFocus,
+}: {
+  frame: StoryboardFrame;
+  isHighlighted: boolean;
+  onFocus: (item: FocusTarget) => void;
+}) {
+  const { handlers, isPressing } = useLongPress({
+    onLongPress: () => onFocus({ type: 'storyboard', id: frame.id, name: `Storyboard ${frame.sequence}` }),
+    ms: 600,
+  });
+
+  return (
+    <div
+      {...handlers}
+      style={{
+        position: 'relative',
+        borderRadius: '10px',
+        overflow: 'hidden',
+        border: getFocusBorder(isHighlighted, isPressing),
+      }}
+    >
+      <div style={{ aspectRatio: '16/10' }}>
+        <img src={frame.imageUrl} alt={frame.description} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+      </div>
+      <div style={{
+        position: 'absolute',
+        bottom: 0,
+        left: 0,
+        right: 0,
+        padding: '10px',
+        background: 'linear-gradient(to top, rgba(0,0,0,0.9), transparent)',
+      }}>
+        <span style={{ fontSize: '12px' }}>{frame.shotType}</span>
+      </div>
+      <HoldToFocusOverlay isPressing={isPressing} />
+    </div>
+  );
+}
 
 export function MobileDetailView() {
   const { 
@@ -40,7 +221,7 @@ export function MobileDetailView() {
   const locations = entities.filter((e): e is Entity & { type: 'location' } => e.type === 'location');
   const props = entities.filter((e): e is Entity & { type: 'prop' } => e.type === 'prop');
 
-  const handleLongPress = (item: { type: string; id: string; name: string }) => {
+  const handleLongPress = (item: FocusTarget) => {
     injectFocusToChat(item);
     setMobileView('chat');
   };
@@ -51,64 +232,14 @@ export function MobileDetailView() {
         return (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
             {skeletonPlan ? (
-              skeletonPlan.scenes.map((scene) => {
-                const { handlers, isPressing } = useLongPress({
-                  onLongPress: () => handleLongPress({ type: 'scene', id: scene.id, name: `Scene ${scene.number}` }),
-                  ms: 600,
-                });
-
-                return (
-                  <div
-                    key={scene.id}
-                    {...handlers}
-                    style={{
-                      padding: '14px',
-                      background: 'var(--bg-secondary)',
-                      borderRadius: '10px',
-                      border: highlightedItem?.id === scene.id 
-                        ? '2px solid var(--success)' 
-                        : isPressing 
-                          ? '2px solid var(--success)' 
-                          : '1px solid var(--border-subtle)',
-                      position: 'relative',
-                    }}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '6px' }}>
-                      <span style={{ fontSize: '12px', color: 'var(--accent)', fontWeight: 600 }}>
-                        Scene {scene.number}
-                      </span>
-                      <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                        {scene.location}
-                      </span>
-                    </div>
-                    <p style={{ fontSize: '13px', color: 'var(--text-primary)', lineHeight: 1.5 }}>
-                      {scene.description}
-                    </p>
-                    {isPressing && (
-                      <div style={{
-                        position: 'absolute',
-                        inset: 0,
-                        background: 'rgba(16, 185, 129, 0.15)',
-                        borderRadius: '10px',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                      }}>
-                        <span style={{
-                          padding: '6px 12px',
-                          background: 'var(--success)',
-                          borderRadius: '12px',
-                          fontSize: '12px',
-                          fontWeight: 500,
-                          color: 'var(--bg-primary)',
-                        }}>
-                          Hold to focus
-                        </span>
-                      </div>
-                    )}
-                  </div>
-                );
-              })
+              skeletonPlan.scenes.map((scene) => (
+                <OutlineSceneCard
+                  key={scene.id}
+                  scene={scene}
+                  isHighlighted={highlightedItem?.id === scene.id}
+                  onFocus={handleLongPress}
+                />
+              ))
             ) : (
               <div style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--text-secondary)' }}>
                 <p>No outline generated yet.</p>
@@ -120,216 +251,46 @@ export function MobileDetailView() {
       case 'cast':
         return (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '12px' }}>
-            {cast.map((member) => {
-              const { handlers, isPressing } = useLongPress({
-                onLongPress: () => handleLongPress({ type: 'entity', id: member.id, name: member.name }),
-                ms: 600,
-              });
-
-              return (
-                <div
-                  key={member.id}
-                  {...handlers}
-                  style={{
-                    position: 'relative',
-                    borderRadius: '10px',
-                    overflow: 'hidden',
-                    border: highlightedItem?.id === member.id 
-                      ? '2px solid var(--success)' 
-                      : isPressing 
-                        ? '2px solid var(--success)' 
-                        : '1px solid var(--border-subtle)',
-                  }}
-                >
-                  <div style={{ aspectRatio: '3/4' }}>
-                    {member.imageUrl ? (
-                      <img src={member.imageUrl} alt={member.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                    ) : (
-                      <div style={{ 
-                        display: 'flex', 
-                        alignItems: 'center', 
-                        justifyContent: 'center',
-                        height: '100%',
-                        background: 'var(--bg-tertiary)'
-                      }}>
-                        <Users size={28} style={{ color: 'var(--text-muted)' }} />
-                      </div>
-                    )}
-                  </div>
-                  <div style={{
-                    position: 'absolute',
-                    bottom: 0,
-                    left: 0,
-                    right: 0,
-                    padding: '10px',
-                    background: 'linear-gradient(to top, rgba(0,0,0,0.9), transparent)',
-                  }}>
-                    <span style={{ fontSize: '13px', fontWeight: 500 }}>{member.name}</span>
-                  </div>
-                  {isPressing && (
-                    <div style={{
-                      position: 'absolute',
-                      inset: 0,
-                      background: 'rgba(16, 185, 129, 0.2)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                    }}>
-                      <span style={{
-                        padding: '6px 12px',
-                        background: 'var(--success)',
-                        borderRadius: '12px',
-                        fontSize: '12px',
-                        fontWeight: 500,
-                        color: 'var(--bg-primary)',
-                      }}>
-                        Hold to focus
-                      </span>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+            {cast.map((member) => (
+              <EntityFocusCard
+                key={member.id}
+                entity={member}
+                isHighlighted={highlightedItem?.id === member.id}
+                onFocus={handleLongPress}
+                icon={Users}
+                aspectRatio="3/4"
+              />
+            ))}
           </div>
         );
 
       case 'locations':
         return (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '12px' }}>
-            {locations.map((location) => {
-              const { handlers, isPressing } = useLongPress({
-                onLongPress: () => handleLongPress({ type: 'entity', id: location.id, name: location.name }),
-                ms: 600,
-              });
-
-              return (
-                <div
-                  key={location.id}
-                  {...handlers}
-                  style={{
-                    position: 'relative',
-                    borderRadius: '10px',
-                    overflow: 'hidden',
-                    border: highlightedItem?.id === location.id 
-                      ? '2px solid var(--success)' 
-                      : isPressing 
-                        ? '2px solid var(--success)' 
-                        : '1px solid var(--border-subtle)',
-                  }}
-                >
-                  <div style={{ aspectRatio: '16/10' }}>
-                    {location.imageUrl ? (
-                      <img src={location.imageUrl} alt={location.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                    ) : (
-                      <div style={{ 
-                        display: 'flex', 
-                        alignItems: 'center', 
-                        justifyContent: 'center',
-                        height: '100%',
-                        background: 'var(--bg-tertiary)'
-                      }}>
-                        <MapPin size={28} style={{ color: 'var(--text-muted)' }} />
-                      </div>
-                    )}
-                  </div>
-                  <div style={{
-                    position: 'absolute',
-                    bottom: 0,
-                    left: 0,
-                    right: 0,
-                    padding: '10px',
-                    background: 'linear-gradient(to top, rgba(0,0,0,0.9), transparent)',
-                  }}>
-                    <span style={{ fontSize: '13px', fontWeight: 500 }}>{location.name}</span>
-                  </div>
-                  {isPressing && (
-                    <div style={{
-                      position: 'absolute',
-                      inset: 0,
-                      background: 'rgba(16, 185, 129, 0.2)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                    }}>
-                      <span style={{
-                        padding: '6px 12px',
-                        background: 'var(--success)',
-                        borderRadius: '12px',
-                        fontSize: '12px',
-                        fontWeight: 500,
-                        color: 'var(--bg-primary)',
-                      }}>
-                        Hold to focus
-                      </span>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+            {locations.map((location) => (
+              <EntityFocusCard
+                key={location.id}
+                entity={location}
+                isHighlighted={highlightedItem?.id === location.id}
+                onFocus={handleLongPress}
+                icon={MapPin}
+                aspectRatio="16/10"
+              />
+            ))}
           </div>
         );
 
       case 'storyboard':
         return (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '12px' }}>
-            {storyboardFrames.map((frame) => {
-              const { handlers, isPressing } = useLongPress({
-                onLongPress: () => handleLongPress({ type: 'storyboard', id: frame.id, name: `Storyboard ${frame.sequence}` }),
-                ms: 600,
-              });
-
-              return (
-                <div
-                  key={frame.id}
-                  {...handlers}
-                  style={{
-                    position: 'relative',
-                    borderRadius: '10px',
-                    overflow: 'hidden',
-                    border: highlightedItem?.id === frame.id 
-                      ? '2px solid var(--success)' 
-                      : isPressing 
-                        ? '2px solid var(--success)' 
-                        : '1px solid var(--border-subtle)',
-                  }}
-                >
-                  <div style={{ aspectRatio: '16/10' }}>
-                    <img src={frame.imageUrl} alt={frame.description} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                  </div>
-                  <div style={{
-                    position: 'absolute',
-                    bottom: 0,
-                    left: 0,
-                    right: 0,
-                    padding: '10px',
-                    background: 'linear-gradient(to top, rgba(0,0,0,0.9), transparent)',
-                  }}>
-                    <span style={{ fontSize: '12px' }}>{frame.shotType}</span>
-                  </div>
-                  {isPressing && (
-                    <div style={{
-                      position: 'absolute',
-                      inset: 0,
-                      background: 'rgba(16, 185, 129, 0.2)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                    }}>
-                      <span style={{
-                        padding: '6px 12px',
-                        background: 'var(--success)',
-                        borderRadius: '12px',
-                        fontSize: '12px',
-                        fontWeight: 500,
-                        color: 'var(--bg-primary)',
-                      }}>
-                        Hold to focus
-                      </span>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+            {storyboardFrames.map((frame) => (
+              <StoryboardFocusCard
+                key={frame.id}
+                frame={frame}
+                isHighlighted={highlightedItem?.id === frame.id}
+                onFocus={handleLongPress}
+              />
+            ))}
           </div>
         );
 
@@ -368,76 +329,16 @@ export function MobileDetailView() {
       case 'props':
         return (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '12px' }}>
-            {props.map((prop) => {
-              const { handlers, isPressing } = useLongPress({
-                onLongPress: () => handleLongPress({ type: 'entity', id: prop.id, name: prop.name }),
-                ms: 600,
-              });
-
-              return (
-                <div
-                  key={prop.id}
-                  {...handlers}
-                  style={{
-                    position: 'relative',
-                    borderRadius: '10px',
-                    overflow: 'hidden',
-                    border: highlightedItem?.id === prop.id 
-                      ? '2px solid var(--success)' 
-                      : isPressing 
-                        ? '2px solid var(--success)' 
-                        : '1px solid var(--border-subtle)',
-                  }}
-                >
-                  <div style={{ aspectRatio: '1/1' }}>
-                    {prop.imageUrl ? (
-                      <img src={prop.imageUrl} alt={prop.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                    ) : (
-                      <div style={{ 
-                        display: 'flex', 
-                        alignItems: 'center', 
-                        justifyContent: 'center',
-                        height: '100%',
-                        background: 'var(--bg-tertiary)'
-                      }}>
-                        <Package size={28} style={{ color: 'var(--text-muted)' }} />
-                      </div>
-                    )}
-                  </div>
-                  <div style={{
-                    position: 'absolute',
-                    bottom: 0,
-                    left: 0,
-                    right: 0,
-                    padding: '10px',
-                    background: 'linear-gradient(to top, rgba(0,0,0,0.9), transparent)',
-                  }}>
-                    <span style={{ fontSize: '13px', fontWeight: 500 }}>{prop.name}</span>
-                  </div>
-                  {isPressing && (
-                    <div style={{
-                      position: 'absolute',
-                      inset: 0,
-                      background: 'rgba(16, 185, 129, 0.2)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                    }}>
-                      <span style={{
-                        padding: '6px 12px',
-                        background: 'var(--success)',
-                        borderRadius: '12px',
-                        fontSize: '12px',
-                        fontWeight: 500,
-                        color: 'var(--bg-primary)',
-                      }}>
-                        Hold to focus
-                      </span>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+            {props.map((prop) => (
+              <EntityFocusCard
+                key={prop.id}
+                entity={prop}
+                isHighlighted={highlightedItem?.id === prop.id}
+                onFocus={handleLongPress}
+                icon={Package}
+                aspectRatio="1/1"
+              />
+            ))}
           </div>
         );
 
@@ -467,12 +368,15 @@ export function MobileDetailView() {
   };
 
   return (
-    <div style={{
+    <div
+      data-testid="mobile-detail-view"
+      style={{
       display: 'flex',
       flexDirection: 'column',
       height: '100%',
       background: 'var(--bg-primary)',
-    }}>
+    }}
+    >
       {/* Header */}
       <div style={{
         display: 'flex',
@@ -483,6 +387,7 @@ export function MobileDetailView() {
         background: 'var(--bg-secondary)',
       }}>
         <button 
+          data-testid="mobile-detail-open-chat"
           onClick={() => setMobileView('chat')}
           style={{
             display: 'flex',

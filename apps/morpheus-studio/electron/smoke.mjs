@@ -29,7 +29,6 @@ function parseArgs(argv) {
 
 async function waitFor(fn, timeoutMs = 15000, intervalMs = 150) {
   const started = Date.now();
-  // eslint-disable-next-line no-constant-condition
   while (true) {
     const result = await fn();
     if (result) return result;
@@ -157,6 +156,7 @@ function registerIpc(runtime) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+  const keepProject = args['keep-project'] === 'true';
   const runtime = new DesktopRuntime({ repoRoot, appRoot });
   const report = {
     generatedAt: new Date().toISOString(),
@@ -165,6 +165,7 @@ async function main() {
       frameBudget: args['frame-budget'] || '30',
       mediaStyle: args['media-style'] || 'live_retro_grain',
       creativityLevel: args['creative-freedom'] || 'balanced',
+      keepProject,
     },
     steps: [],
     passed: false,
@@ -198,11 +199,17 @@ async function main() {
     },
   });
   const rendererConsole = [];
-  win.webContents.on('console-message', (_event, level, message, line, sourceId) => {
-    rendererConsole.push({ level, message, line, sourceId });
+  win.webContents.on('console-message', (details) => {
+    rendererConsole.push({
+      level: details.level,
+      message: details.message,
+      line: details.lineNumber,
+      sourceId: details.sourceId,
+    });
   });
 
   try {
+    await win.webContents.session.clearStorageData();
     await win.loadFile(distIndex);
     step('load_app', 'ok');
 
@@ -301,7 +308,7 @@ async function main() {
     await writeFile(path.join(smokeDir, 'last-run.json'), JSON.stringify(report, null, 2));
     await runtime.stopBackend();
     try {
-      if (createdProjectId) {
+      if (createdProjectId && !keepProject) {
         await rm(path.join(runtime.projectsRoot, createdProjectId), { recursive: true, force: true });
       }
     } catch {

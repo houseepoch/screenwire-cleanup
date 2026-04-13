@@ -1,61 +1,61 @@
 # Architecture Summary
 
-- Generated at: `2026-04-12T20:30:04.419168+00:00`
+- Generated at: `2026-04-13T07:24:10.757213+00:00`
 - Repo root: `/home/nikoles16/Documents/ScreenWire Environments/screenwire-pipeline`
 - Output directory: `docs/Architecture`
 - Generated artifacts: `00_architecture_summary.md, 10_repo_snapshot.md, 10_repo_snapshot_part_001.md, 20_python_dependency_report.md, 21_python_dependency_graph.mmd`
-- Files scanned: `282`
-- Python modules indexed: `52`
-- Internal dependency edges: `138`
+- Files scanned: `322`
+- Python modules indexed: `54`
+- Internal dependency edges: `145`
 - Repo snapshot parts: `1`
 - Repo snapshot max part size: `26214400` bytes
 
 ## Top-Level Directory Coverage
 
-- `apps`: `156` files, `3840230` bytes
-- `skills`: `28` files, `127980` bytes
-- `.`: `19` files, `466190` bytes
-- `graph`: `17` files, `635165` bytes
-- `AGENT_READ_HERE_FIRST`: `15` files, `116617` bytes
+- `apps`: `191` files, `8779720` bytes
+- `skills`: `31` files, `135183` bytes
+- `.`: `19` files, `534250` bytes
+- `graph`: `17` files, `635331` bytes
+- `AGENT_READ_HERE_FIRST`: `14` files, `116616` bytes
 - `agent_prompts`: `12` files, `126457` bytes
-- `handlers`: `9` files, `101322` bytes
-- `tests`: `8` files, `153468` bytes
-- `build_specs`: `6` files, `71738` bytes
-- `docs`: `6` files, `411805` bytes
-- `llm`: `4` files, `36030` bytes
+- `tests`: `11` files, `178634` bytes
+- `handlers`: `9` files, `101806` bytes
+- `.playwright-cli`: `6` files, `17009` bytes
+- `build_specs`: `6` files, `72532` bytes
+- `llm`: `4` files, `51329` bytes
 - `PROJECT_STATUS`: `1` files, `2084` bytes
 - `logs`: `1` files, `365` bytes
 
 ## Largest Files
 
-- `apps/morpheus-studio/package-lock.json`: `373825` bytes
-- `apps/morpheus-studio/dist/assets/index-CudSAkyN.js`: `318398` bytes
-- `run_pipeline.py`: `203726` bytes
-- `docs/screenwire-operational-overview/screenwire-operational-overview.pdf`: `135850` bytes
-- `docs/Screewire-Corrective.md`: `132243` bytes
-- `graph/prompt_assembler.py`: `119221` bytes
-- `apps/morpheus-studio/dist/location-01.jpg`: `115947` bytes
-- `apps/morpheus-studio/public/location-01.jpg`: `115947` bytes
-- `apps/morpheus-studio/dist/assets/index-BCVTz8Au.css`: `114066` bytes
-- `apps/morpheus-studio/dist/timeline-01.jpg`: `103036` bytes
-- `apps/morpheus-studio/public/timeline-01.jpg`: `103036` bytes
-- `server.py`: `95099` bytes
-- `docs/screenwire-operational-overview/screenwire-operational-overview.md`: `90390` bytes
-- `graph/api.py`: `86020` bytes
-- `apps/morpheus-studio/dist/location-02.jpg`: `79889` bytes
-- `apps/morpheus-studio/public/location-02.jpg`: `79889` bytes
-- `apps/morpheus-studio/dist/timeline-02.jpg`: `77805` bytes
-- `apps/morpheus-studio/public/timeline-02.jpg`: `77805` bytes
-- `apps/morpheus-studio/dist/storyboard-03.jpg`: `75292` bytes
-- `apps/morpheus-studio/public/storyboard-03.jpg`: `75292` bytes
+- `apps/morpheus-studio/smoke/artifacts/last-failure.png`: `685969` bytes
+- `apps/morpheus-studio/smoke/artifacts/last-success.png`: `685607` bytes
+- `apps/morpheus-studio/package-lock.json`: `375893` bytes
+- `apps/morpheus-studio/dist/assets/index-B0tDijOO.js`: `351261` bytes
+- `apps/morpheus-studio/dist/media-styles/live_retro_grain.jpg`: `272179` bytes
+- `apps/morpheus-studio/public/media-styles/live_retro_grain.jpg`: `272179` bytes
+- `apps/morpheus-studio/dist/media-styles/live_soft_light.jpg`: `228708` bytes
+- `apps/morpheus-studio/public/media-styles/live_soft_light.jpg`: `228708` bytes
+- `run_pipeline.py`: `216056` bytes
+- `apps/morpheus-studio/dist/media-styles/chiaroscuro_3d.jpg`: `214135` bytes
+- `apps/morpheus-studio/public/media-styles/chiaroscuro_3d.jpg`: `214135` bytes
+- `apps/morpheus-studio/dist/media-styles/new_digital_anime.jpg`: `207252` bytes
+- `apps/morpheus-studio/public/media-styles/new_digital_anime.jpg`: `207252` bytes
+- `apps/morpheus-studio/dist/media-styles/chiaroscuro_anime.jpg`: `206917` bytes
+- `apps/morpheus-studio/public/media-styles/chiaroscuro_anime.jpg`: `206917` bytes
+- `apps/morpheus-studio/dist/media-styles/black_ink_anime.jpg`: `200780` bytes
+- `apps/morpheus-studio/public/media-styles/black_ink_anime.jpg`: `200780` bytes
+- `apps/morpheus-studio/dist/media-styles/chiaroscuro_live.jpg`: `188187` bytes
+- `apps/morpheus-studio/public/media-styles/chiaroscuro_live.jpg`: `188187` bytes
+- `apps/morpheus-studio/dist/media-styles/live_clear.jpg`: `177213` bytes
 
 ## Archived Prior Artifacts
 
-- `docs/Architecture/0_archived/20260412T203004Z/00_architecture_summary.md`
-- `docs/Architecture/0_archived/20260412T203004Z/10_repo_snapshot.md`
-- `docs/Architecture/0_archived/20260412T203004Z/10_repo_snapshot_part_001.md`
-- `docs/Architecture/0_archived/20260412T203004Z/20_python_dependency_report.md`
-- `docs/Architecture/0_archived/20260412T203004Z/21_python_dependency_graph.mmd`
+- `docs/Architecture/0_archived/20260413T072410Z/00_architecture_summary.md`
+- `docs/Architecture/0_archived/20260413T072410Z/10_repo_snapshot.md`
+- `docs/Architecture/0_archived/20260413T072410Z/10_repo_snapshot_part_001.md`
+- `docs/Architecture/0_archived/20260413T072410Z/20_python_dependency_report.md`
+- `docs/Architecture/0_archived/20260413T072410Z/21_python_dependency_graph.mmd`
 
 ## Artifact Guide
 

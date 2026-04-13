@@ -107,6 +107,7 @@ interface MorpheusState {
     uiPhaseReport?: string | null;
   };
   workflow: WorkflowState;
+  setWorkflow: (workflow: WorkflowState) => void;
   hydrateWorkspace: (snapshot: {
     project: Project;
     creativeConcept: CreativeConcept;
@@ -153,6 +154,8 @@ interface MorpheusState {
   clearSelection: () => void;
   isItemSelected: (id: string) => boolean;
 }
+
+type PersistedMorpheusState = Partial<MorpheusState>;
 
 export const useMorpheusStore = create<MorpheusState>()(
   persist(
@@ -387,6 +390,7 @@ export const useMorpheusStore = create<MorpheusState>()(
           videoExports: [...state.videoExports, export_],
         })),
       workflow: { approvals: {}, changeRequests: [] },
+      setWorkflow: (workflow) => set({ workflow }),
       reports: {},
       hydrateWorkspace: (snapshot) =>
         set((state) => ({
@@ -427,7 +431,7 @@ export const useMorpheusStore = create<MorpheusState>()(
         // Add a message draft with @ mention
         const draftMessage = `@${item.name} `;
         // Store draft in a way the chat input can access it
-        (window as any).__chatDraft = draftMessage;
+        window.__chatDraft = draftMessage;
       },
       
       // Multi-select State (Shift+Click)
@@ -459,13 +463,18 @@ export const useMorpheusStore = create<MorpheusState>()(
     {
       name: 'morpheus-storage',
       version: 2,
-      migrate: (persistedState: any) => {
-        const state = persistedState && typeof persistedState === 'object' ? { ...persistedState } : {};
+      migrate: (persistedState: unknown) => {
+        const state =
+          persistedState && typeof persistedState === 'object'
+            ? { ...(persistedState as PersistedMorpheusState) }
+            : {};
         const isLegacyMockProjectId = (id: unknown) =>
           typeof id === 'string' && /^proj-\d+$/.test(id);
 
         const projects = Array.isArray(state.projects)
-          ? state.projects.filter((project: any) => !isLegacyMockProjectId(project?.id))
+          ? state.projects.filter(
+              (project): project is Project => Boolean(project) && !isLegacyMockProjectId(project.id)
+            )
           : [];
         const currentProject =
           state.currentProject && !isLegacyMockProjectId(state.currentProject.id)

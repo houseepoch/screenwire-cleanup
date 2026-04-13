@@ -14,10 +14,10 @@ export function Services() {
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
   const mousePos = useRef({ x: 0, y: 0 });
   const triggersRef = useRef<ScrollTrigger[]>([]);
-
-  if (!servicesConfig.title || servicesConfig.services.length === 0) return null;
+  const hasContent = Boolean(servicesConfig.title) && servicesConfig.services.length > 0;
 
   useEffect(() => {
+    if (!hasContent) return;
     const section = sectionRef.current;
     if (!section) return;
 
@@ -79,7 +79,7 @@ export function Services() {
       triggersRef.current.forEach((t) => t.kill());
       triggersRef.current = [];
     };
-  }, []);
+  }, [hasContent]);
 
   const handleMouseMove = (e: React.MouseEvent) => {
     const section = sectionRef.current;
@@ -123,6 +123,8 @@ export function Services() {
   };
 
   const services = servicesConfig.services;
+
+  if (!hasContent) return null;
 
   return (
     <section

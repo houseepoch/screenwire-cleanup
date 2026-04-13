@@ -14,6 +14,7 @@ import hashlib
 import os
 import re
 import shutil
+import sys
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -34,6 +35,9 @@ PRESERVED_ARCHITECTURE_FILES = {
     "README.md",
     "run_architecture_reports.sh",
     "run_architecture_reports.bat",
+}
+EXCLUDED_TOP_LEVEL_DIR_NAMES = {
+    "docs",
 }
 EXCLUDED_DIR_NAMES = {
     ".git",
@@ -125,6 +129,7 @@ class DependencyAnalysis:
     modules: dict[str, ModuleInfo]
     internal_edges: set[DependencyEdge]
     external_imports: Counter[str]
+    stdlib_imports: Counter[str]
 
 
 @dataclass(frozen=True)
@@ -155,6 +160,12 @@ def is_within(child: Path, parent: Path) -> bool:
 
 def should_exclude_dir(path: Path, *, root: Path, output_dir: Path) -> bool:
     if path.name in EXCLUDED_DIR_NAMES:
+        return True
+    try:
+        relative = path.relative_to(root)
+    except ValueError:
+        relative = None
+    if relative and relative.parts and relative.parts[0] in EXCLUDED_TOP_LEVEL_DIR_NAMES:
         return True
     return is_within(path, output_dir)
 
@@ -334,10 +345,18 @@ def _candidate_targets_for_import(
     return local_targets, external_roots
 
 
+def _is_standard_library_root(module_name: str) -> bool:
+    if not module_name:
+        return False
+    stdlib_names = getattr(sys, "stdlib_module_names", frozenset())
+    return module_name in stdlib_names or module_name in sys.builtin_module_names
+
+
 def analyze_python_dependencies(root: Path, *, output_dir: Path) -> DependencyAnalysis:
     modules = collect_python_modules(root, output_dir=output_dir)
     internal_edges: set[DependencyEdge] = set()
     external_imports: Counter[str] = Counter()
+    stdlib_imports: Counter[str] = Counter()
 
     for module in modules.values():
         try:
@@ -356,12 +375,16 @@ def analyze_python_dependencies(root: Path, *, output_dir: Path) -> DependencyAn
                     )
             for external_root in external_roots:
                 if external_root:
-                    external_imports[external_root] += 1
+                    if _is_standard_library_root(external_root):
+                        stdlib_imports[external_root] += 1
+                    else:
+                        external_imports[external_root] += 1
 
     return DependencyAnalysis(
         modules=modules,
         internal_edges=internal_edges,
         external_imports=external_imports,
+        stdlib_imports=stdlib_imports,
     )
 
 
@@ -629,7 +652,8 @@ def render_dependency_report(root: Path, analysis: DependencyAnalysis) -> str:
         f"- Repo root: `{root}`",
         f"- Python modules indexed: `{len(analysis.modules)}`",
         f"- Internal dependency edges: `{len(analysis.internal_edges)}`",
-        f"- External packages referenced: `{len(analysis.external_imports)}`",
+        f"- Standard-library modules referenced: `{len(analysis.stdlib_imports)}`",
+        f"- Third-party packages referenced: `{len(analysis.external_imports)}`",
         "",
         "## Mermaid Graph",
         "",
@@ -654,7 +678,15 @@ def render_dependency_report(root: Path, analysis: DependencyAnalysis) -> str:
     else:
         lines.append("- None")
 
-    lines.extend(["", "## External Packages", ""])
+    lines.extend(["", "## Standard Library Modules", ""])
+    top_stdlib = analysis.stdlib_imports.most_common(40)
+    if top_stdlib:
+        for module_name, count in top_stdlib:
+            lines.append(f"- `{module_name}` referenced `{count}` time(s)")
+    else:
+        lines.append("- None")
+
+    lines.extend(["", "## Third-Party Packages", ""])
     top_external = analysis.external_imports.most_common(40)
     if top_external:
         for package_name, count in top_external:

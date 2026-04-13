@@ -19,10 +19,10 @@ export function Footer() {
   const copyrightRef = useRef<HTMLDivElement>(null);
   const borderRef = useRef<HTMLDivElement>(null);
   const triggersRef = useRef<ScrollTrigger[]>([]);
-
-  if (!footerConfig.copyright) return null;
+  const hasContent = Boolean(footerConfig.copyright);
 
   useEffect(() => {
+    if (!hasContent) return;
     const section = sectionRef.current;
     if (!section) return;
 
@@ -87,10 +87,12 @@ export function Footer() {
       triggersRef.current.forEach((t) => t.kill());
       triggersRef.current = [];
     };
-  }, []);
+  }, [hasContent]);
 
   const marqueeText = footerConfig.marqueeText;
   const highlightChars = footerConfig.marqueeHighlightChars;
+
+  if (!hasContent) return null;
 
   return (
     <footer

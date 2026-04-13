@@ -20,9 +20,11 @@ def _write(path: Path, text: str | bytes) -> None:
         path.write_text(text, encoding="utf-8")
 
 
-def test_collect_repo_files_excludes_architecture_output_and_git(tmp_path: Path) -> None:
+def test_collect_repo_files_excludes_docs_architecture_output_and_git(tmp_path: Path) -> None:
     _write(tmp_path / ".git" / "config", "ignored")
     _write(tmp_path / ".env", "SECRET=value")
+    _write(tmp_path / "docs" / "guide.md", "ignored")
+    _write(tmp_path / "docs" / "Architecture" / "0_archived" / "stamp" / "old.md", "ignored")
     _write(tmp_path / "docs" / "Architecture" / "10_repo_snapshot.md", "generated")
     _write(tmp_path / "projects" / "demo.txt", "ignored")
     _write(tmp_path / "tests" / "projects" / "fixture.txt", "ignored")
@@ -92,7 +94,7 @@ def test_analyze_python_dependencies_resolves_internal_and_external_imports(tmp_
     _write(tmp_path / "pkg" / "__init__.py", "")
     _write(
         tmp_path / "pkg" / "a.py",
-        "import os\nfrom . import b\nfrom pkg import c\n",
+        "import os\nimport httpx\nfrom . import b\nfrom pkg import c\n",
     )
     _write(tmp_path / "pkg" / "b.py", "from pkg import c\n")
     _write(tmp_path / "pkg" / "c.py", "value = 1\n")
@@ -102,7 +104,8 @@ def test_analyze_python_dependencies_resolves_internal_and_external_imports(tmp_
     assert DependencyEdge("pkg.a", "pkg.b") in analysis.internal_edges
     assert DependencyEdge("pkg.a", "pkg.c") in analysis.internal_edges
     assert DependencyEdge("pkg.b", "pkg.c") in analysis.internal_edges
-    assert analysis.external_imports["os"] == 1
+    assert analysis.stdlib_imports["os"] == 1
+    assert analysis.external_imports["httpx"] == 1
 
 
 def test_archive_existing_outputs_rotates_prior_generated_files(tmp_path: Path) -> None:

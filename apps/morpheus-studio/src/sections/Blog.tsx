@@ -13,10 +13,10 @@ export function Blog() {
   const postsRef = useRef<(HTMLDivElement | null)[]>([]);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const triggersRef = useRef<ScrollTrigger[]>([]);
-
-  if (!blogConfig.title || blogConfig.posts.length === 0) return null;
+  const hasContent = Boolean(blogConfig.title) && blogConfig.posts.length > 0;
 
   useEffect(() => {
+    if (!hasContent) return;
     const section = sectionRef.current;
     if (!section) return;
 
@@ -93,7 +93,9 @@ export function Blog() {
       triggersRef.current.forEach((t) => t.kill());
       triggersRef.current = [];
     };
-  }, []);
+  }, [hasContent]);
+
+  if (!hasContent) return null;
 
   return (
     <section

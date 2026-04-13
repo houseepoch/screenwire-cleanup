@@ -39,6 +39,18 @@ interface DragState {
   entityId: string | null;
 }
 
+interface SceneStagingPhase {
+  cast_positions?: unknown;
+  cast_looking_at?: unknown;
+  cast_facing?: unknown;
+}
+
+interface SceneStagingPlan {
+  start?: SceneStagingPhase;
+  mid?: SceneStagingPhase;
+  end?: SceneStagingPhase;
+}
+
 function formatJsonMap(value: unknown): string {
   try {
     return JSON.stringify(value || {}, null, 2);
@@ -65,6 +77,7 @@ export function DetailPanel() {
     scriptText,
     currentProject,
     workflow,
+    setWorkflow,
     hydrateWorkspace,
     toggleItemSelection,
     isItemSelected,
@@ -79,6 +92,7 @@ export function DetailPanel() {
   const [uploadTargetEntity, setUploadTargetEntity] = useState<string | null>(null);
   const [editorTitle, setEditorTitle] = useState('');
   const [editorDescription, setEditorDescription] = useState('');
+  const [workflowActionError, setWorkflowActionError] = useState<string | null>(null);
   const [editorLocation, setEditorLocation] = useState('');
   const [editorCharacters, setEditorCharacters] = useState('');
   const [isSavingSelection, setIsSavingSelection] = useState(false);
@@ -144,7 +158,7 @@ export function DetailPanel() {
     setEditorDescription('');
     setEditorLocation('');
     setEditorCharacters('');
-  }, [selectedEntity?.id, selectedScene?.id]);
+  }, [selectedEntity, selectedScene?.id]);
 
   useEffect(() => {
     let cancelled = false;
@@ -161,7 +175,7 @@ export function DetailPanel() {
         setEditorDescription(String(node.emotional_arc || selectedScene.description || ''));
         setEditorLocation(String(node.location_id || selectedScene.location || ''));
         setEditorCharacters(((node.cast_present as string[] | undefined) || selectedScene.characters || []).join(', '));
-        const staging = (node.staging_plan || {}) as Record<string, any>;
+        const staging = (node.staging_plan || {}) as SceneStagingPlan;
         setSceneStartPositions(formatJsonMap(staging.start?.cast_positions));
         setSceneStartLooking(formatJsonMap(staging.start?.cast_looking_at));
         setSceneStartFacing(formatJsonMap(staging.start?.cast_facing));
@@ -178,7 +192,7 @@ export function DetailPanel() {
     return () => {
       cancelled = true;
     };
-  }, [currentProject?.id, selectedScene?.id]);
+  }, [currentProject, selectedScene]);
 
   useEffect(() => {
     let cancelled = false;
@@ -225,7 +239,7 @@ export function DetailPanel() {
     return () => {
       cancelled = true;
     };
-  }, [currentProject?.id, selectedFrame?.id]);
+  }, [currentProject, selectedFrame]);
 
   const handleItemClick = (item: SelectedItem, e: React.MouseEvent) => {
     const isShiftClick = e.shiftKey;
@@ -402,12 +416,12 @@ export function DetailPanel() {
         return (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
             <div className="skeleton-viewer">
-              {skeletonPlan ? (
+              {skeletonPlan && skeletonPlan.scenes.length > 0 ? (
                 skeletonPlan.scenes.map((scene) => {
                   const isSelected = isItemSelected(scene.id);
                   return (
-                    <div 
-                      key={scene.id} 
+                    <div
+                      key={scene.id}
                       className="skeleton-scene"
                       onClick={(e) => handleItemClick({ type: 'scene', id: scene.id, name: `Scene ${scene.number}` }, e)}
                       style={{
@@ -427,6 +441,17 @@ export function DetailPanel() {
                     </div>
                   );
                 })
+              ) : skeletonPlan?.markdown ? (
+                <pre style={{
+                  whiteSpace: 'pre-wrap',
+                  wordBreak: 'break-word',
+                  fontFamily: 'inherit',
+                  fontSize: '13px',
+                  lineHeight: 1.7,
+                  color: 'var(--text-secondary)',
+                  maxHeight: '600px',
+                  overflow: 'auto',
+                }}>{skeletonPlan.markdown}</pre>
               ) : (
                 <div style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--text-secondary)' }}>
                   <p>No outline generated yet.</p>
@@ -598,21 +623,23 @@ export function DetailPanel() {
   };
 
   const approvalGate =
-    currentProject?.status === 'skeleton_review'
-      ? 'skeleton'
-      : currentProject?.status === 'reference_review'
-        ? 'references'
+    currentProject?.status === 'reference_review'
+      ? 'references'
+      : currentProject?.status === 'timeline_review'
+        ? 'timeline'
         : null;
 
   const handleApprove = async () => {
     if (!currentProject || !approvalGate) {
       return;
     }
+    setWorkflowActionError(null);
     try {
       const snapshot = await API.workflow.approve(currentProject.id, approvalGate);
       hydrateWorkspace(snapshot);
     } catch (error) {
       console.error(`Failed to approve ${approvalGate}:`, error);
+      setWorkflowActionError(error instanceof Error ? error.message : `Failed to approve ${approvalGate}.`);
     }
   };
 
@@ -624,11 +651,17 @@ export function DetailPanel() {
     if (!feedback?.trim()) {
       return;
     }
+    setWorkflowActionError(null);
     try {
-      await API.workflow.requestChanges(currentProject.id, approvalGate, feedback.trim());
+      const response = await API.workflow.requestChanges(currentProject.id, approvalGate, feedback.trim());
+      setWorkflow({
+        approvals: workflow.approvals,
+        changeRequests: response.changeRequests,
+      });
       injectFocusToChat({ type: 'scene', id: approvalGate, name: `${approvalGate} review` });
     } catch (error) {
       console.error(`Failed to request ${approvalGate} changes:`, error);
+      setWorkflowActionError(error instanceof Error ? error.message : `Failed to request ${approvalGate} changes.`);
     }
   };
 
@@ -841,7 +874,7 @@ export function DetailPanel() {
   ];
 
   return (
-    <div className="detail-panel">
+    <div className="detail-panel" data-testid="detail-panel">
       {/* Hidden file input for uploads */}
       <input
         ref={fileInputRef}
@@ -859,27 +892,14 @@ export function DetailPanel() {
 
       {/* Selection info bar */}
       {selectedItems.length > 0 && (
-        <div
-          style={{
-            padding: '8px 16px',
-            background: 'var(--success)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-          }}
-        >
-          <span style={{ fontSize: '13px', color: 'var(--bg-primary)', fontWeight: 500 }}>
+        <div className="detail-selection-bar">
+          <span className="detail-selection-copy">
             {selectedItems.length} item{selectedItems.length > 1 ? 's' : ''} selected
           </span>
           <button
+            type="button"
             onClick={clearSelection}
-            style={{
-              background: 'none',
-              border: 'none',
-              color: 'var(--bg-primary)',
-              fontSize: '12px',
-              cursor: 'pointer',
-            }}
+            className="detail-selection-clear"
           >
             Clear
           </button>
@@ -887,22 +907,13 @@ export function DetailPanel() {
       )}
 
       {selectedItem && (selectedScene || selectedEntity || selectedFrame) && (
-        <div
-          style={{
-            padding: '14px 16px',
-            borderBottom: '1px solid var(--border-subtle)',
-            background: 'var(--bg-secondary)',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '10px',
-          }}
-        >
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div className="detail-editor-bar">
+          <div className="detail-editor-header">
             <div>
-              <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-primary)' }}>
+              <div className="detail-editor-title">
                 Edit selected {selectedFrame ? 'frame' : selectedScene ? 'scene' : selectedEntity?.type}
               </div>
-              <div style={{ fontSize: '10px', color: 'var(--text-secondary)' }}>
+              <div className="detail-editor-subtitle">
                 This writes directly into the project graph.
               </div>
             </div>
@@ -910,7 +921,7 @@ export function DetailPanel() {
               className="btn-accent"
               onClick={() => void handleSaveSelection()}
               disabled={isSavingSelection}
-              style={{ padding: '6px 12px', fontSize: '11px' }}
+              type="button"
             >
               {isSavingSelection ? 'Saving...' : 'Save'}
             </button>
@@ -1305,35 +1316,42 @@ export function DetailPanel() {
       </div>
 
       {(approvalGate || workflow.changeRequests.length > 0) && (
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: '12px',
-            padding: '12px 16px',
-            borderBottom: '1px solid var(--border-subtle)',
-            background: 'var(--bg-secondary)',
-          }}
-        >
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-            <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-primary)' }}>
+        <div className="detail-approval-bar" data-testid="workflow-approval-bar">
+          <div className="detail-approval-copy">
+            <span className="detail-approval-title" data-testid="workflow-approval-title">
               {approvalGate ? `${approvalGate[0].toUpperCase()}${approvalGate.slice(1)} approval gate` : 'Pending change requests'}
             </span>
-            <span style={{ fontSize: '10px', color: 'var(--text-secondary)' }}>
+            <span className="detail-approval-subtitle" data-testid="workflow-approval-subtitle">
               {approvalGate
-                ? 'Review the current materials, then approve or send Morpheus revisions.'
+                ? workflow.changeRequests.length > 0
+                  ? `${workflow.changeRequests.length} change request(s) queued. Review the current materials, then approve or send Morpheus revisions.`
+                  : 'Review the current materials, then approve or send Morpheus revisions.'
                 : `${workflow.changeRequests.length} change request(s) logged for this project.`}
             </span>
           </div>
           {approvalGate ? (
-            <div style={{ display: 'flex', gap: '8px' }}>
-              <button className="btn-secondary" onClick={() => void handleRequestChanges()}>
+            <div className="detail-approval-actions" data-testid="workflow-approval-actions">
+              <button
+                className="btn-secondary"
+                type="button"
+                data-testid="workflow-request-changes-button"
+                onClick={() => void handleRequestChanges()}
+              >
                 Request Changes
               </button>
-              <button className="btn-accent" onClick={() => void handleApprove()}>
+              <button
+                className="btn-accent"
+                type="button"
+                data-testid="workflow-approve-button"
+                onClick={() => void handleApprove()}
+              >
                 Approve
               </button>
+            </div>
+          ) : null}
+          {workflowActionError ? (
+            <div className="inline-alert" data-testid="workflow-approval-error">
+              {workflowActionError}
             </div>
           ) : null}
         </div>

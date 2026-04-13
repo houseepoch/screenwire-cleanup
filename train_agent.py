@@ -63,7 +63,8 @@ def _deploy_shared_conventions(project_dir: Path) -> None:
 AGENTS = [
     ("director",                "Director — orchestrates project lifecycle & reviews gates"),
     ("creative_coordinator",    "Creative Coordinator — narrative contracts, skeleton, assembly"),
-    # Morpheus 1-4 (entity seeder, frame parser, dialogue wirer, compositor) — archived
+    # Archived Morpheus 1-4 helpers previously covered entity seeding, frame parsing,
+    # dialogue wiring, and compositing before the deterministic graph pipeline.
     # image_verifier, composition_verifier, video_verifier — REMOVED (phases 3-5 fully programmatic)
 ]
 

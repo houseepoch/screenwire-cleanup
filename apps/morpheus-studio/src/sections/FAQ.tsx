@@ -12,10 +12,10 @@ export function FAQ() {
   const itemsRef = useRef<(HTMLDivElement | null)[]>([]);
   const [openIndex, setOpenIndex] = useState<number | null>(null);
   const triggersRef = useRef<ScrollTrigger[]>([]);
-
-  if (!faqConfig.title || faqConfig.faqs.length === 0) return null;
+  const hasContent = Boolean(faqConfig.title) && faqConfig.faqs.length > 0;
 
   useEffect(() => {
+    if (!hasContent) return;
     const section = sectionRef.current;
     if (!section) return;
 
@@ -53,11 +53,13 @@ export function FAQ() {
       triggersRef.current.forEach((t) => t.kill());
       triggersRef.current = [];
     };
-  }, []);
+  }, [hasContent]);
 
   const toggleItem = (index: number) => {
     setOpenIndex(openIndex === index ? null : index);
   };
+
+  if (!hasContent) return null;
 
   return (
     <section
@@ -121,7 +123,7 @@ export function FAQ() {
 
               {/* Answer */}
               <div
-                className={`overflow-hidden transition-all duration-500 ease-[cubic-bezier(0.16,1,0.3,1)] ${
+                className={`overflow-hidden transition-all duration-500 ease-studio-snap ${
                   openIndex === index
                     ? 'max-h-[500px] opacity-100'
                     : 'max-h-0 opacity-0'

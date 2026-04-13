@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import gsap from 'gsap';
 import { ScrollTrigger } from 'gsap/ScrollTrigger';
 import { heroConfig } from '../config';
@@ -13,12 +13,11 @@ export function Hero() {
   const servicesRef = useRef<HTMLDivElement>(null);
   const lineRef = useRef<HTMLDivElement>(null);
   const copyrightRef = useRef<HTMLDivElement>(null);
-  const [, setLoaded] = useState(false);
   const triggersRef = useRef<ScrollTrigger[]>([]);
-
-  if (!heroConfig.title) return null;
+  const hasContent = Boolean(heroConfig.title);
 
   useEffect(() => {
+    if (!hasContent) return;
     // Entry animation on load
     const tl = gsap.timeline({ delay: 0.2 });
 
@@ -79,8 +78,6 @@ export function Hero() {
       '-=1'
     );
 
-    setLoaded(true);
-
     // Scroll effects
     const trigger1 = ScrollTrigger.create({
       trigger: sectionRef.current,
@@ -135,7 +132,9 @@ export function Hero() {
       triggersRef.current.forEach((t) => t.kill());
       triggersRef.current = [];
     };
-  }, []);
+  }, [hasContent]);
+
+  if (!hasContent) return null;
 
   const titleChars = heroConfig.title.split('');
 

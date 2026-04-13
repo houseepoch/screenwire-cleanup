@@ -70,6 +70,9 @@ module.exports = {
       fontFamily: {
         sans: ['Geist', 'sans-serif'],
       },
+      transitionTimingFunction: {
+        'studio-snap': 'cubic-bezier(0.16, 1, 0.3, 1)',
+      },
       fontSize: {
         'display-xxl': ['168px', { lineHeight: '1.15', fontWeight: '500' }],
         'display-xl': ['126px', { lineHeight: '1', fontWeight: '500' }],

@@ -8,6 +8,7 @@ __pycache__/
 # Node / Electron
 node_modules/
 dist/
+apps/*/output/
 apps/*/smoke/artifacts/
 apps/*/smoke/last-run.json
 

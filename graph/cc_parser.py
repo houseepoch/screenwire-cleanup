@@ -1184,11 +1184,15 @@ def extract_dialogue(
             start_line = 0
             end_line   = 0
 
-            if src_lines and '-' in src_lines:
+            if src_lines:
                 try:
-                    sl_parts   = src_lines.split('-')
-                    start_line = int(sl_parts[0].strip())
-                    end_line   = int(sl_parts[1].strip())
+                    if '-' in src_lines:
+                        sl_parts   = src_lines.split('-')
+                        start_line = int(sl_parts[0].strip())
+                        end_line   = int(sl_parts[1].strip())
+                    else:
+                        start_line = int(src_lines.strip())
+                        end_line   = start_line
                     raw_line   = _extract_by_src_lines(creative_lines, start_line, end_line)
 
                     # Fuzzy anchor validation (warn but don't halt)

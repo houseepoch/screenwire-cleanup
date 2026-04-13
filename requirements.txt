@@ -7,3 +7,4 @@ httpx
 aiofiles
 pydantic
 openai>=1.35.0
+xai-sdk

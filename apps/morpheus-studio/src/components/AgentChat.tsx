@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { useMorpheusStore } from '../store';
 import API from '../services/api';
-import { Focus } from 'lucide-react';
+import { Focus, SendHorizontal, Sparkles } from 'lucide-react';
 
 export function AgentChat() {
   const { 
@@ -35,7 +35,7 @@ export function AgentChat() {
     void API.chat.setFocus(currentProject.id, focusedItem).catch((error) => {
       console.error('Failed to sync chat focus:', error);
     });
-  }, [currentProject?.id, focusedItem]);
+  }, [currentProject, focusedItem]);
 
   const handleSend = async () => {
     if (!inputValue.trim()) return;
@@ -110,48 +110,44 @@ export function AgentChat() {
   };
 
   return (
-    <div className="agent-panel">
+    <div className="agent-panel" data-testid="agent-panel">
       <div className="agent-header">
-        <span className="agent-header-title">Morpheus Agent</span>
+        <div className="agent-header-icon">
+          <Sparkles size={16} />
+        </div>
+        <div className="agent-header-copy">
+          <span className="agent-header-kicker">Agent Console</span>
+          <span className="agent-header-title">Morpheus Agent</span>
+        </div>
+        <div className="agent-header-status">Live</div>
       </div>
 
       <div className="agent-messages">
+        {messages.length === 0 && (
+          <div className="agent-empty-state">
+            <span className="agent-empty-kicker">Ready for direction</span>
+            <h3>Ask for revisions, approvals, or a clean reframe.</h3>
+            <p>
+              Focus scenes, frames, or entities from the workspace and Morpheus will work inside
+              that context.
+            </p>
+          </div>
+        )}
         {messages.map((message) => (
           <div
             key={message.id}
-            style={{
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: message.role === 'user' ? 'flex-end' : 'flex-start',
-              gap: '4px',
-            }}
+            className={`chat-thread ${message.role === 'user' ? 'chat-thread-user' : 'chat-thread-agent'}`}
           >
             {message.focusTarget && message.role === 'user' && (
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '4px',
-                  padding: '4px 10px',
-                  background: 'var(--accent-dim)',
-                  borderRadius: '12px',
-                  fontSize: '10px',
-                  color: 'var(--accent)',
-                  marginBottom: '4px',
-                }}
-              >
+              <div className="chat-focus-chip">
                 <Focus size={10} />
                 Focusing on: {message.focusTarget.name}
               </div>
             )}
-            <div
-              className={`chat-bubble ${message.role === 'user' ? 'chat-bubble-user' : 'chat-bubble-agent'}`}
-            >
-              <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
-                <span>{message.content}</span>
-              </div>
+            <div className={`chat-bubble ${message.role === 'user' ? 'chat-bubble-user' : 'chat-bubble-agent'}`}>
+              <span>{message.content}</span>
             </div>
-            <span style={{ fontSize: '9px', color: 'var(--text-muted)' }}>
+            <span className="chat-timestamp">
               {new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
             </span>
           </div>
@@ -160,51 +156,29 @@ export function AgentChat() {
       </div>
 
       {focusedItem && (
-        <div
-          style={{
-            padding: '8px 16px',
-            background: 'var(--accent-dim)',
-            borderTop: '1px solid var(--accent-border)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '11px' }}>
+        <div className="agent-focus-bar">
+          <div className="agent-focus-copy">
             <Focus size={10} style={{ color: 'var(--accent)' }} />
             <span>Focused on: <strong>{focusedItem.name}</strong></span>
           </div>
           <button
+            type="button"
             onClick={() => setFocusedItem(null)}
-            style={{
-              background: 'none',
-              border: 'none',
-              color: 'var(--text-secondary)',
-              cursor: 'pointer',
-              padding: '4px',
-            }}
+            className="agent-focus-clear"
           >
-            ×
+            Clear
           </button>
         </div>
       )}
 
       <div className="agent-input-container">
-        <div style={{ display: 'flex', gap: '6px', marginBottom: '10px', justifyContent: 'center' }}>
+        <div className="agent-mode-toggle">
           {(['suggest', 'apply', 'regenerate'] as const).map((mode) => (
             <button
               key={mode}
+              type="button"
               onClick={() => setChatMode(mode)}
-              style={{
-                padding: '4px 10px',
-                borderRadius: '999px',
-                border: `1px solid ${chatMode === mode ? 'var(--accent)' : 'var(--border-subtle)'}`,
-                background: chatMode === mode ? 'var(--accent-dim)' : 'transparent',
-                color: chatMode === mode ? 'var(--accent)' : 'var(--text-secondary)',
-                fontSize: '10px',
-                textTransform: 'uppercase',
-                cursor: 'pointer',
-              }}
+              className={`agent-mode-pill ${chatMode === mode ? 'active' : ''}`}
             >
               {mode}
             </button>
@@ -220,15 +194,17 @@ export function AgentChat() {
             rows={1}
             disabled={isSending}
           />
-          <button 
+          <button
+            type="button"
             className="agent-send-btn"
             onClick={handleSend}
             disabled={!inputValue.trim() || isSending}
+            aria-label={isSending ? 'Sending message' : 'Send message'}
           >
-            {isSending ? 'Sending...' : 'Send'}
+            {isSending ? '...' : <SendHorizontal size={16} />}
           </button>
         </div>
-        <p style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '8px', textAlign: 'center' }}>
+        <p className="agent-helper-copy">
           Tip: shift-click items to focus Morpheus, then choose suggest, apply, or regenerate.
         </p>
       </div>

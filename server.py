@@ -20,16 +20,14 @@ from pathlib import Path
 from typing import Any, Optional
 
 from dotenv import load_dotenv
-load_dotenv(Path(__file__).resolve().parent / ".env")
-
 import httpx
-from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from tenacity import (
     retry,
+    retry_if_exception,
     retry_if_exception_type,
     stop_after_attempt,
     wait_exponential,
@@ -456,15 +454,14 @@ ui_pipeline_jobs: dict[str, dict[str, Any]] = {}
 # Retry predicate — only retry on 429 / 500 / 503
 # ---------------------------------------------------------------------------
 
-def _retryable_status(retry_state) -> bool:
-    exc = retry_state.outcome.exception() if retry_state.outcome else None
+def _retryable_status(exc: BaseException) -> bool:
     if isinstance(exc, httpx.HTTPStatusError):
         return exc.response.status_code in (429, 500, 503)
     return False
 
 
 _gateway_retry = retry(
-    retry=_retryable_status,
+    retry=retry_if_exception(_retryable_status),
     wait=wait_exponential(min=2, max=30),
     stop=stop_after_attempt(3),
     reraise=True,
@@ -744,7 +741,27 @@ def _assert_project(project_id: str) -> None:
 
 def _workspace_snapshot(project_id: str) -> dict[str, Any]:
     _assert_project(project_id)
-    return build_workspace_snapshot(project_id, PROJECT_DIR)
+    snapshot = build_workspace_snapshot(project_id, PROJECT_DIR)
+    workers = _project_workers_payload()
+    snapshot["workers"] = workers
+
+    active_jobs = [
+        job
+        for job in ui_pipeline_jobs.values()
+        if job.get("status") == "running"
+        and (job.get("process") is None or job["process"].returncode is None)
+    ]
+    if active_jobs:
+        active_job = max(active_jobs, key=lambda job: int(job.get("activePhase") or 0))
+        project = dict(snapshot.get("project") or {})
+        project["status"] = _pipeline_status_for_phase(int(active_job.get("activePhase") or 0))
+        project["progress"] = max(
+            int(project.get("progress") or 0),
+            int(active_job.get("progress") or 0),
+        )
+        snapshot["project"] = project
+
+    return snapshot
 
 
 def _chat_history_path() -> Path:
@@ -941,6 +958,46 @@ def _project_workers_payload() -> list[dict[str, Any]]:
     return workers
 
 
+def _pipeline_status_for_phase(phase_number: int) -> str:
+    if phase_number <= 3:
+        return "generating_assets"
+    if phase_number == 4:
+        return "generating_frames"
+    return "generating_video"
+
+
+def _default_job_name(job_name: str, phase_numbers: list[int]) -> str:
+    if phase_numbers == [1, 2, 3]:
+        return "Preproduction Build"
+    if phase_numbers == [4]:
+        return "Frame Generation"
+    if phase_numbers == [5]:
+        return "Video Generation"
+    return job_name.replace("_", " ").title()
+
+
+def _default_job_running_message(phase_numbers: list[int], active_phase: int) -> str:
+    if phase_numbers == [1, 2, 3]:
+        return "Generating script, graph, and review assets..."
+    if phase_numbers == [4]:
+        return "Generating approved frames..."
+    if phase_numbers == [5]:
+        return "Generating approved video clips..."
+    return f"Running pipeline phase {active_phase}"
+
+
+def _default_job_complete_message(phase_numbers: list[int]) -> str:
+    if phase_numbers == [1, 2, 3]:
+        return "Preproduction build completed"
+    if phase_numbers == [4]:
+        return "Frame generation completed"
+    if phase_numbers == [5]:
+        return "Video generation completed"
+    if len(phase_numbers) == 1:
+        return f"Phase {phase_numbers[0]} completed"
+    return "Pipeline phases completed"
+
+
 def _focus_summary(focus_target: dict[str, Any] | None, focus_targets: list[dict[str, Any]] | None = None) -> str:
     focus_targets = [item for item in (focus_targets or []) if isinstance(item, dict) and item.get("id")]
     if focus_targets:
@@ -1026,51 +1083,74 @@ def _run_morpheus_chat(
     )
 
 
-async def _spawn_pipeline_phase_job(job_name: str, phase_number: int) -> dict[str, Any]:
+async def _spawn_pipeline_phase_job(
+    job_name: str,
+    phase_numbers: int | list[int],
+    *,
+    display_name: str | None = None,
+    running_message: str | None = None,
+    completion_message: str | None = None,
+) -> dict[str, Any]:
+    phases = [int(phase_numbers)] if isinstance(phase_numbers, int) else [int(phase) for phase in phase_numbers]
     existing = ui_pipeline_jobs.get(job_name)
-    if existing and existing.get("process") and existing["process"].returncode is None:
+    if existing and existing.get("status") == "running" and (
+        existing.get("process") is None or existing["process"].returncode is None
+    ):
         return existing
 
-    cmd = [
-        sys.executable,
-        str(APP_DIR / "run_pipeline.py"),
-        "--project",
-        PROJECT_DIR.name,
-        "--phase",
-        str(phase_number),
-        "--live",
-    ]
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        cwd=str(APP_DIR),
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        env=dict(os.environ),
-    )
     job = {
         "id": job_name,
-        "name": job_name.replace("_", " ").title(),
+        "name": display_name or _default_job_name(job_name, phases),
         "status": "running",
         "progress": 5,
-        "message": f"Running pipeline phase {phase_number}",
-        "process": proc,
+        "message": running_message or _default_job_running_message(phases, phases[0]),
+        "process": None,
+        "phaseNumbers": phases,
+        "activePhase": phases[0],
     }
     ui_pipeline_jobs[job_name] = job
 
     async def _watch() -> None:
-        stdout_data, stderr_data = await proc.communicate()
-        if stdout_data:
-            log("UIJob", stdout_data.decode(errors="ignore"))
-        if stderr_data:
-            log("UIJob", stderr_data.decode(errors="ignore"))
-        if proc.returncode == 0:
-            job["status"] = "complete"
-            job["progress"] = 100
-            job["message"] = f"Phase {phase_number} completed"
-        else:
-            job["status"] = "error"
-            job["progress"] = 100
-            job["message"] = f"Phase {phase_number} failed"
+        total_phases = max(len(phases), 1)
+        for index, phase_number in enumerate(phases):
+            job["activePhase"] = phase_number
+            job["progress"] = max(5, round((index / total_phases) * 100))
+            job["message"] = running_message or _default_job_running_message(phases, phase_number)
+
+            cmd = [
+                sys.executable,
+                str(APP_DIR / "run_pipeline.py"),
+                "--project",
+                PROJECT_DIR.name,
+                "--phase",
+                str(phase_number),
+                "--live",
+            ]
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                cwd=str(APP_DIR),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=dict(os.environ),
+            )
+            job["process"] = proc
+
+            stdout_data, stderr_data = await proc.communicate()
+            if stdout_data:
+                log("UIJob", stdout_data.decode(errors="ignore"))
+            if stderr_data:
+                log("UIJob", stderr_data.decode(errors="ignore"))
+
+            if proc.returncode != 0:
+                job["status"] = "error"
+                job["progress"] = 100
+                job["message"] = f"{job['name']} failed during phase {phase_number}"
+                return
+
+        job["process"] = None
+        job["status"] = "complete"
+        job["progress"] = 100
+        job["message"] = completion_message or _default_job_complete_message(phases)
 
     asyncio.create_task(_watch())
     return job
@@ -1190,7 +1270,13 @@ async def get_project_skeleton(project_id: str):
 @app.post("/api/projects/{project_id}/skeleton/generate")
 async def generate_project_skeleton(project_id: str):
     _assert_project(project_id)
-    job = await _spawn_pipeline_phase_job("skeleton_generation", 1)
+    job = await _spawn_pipeline_phase_job(
+        "preproduction_build",
+        [1, 2, 3],
+        display_name="Preproduction Build",
+        running_message="Generating script, graph, and review assets...",
+        completion_message="Preproduction build completed",
+    )
     return {
         "jobId": job["id"],
         "status": job["status"],
@@ -1206,17 +1292,51 @@ async def approve_project_skeleton(project_id: str):
     approvals["skeletonApprovedAt"] = datetime.now(timezone.utc).isoformat()
     state["approvals"] = approvals
     _save_workspace_state_file(state)
-    return {"ok": True}
+    await _spawn_pipeline_phase_job(
+        "preproduction_build",
+        [2, 3],
+        display_name="Preproduction Build",
+        running_message="Generating graph and review assets...",
+        completion_message="Preproduction build completed",
+    )
+    return _workspace_snapshot(project_id)
 
 
 @app.post("/api/projects/{project_id}/approve")
 async def approve_project_gate(project_id: str, req: UIApprovalRequest):
     _assert_project(project_id)
+    gate = str(req.gate or "").strip().lower()
     state = _workspace_state()
     approvals = dict(state.get("approvals") or {})
-    approvals[_approval_key(req.gate)] = datetime.now(timezone.utc).isoformat()
+    approvals[_approval_key(gate)] = datetime.now(timezone.utc).isoformat()
     state["approvals"] = approvals
     _save_workspace_state_file(state)
+
+    if gate == "skeleton":
+        await _spawn_pipeline_phase_job(
+            "preproduction_build",
+            [2, 3],
+            display_name="Preproduction Build",
+            running_message="Generating graph and review assets...",
+            completion_message="Preproduction build completed",
+        )
+    elif gate in {"reference", "references"}:
+        await _spawn_pipeline_phase_job(
+            "frame_generation",
+            [4],
+            display_name="Frame Generation",
+            running_message="Generating approved frames...",
+            completion_message="Frame generation completed",
+        )
+    elif gate == "timeline":
+        await _spawn_pipeline_phase_job(
+            "video_generation",
+            [5],
+            display_name="Video Generation",
+            running_message="Generating approved video clips...",
+            completion_message="Video generation completed",
+        )
+
     return _workspace_snapshot(project_id)
 
 

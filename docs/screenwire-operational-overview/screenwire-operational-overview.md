@@ -21,7 +21,7 @@ The requested emphasis of this paper is operational completeness. It covers:
 - scaffold and folder topology
 - onboarding and bootstrap behavior
 - Creative Coordinator process
-- Morpheus extraction process
+- deterministic graph construction process
 - graph schema, nodes, edges, and support packets
 - image prompt builders and video prompt builders
 - image generation patterns and video generation patterns
@@ -202,10 +202,25 @@ This matters operationally because the scaffold includes some legacy nested prom
 - `--name`
 - `--id`
 - `--seed`
-- `--stickiness`
-- `--size`
+- `--creative-freedom`
+- `--frame-budget`
+- `--size` (legacy preset alias for `--frame-budget`)
 - `--media-style`
 - `--pipeline-type`
+
+Accepted creative-freedom tiers:
+
+- `strict`
+- `balanced`
+- `creative`
+- `unbounded`
+
+Accepted frame-budget presets via `--size`:
+
+- `short`
+- `short_film`
+- `televised`
+- `feature`
 
 Accepted pipeline types:
 
@@ -213,18 +228,11 @@ Accepted pipeline types:
 - `pitch_idea`
 - `music_video`
 
-Accepted output sizes:
-
-- `short`
-- `short_film`
-- `televised`
-- `feature`
-
 ### 6.2 Bootstrap flow
 
 Project bootstrap is deterministic:
 
-1. validate stickiness, size, and media style
+1. validate creative freedom, frame budget, and media style
 2. copy the template into `projects/{project_id}`
 3. fill placeholder values in `project_manifest.json`
 4. write a richer `source_files/onboarding_config.json`
@@ -236,12 +244,12 @@ The template onboarding JSON is minimal, but `create_project.py` expands it into
 
 - `projectName`
 - `projectId`
-- `stickinessLevel`
-- `stickinessPermission`
-- `outputSize`
-- `outputSizeLabel`
-- `frameRange`
-- `sceneRange`
+- `creativeFreedom`
+- `creativeFreedomPermission`
+- `creativeFreedomFailureModes`
+- `dialoguePolicy`
+- `dialogueWorkflow`
+- `frameBudget`
 - `mediaStyle`
 - `mediaStylePrefix`
 - `pipeline`
@@ -258,12 +266,12 @@ Representative post-bootstrap schema:
 {
   "projectName": "Example Project",
   "projectId": "sw_lg_example_project_001",
-  "stickinessLevel": 3,
-  "stickinessPermission": "Expand. ...",
-  "outputSize": "short",
-  "outputSizeLabel": "Short",
-  "frameRange": [10, 20],
-  "sceneRange": [1, 3],
+  "creativeFreedom": "balanced",
+  "creativeFreedomPermission": "Minor organic moments, natural pauses, slight framing tweaks, and delivery smoothing are allowed, but the source meaning and intent must stay intact.",
+  "creativeFreedomFailureModes": "Dialogue can drift into sounding more natural and quietly change meaning. Prevent this by allowing only light delivery smoothing and forbidding new lines or new plot material.",
+  "dialoguePolicy": "Minor re-phrasing for natural delivery only. No new lines. No added reactions. Changes must preserve exact meaning and intent.",
+  "dialogueWorkflow": {"enabled": true, "version": "grok-4.2-recovery-universal"},
+  "frameBudget": 125,
   "mediaStyle": "live_clear",
   "mediaStylePrefix": "live action, stark, high-contrast modern digital photography aesthetic ...",
   "pipeline": "story_upload",
@@ -295,41 +303,49 @@ and the default `dialoguePath`:
 
 - `dialogue.json`
 
-### 6.5 Stickiness model
+### 6.5 Creative-freedom model
 
-Stickiness is a Creative Coordinator constraint only. Downstream graph and generation stages do not reinterpret it.
+Creative freedom is not only a Creative Coordinator prompt hint. It is a runtime contract that persists into Phase 2 validation and manifest materialization.
 
-The bootstrap source of truth is `create_project.py:STICKINESS_PERMISSIONS`. The exact levels are:
+The bootstrap source of truth is:
 
-| Level | Label | Exact permission | Operational effect |
-|---|---|---|---|
-| `1` | `Reformat` | `Restructure and rewrite the source material into operational format without altering story content. No new characters, scenes, dialogue, or events. The source dictates what exists — you dictate how it reads on the page.` | The CC may change format and clarity only. No additive narrative invention. |
-| `2` | `Remaster` | `Adhere to the source material faithfully while enriching quality. Smooth transitions, add sensory detail, deepen descriptions, fill gaps that make scenes feel complete. Same story, higher fidelity. No new plot elements, characters, or narrative departures.` | The CC may enrich prose density and readability, but plot and cast remain fixed. |
-| `3` | `Expand` | `Follow the source material's direction but round out incomplete areas. Add transitional scenes, supporting details, and environmental context the source implies but doesn't show. All additions must serve what's already demonstrated — supporting information, not new story.` | This is the operational default. The CC prompt further biases this level toward dialogue-rich scene writing wherever interaction exists. |
-| `4` | `Reimagine` | `Use the source's story, narrative, and themes as a creative foundation. You may introduce new cast, locations, and writing to serve existing arcs. The original tone, themes, and trajectory are respected — but the canvas is wider.` | The CC may widen the world and rewrite scene construction while remaining recognizably tied to the source. |
-| `5` | `Create` | `The source is a seed idea. Write an original story inspired by its guidance, introducing rich characters, props, locations, and story events to fill out the targeted output size. Full creative ownership.` | The CC may originate the story almost entirely, using the source only as conceptual fuel. |
+- `create_project.py:CREATIVE_FREEDOM_TIERS`
+- `screenwire_contracts.py:CREATIVE_FREEDOM_CONTRACTS`
 
-Important nuance:
+The active tiers are:
 
-- the exact permission sentence is copied into `source_files/onboarding_config.json` as `stickinessPermission`
-- the Creative Coordinator prompt treats that sentence as law
-- Morpheus, prompt assembly, asset generation, and export do not branch on stickiness after Phase 1
+| Tier | Philosophy | Operational effect |
+|---|---|---|
+| `strict` | Change as little as possible to make it work. | Preserve source dialogue, blocking, props, intent, and scene progression exactly. |
+| `balanced` | Follow the source closely with room for natural flow. | Allow light delivery smoothing and minor framing tweaks without changing meaning or plot. |
+| `creative` | Keep the core story while allowing artistic reframes. | Allow alternative angles, visual metaphor, and short reaction lines that reinforce existing subtext. |
+| `unbounded` | Start from a seed idea and fully expand into a complete story. | Allow broad invention while preserving the core emotional arc and ending. |
+
+Important runtime facts:
+
+- the exact permission sentence is copied into `source_files/onboarding_config.json` as `creativeFreedomPermission`
+- failure-mode guardrails and dialogue rules are persisted as `creativeFreedomFailureModes` and `dialoguePolicy`
+- `run_pipeline.py` threads these fields into `ProjectNode`
+- `graph_validate_dialogue` enforces tier compliance during Phase 2 post-processing
+- `graph/materializer.py` projects the same fields back into `project_manifest.json`
 
 ### 6.6 Output-size model
 
-These values are operational, not merely descriptive:
+Frame budget is the bootstrap source of truth. `outputSize` is derived later from the budget for reporting and heuristics.
 
-| Output Size | Frame Range | Scene Range |
-|---|---:|---:|
-| `short` | 10-20 | 1-3 |
-| `short_film` | 50-125 | 5-15 |
-| `televised` | 200-300 | 20-40 |
-| `feature` | 750-1250 | 60-120 |
+Preset mappings:
+
+| Preset | Frame Budget |
+|---|---:|
+| `short` | 20 |
+| `short_film` | 125 |
+| `televised` | 300 |
+| `feature` | 1250 |
 
 They influence:
 
-- Creative Coordinator paragraph density
-- expected scene count
+- derived `outputSize` / `outputSizeLabel`
+- expected scene-count heuristics
 - quality gate expectations
 - likely generation cost and throughput
 
@@ -529,7 +545,7 @@ Checks:
 Phase 1 is three operations, not one:
 
 1. Creative Coordinator skeleton-only run
-2. parallel Haiku prose workers, one per scene
+2. parallel Grok prose workers, one per scene
 3. Creative Coordinator assembly-only run
 
 Important runtime details:
@@ -555,18 +571,21 @@ Quality gate:
 Execution gap:
 the gate may over-warn on a valid one-scene short project because the heuristic minimum is two drafts.
 
-### 9.3 Phase 2: Morpheus graph construction
+### 9.3 Phase 2: deterministic graph construction
 
 Phase 2 sequence:
 
 1. `graph_init` if `graph/narrative_graph.json` does not exist
-2. build the Morpheus shared context seed
-3. run Agent 1 `morpheus_1_entity_seeder`
-4. run Agent 2 `morpheus_2_frame_parser`
-5. run Agents 3 and 4 in parallel
-6. run Agent 5 `morpheus_5_continuity_wirer`
+2. build the shared context seed
+3. run `graph/cc_parser.py` to construct the base `NarrativeGraph`
+4. run `graph/frame_enricher.py` in parallel for per-frame composition, environment, and directing enrichment
+5. run `graph/grok_tagger.py` to assign `CinematicTag` metadata
+6. run `graph/continuity_validator.py` for deterministic continuity and contract checks
 7. run deterministic post-processing:
    - `graph_assemble_prompts`
+   - `graph_validate_dialogue`
+   - `prompt_pair_validator`
+   - reconcile scene cast presence
    - `graph_materialize`
    - `graph_validate_video_direction --fix`
 
@@ -584,6 +603,7 @@ Quality gate:
 - checks graph/manifest cast integrity
 - checks dialogue exists
 - checks flat profiles exist
+- hard-fails on dialogue recovery or creative-freedom tier violations during `graph_validate_dialogue`
 
 Heuristic caveat:
 the Phase 2 gate expects at least two cast profiles, which may over-warn on intentionally single-character stories.
@@ -614,7 +634,7 @@ The phase explicitly regenerates missing or corrupt assets via `sw_fresh_generat
 Execution gaps:
 
 - the authored `image_verifier` prompt is no longer the active Phase 3 operator; `run_pipeline.py` performs a programmatic replacement for asset review and regeneration
-- the regeneration helper reads `image_size` from prompt JSON, but active prompt artifacts store `size`; on regen, asset size can therefore silently fall back to `landscape_16_9` instead of the authored preset
+- regeneration prefers `size`, warns on legacy `image_size`, and rejects conflicting values before proceeding
 
 ### 9.5 Phase 4: final frame composition
 
@@ -662,7 +682,6 @@ Operational rule:
 
 Execution gaps:
 
-- the phase-level runner hard-fails if `XAI_API_KEY` is absent, but the underlying refiner itself can mark prompts `skipped:*` or `failed:*` and return the unrefined prompt rather than crashing
 - the authored `video_verifier` prompt is not the active Phase 5 operator; the runner performs refinement and clip generation programmatically
 - long video prompts are reduced to fit model limits by section dropping and then hard truncation, which preserves operability but not always semantic cleanliness
 
@@ -783,24 +802,17 @@ if Phase 1 prose is weak, every later deterministic system receives bad inputs a
 
 ### 10.8 Authored agent prompt inventory
 
-The `agent_prompts/` directory is not decorative documentation. It is the authored operational contract for the swarm phases and quality agents.
+The `agent_prompts/` directory now mixes active prompt contracts with historical design references from the retired Morpheus path.
 
-Primary narrative and graph prompts:
+Active prompt contracts:
 
-- `agent_prompts/creative_coordinator.md`: the Phase 1 authoring prompt. It defines the CC as a three-pass architect, prose, and assembly agent; binds it to `stickinessPermission`; forces `///` frame markers; and makes paragraph count a direct cost lever because one paragraph becomes one downstream frame.
+- `agent_prompts/creative_coordinator.md`: the Phase 1 authoring prompt. It defines the CC as a three-pass architect, prose, and assembly agent; binds it to the persisted `creativeFreedomPermission` / `dialoguePolicy` contract; forces `///` frame markers; and makes paragraph count a direct cost lever because one paragraph becomes one downstream frame.
 - `agent_prompts/writing_guide.md`: the prose-construction companion prompt. It defines the six visual-flow elements, the 18 formula tags, setup/payoff alternation, dialogue-with-physical-business rules, cardinal camera-direction discipline, and paragraph-level atomization expectations.
-- `agent_prompts/morpheus_shared.md`: the shared graph-work contract. It defines graph skills, overlay-safe write patterns, provenance requirements, ID formats, and the quality bar that every Morpheus agent inherits.
-- `agent_prompts/morpheus_1_entity_seeder.md`: seeds world entities before frame-level work starts. Its job is to materialize project, cast, location, prop, scene, and early relationship state with enough fidelity that later prompt assembly has wardrobe, directions, and location type available.
-- `agent_prompts/morpheus_2_frame_parser.md`: parses `creative_output.md` strictly from CC-authored `///` markers rather than re-atomizing prose. It creates `FrameNode`s, frame states, formula tags, frame order, `suggested_duration`, camera-facing data, and baseline directing intent.
-- `agent_prompts/morpheus_3_dialogue_wirer.md`: extracts dialogue spans, preserves `raw_line` verbatim, assigns speaker linkage, and writes to `graph/overlay_dialogue.json` through overlay-safe code rather than the base graph.
-- `agent_prompts/morpheus_4_compositor.md`: enriches frame-level environment, background, composition, and directing data in `graph/overlay_composition.json`. This is where lighting direction, staging, background life, camera motivation, and other cinematic detail are concretized.
-- `agent_prompts/morpheus_5_continuity_wirer.md`: the final graph closer. It merges overlays, wires remaining edges, runs continuity audits, audits dialogue coverage, validates video direction completeness, and finalizes the Morpheus phase state.
 
-Quality-gate and production prompts:
+Historical / superseded prompt specs:
 
-- `agent_prompts/composition_verifier.md`: reads deterministic frame image prompt JSONs, batches frame generation up to 10 at a time, visually verifies results, and performs limited correction passes before projecting paths back into manifest state.
-- `agent_prompts/video_verifier.md`: reads deterministic video prompt JSONs, batches Grok-video clip generation, verifies duration and motion quality, and projects clip results back into manifest state.
-- `agent_prompts/image_verifier.md`: reviews already generated cast, location, and prop reference images and can regenerate or edit defective assets. This is a secondary quality pass over non-frame stills.
+- `agent_prompts/morpheus_shared.md` and `agent_prompts/morpheus_1_*` through `morpheus_5_*`: these document the retired multi-agent Phase 2 design. The active runtime now uses `graph/cc_parser.py`, `graph/frame_enricher.py`, `graph/grok_tagger.py`, and `graph/continuity_validator.py` instead of spawning Morpheus agents.
+- `agent_prompts/composition_verifier.md`, `video_verifier.md`, and `image_verifier.md`: these describe intended quality-agent behavior, but the active runner performs the corresponding work programmatically.
 
 Legacy or secondary prompts:
 
@@ -808,13 +820,14 @@ Legacy or secondary prompts:
 
 Prompt execution reality:
 
-- the authored prompts define the intent and required artifacts
+- the authored prompts still define Phase 1 writing intent and several artifact contracts
 - `run_pipeline.py` decides which prompt is actually invoked, in which mode, and with what runtime override
-- several prompt documents still describe a more agentic approval pipeline than the current headless runner actually performs
+- Phase 2 graph construction is now code-driven rather than prompt-driven
+- several prompt documents remain as design history and should not be read as the current executor path
 
-## 11. Morpheus Extraction Process
+## 11. Deterministic Graph Construction Process
 
-Phase 2 is a five-agent graph build with deterministic cleanup.
+Phase 2 is a code-driven graph build with deterministic cleanup.
 
 ### 11.1 Shared context seed
 
@@ -826,9 +839,9 @@ Phase 2 is a five-agent graph build with deterministic cleanup.
 - `creative_output/creative_output.md`
 - optional director brief
 
-### 11.2 Agent 1: Entity Seeder
+### 11.2 Step 2a: CC parser
 
-Seeds:
+The parser seeds:
 
 - `ProjectNode`
 - `WorldContext`
@@ -845,60 +858,41 @@ Important rules:
 - every location needs `location_type`
 - location direction views become downstream spatial anchors
 
-### 11.3 Agent 2: Frame Parser
+### 11.3 Step 2b: frame enricher
 
-Consumes the `///` structure and creates:
+The frame enricher consumes the parser output and populates:
 
-- `FrameNode`
-- `CastFrameState`
-- `PropFrameState`
-- `LocationFrameState`
-
-It also establishes:
-
-- frame order
-- sequence links
-- formula tags
-- `narrative_beat`
-- `action_summary`
-- `background.camera_facing`
-
-### 11.4 Agent 3: Dialogue Wirer
-
-Creates `DialogueNode` records, wires temporal spans, and preserves verbatim spoken text in `raw_line`.
-
-This agent writes to an overlay graph instead of directly mutating the base graph.
-
-### 11.5 Agent 4: Compositor
-
-Populates frame-level cinematic detail:
-
-- `FrameEnvironment`
-- `FrameBackground`
 - `FrameComposition`
 - `FrameDirecting`
+- `FrameEnvironment`
+- `FrameBackground`
+- enriched `CastFrameState`, `PropFrameState`, and `LocationFrameState`
 
-This agent also writes to an overlay graph.
+### 11.4 Step 2b.5: Grok tagger
 
-### 11.6 Agent 5: Continuity Wirer
+The tagger assigns one `CinematicTag` per frame after enrichment so prompt assembly can inject explicit cinematic direction instead of the old formula-tag language.
 
-Finalizes coherence by:
+### 11.5 Step 2c: continuity and dialogue validation
 
-- merging overlays
-- wiring edges
+Deterministic validators finalize coherence by:
+
 - checking continuity
 - checking dialogue coverage
+- checking prompt-pair consistency
 - validating video direction completeness
+- enforcing the active creative-freedom tier against dialogue assignments
 
-### 11.7 Deterministic cleanup after the swarm
+### 11.6 Step 2d: deterministic post-processing
 
-After the five authored prompts finish, the runtime always follows with deterministic operations:
+After parser/enricher/tagger/validator execution, the runtime always follows with deterministic operations:
 
 - prompt assembly
+- dialogue validation
+- scene cast reconciliation
 - materialization
 - video-direction validation or duration repair
 
-This is where authored graph state becomes runnable prompt and filesystem state.
+This is where graph state becomes runnable prompt and filesystem state.
 
 ## 12. Graph Persistence And Overlay Strategy
 
@@ -2402,24 +2396,23 @@ Phase 5 quality gate in `run_pipeline.py`:
 
 ### 22.13 Asset-regeneration size mismatch
 
-The programmatic Phase 3 regeneration helper reads `image_size` from prompt JSON, but the active prompt builders write `size`.
+This mismatch has been corrected in the active runner:
 
-Practical consequence:
+- regeneration prefers the authored `size` field
+- legacy `image_size` is still read for compatibility
+- conflicting `size` / `image_size` values are rejected instead of silently falling back
 
-- regeneration can lose the authored aspect preset
-- cast composites are especially exposed because their authored prompt JSON uses `portrait_9_16`, but regen can fall back to a landscape default
-
-This is a concrete cleanup item, not just a stylistic inconsistency.
+This is now a compatibility path, not an active silent-corruption issue.
 
 ### 22.14 Phase 2 retry path is narrower than its wording
 
-The runner comments describe the Phase 2 fallback as a “monolithic fallback,” but the actual retry behavior is narrower:
+Phase 2 retry behavior is targeted rather than monolithic:
 
-- rerun `morpheus_5_continuity_wirer`
-- rerun deterministic prompt assembly
-- rerun materialization
+- re-run deterministic continuity validation with `fix=True`
+- optionally dispatch targeted frame re-enrichment for frames flagged by continuity issues
+- re-run deterministic post-processing (`graph_assemble_prompts`, `graph_validate_dialogue`, `prompt_pair_validator`, `graph_materialize`, `graph_validate_video_direction --fix`)
 
-It does not rerun the full swarm and does not rebuild the graph from scratch.
+It does not rebuild the entire graph from scratch unless an operator explicitly restarts Phase 2.
 
 ### 22.15 Phase-level XAI behavior now matches refiner semantics
 
@@ -2514,10 +2507,13 @@ So the current truth is:
 - `google/nano-banana-pro`
 - `google/nano-banana`
 
-### 24.2 Video and vision models
+### 24.2 xAI reasoning, vision, and video models
 
-- `xai/grok-imagine-video`
-- `grok-4-1-fast-non-reasoning`
+- `grok-4.20-reasoning` — default Stage 1 Creative Coordinator and prose worker model
+- `grok-4.20-multi-agent` — optional multi-agent routing for selected tasks
+- `grok-4-1-fast-reasoning` — frame enricher / fast reasoning path
+- `grok-4-1-fast-non-reasoning` — vision refinement
+- `xai/grok-imagine-video` — image-to-video clip generation
 
 ## 25. Recommended Reading Order
 

@@ -35,7 +35,6 @@ export class DesktopRuntime {
 
   async findAvailablePort(preferredPort, attempts = 20) {
     for (let port = preferredPort; port < preferredPort + attempts; port += 1) {
-      // eslint-disable-next-line no-await-in-loop
       if (await this.isPortFree(port)) {
         return port;
       }
@@ -139,12 +138,13 @@ export class DesktopRuntime {
         if (response.ok) {
           const payload = await response.json();
           const manifestProjectId = String(payload?.projectId || '');
+          const hasIdentity = Boolean(manifestProjectId || payload?.slug);
           const matchesRequestedProject =
             !projectId ||
             manifestProjectId === projectId ||
             manifestProjectId.endsWith(`_${projectId}`) ||
             String(payload?.slug || '') === String(projectId).replace(/_/g, '-');
-          if (matchesRequestedProject) {
+          if (matchesRequestedProject || !hasIdentity) {
             return true;
           }
         }
@@ -160,17 +160,28 @@ export class DesktopRuntime {
     if (!this.backendProc) {
       return;
     }
-    this.backendProc.kill('SIGTERM');
+
+    const proc = this.backendProc;
+    proc.kill('SIGTERM');
+
     await new Promise((resolve) => {
-      this.backendProc.once('exit', resolve);
+      proc.once('exit', () => {
+        if (this.backendProc === proc) {
+          this.backendProc = null;
+        }
+        resolve();
+      });
       setTimeout(() => {
-        if (this.backendProc) {
-          this.backendProc.kill('SIGKILL');
+        if (proc.exitCode === null && !proc.killed) {
+          proc.kill('SIGKILL');
         }
         resolve();
       }, 5000);
     });
-    this.backendProc = null;
+
+    if (this.backendProc === proc) {
+      this.backendProc = null;
+    }
   }
 
   async startBackend(projectId) {
@@ -193,6 +204,8 @@ export class DesktopRuntime {
       stdio: 'pipe',
     });
 
+    const procRef = this.backendProc;
+
     this.backendProc.stdout?.on('data', (chunk) => {
       process.stdout.write(`[screenwire-backend] ${chunk}`);
     });
@@ -201,7 +214,9 @@ export class DesktopRuntime {
     });
     this.backendProc.on('exit', (code, signal) => {
       console.log(`[screenwire-backend] exited code=${code} signal=${signal}`);
-      this.backendProc = null;
+      if (this.backendProc === procRef) {
+        this.backendProc = null;
+      }
     });
 
     await this.waitForBackend(projectId);

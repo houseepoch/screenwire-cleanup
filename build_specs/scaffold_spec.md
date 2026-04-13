@@ -2,6 +2,8 @@
 
 > Legacy planning document. Some folders referenced here belong to removed
 > voice/TTS-era workflows and are no longer part of the supported runtime.
+> The active runtime uses `creativeFreedom` / `frameBudget` naming rather than the older
+> `stickiness*` / `outputSize` bootstrap fields.
 
 ## Task
 Create the project scaffold for the headless MVP test pipeline.
@@ -80,10 +82,11 @@ sw_test001_greenhouse-letter/
   "pipeline": "story_upload",
   "mediaStyle": "new_digital_anime",
   "aspectRatio": "16:9",
-  "outputSize": "short",
-  "stickinessLevel": 3,
-  "stickinessLabel": "Expand",
-  "stickinessPermission": "Expand. Follow the source material's direction but round out incomplete areas. Add transitional scenes, supporting details, and environmental context the source implies but doesn't show. All additions must serve what's already demonstrated — supporting information, not new story.",
+  "creativeFreedom": "creative",
+  "creativeFreedomPermission": "Alternative angles, lighting, color, visual metaphor, and subtext emphasis are allowed. Short reaction lines may be added when they reinforce existing subtext.",
+  "creativeFreedomFailureModes": "Invented dialogue or new entities can quietly alter tone, voice, or plot direction. Prevent this by limiting additions to short reaction lines and keeping all changes aligned with existing subtext, character voice, and motivation.",
+  "dialoguePolicy": "Short reaction lines and moderate re-phrasing are allowed only when they preserve meaning, voice, and motivation. No new plot-advancing lines.",
+  "frameBudget": 20,
   "style": ["cinematic", "dreamlike"],
   "genre": ["drama"],
   "mood": ["melancholic", "mysterious", "hopeful"],

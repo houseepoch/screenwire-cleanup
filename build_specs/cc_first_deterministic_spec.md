@@ -1,17 +1,18 @@
 # CC-First Deterministic Graph Construction — Implementation Specification
 
-> **Status:** APPROVED — Implementation pending
+> **Status:** APPROVED — Implementation ACTIVE
 > **Date:** 2026-04-11
 > **Supersedes:** Morpheus Agents 1-4 (Entity Seeder, Frame Parser, Dialogue Wirer, Compositor)
 > **Depends on:** `graph/schema.py`, `graph/prompt_assembler.py`, `graph/api.py`, `agent_prompts/creative_coordinator.md`
+> **Runtime note:** The active runtime uses Grok reasoning models for the Creative Coordinator, prose workers, and frame enrichment. Older references below to Opus or Haiku are historical wording, not the current provider path.
 
 ---
 
 ## 0. Architecture Summary
 
 ```
-CC (Opus) → outline_skeleton.md  (structured ///TAG blocks)
-          → creative_output.md   (///frame markers + dialogue)
+CC (Grok reasoning) → outline_skeleton.md  (structured ///TAG blocks)
+                   → creative_output.md   (///frame markers + dialogue)
                 ↓
 Python parser (graph/cc_parser.py) — deterministic, seconds
   → CastNodes, LocationNodes, PropNodes, SceneNodes
@@ -20,7 +21,7 @@ Python parser (graph/cc_parser.py) — deterministic, seconds
   → All edges (FOLLOWS, APPEARS_IN, AT_LOCATION, etc.)
   → Base CastFrameState per character per frame
                 ↓
-Parallel frame enricher workers — per-frame enrichment
+Parallel Grok frame enricher workers — per-frame enrichment
   → CastFrameState enrichment (screen_position, looking_at, emotion, posture, ...)
   → FrameComposition (shot, angle, movement, focus)
   → FrameEnvironment, FrameBackground, FrameDirecting
@@ -29,7 +30,7 @@ Grok frame tagging — post-enrichment cinematic tag assignment
   → Per-frame tag from Cinematic Frame Tag Taxonomy (D/E/R/A/C/T/S/M families)
   → Tag definition + ai_prompt_language injected into generation prompts
                 ↓
-Continuity validator (Morpheus Agent 5, reduced to audit-only)
+Continuity validator (legacy Morpheus Agent 5 role, reduced to audit-only)
   → Spatial consistency check
   → Cast state delta continuity
   → Dialogue coverage verification
@@ -181,7 +182,7 @@ In `creative_output.md`, every visual paragraph is preceded by a `///` frame mar
 - `sequence_index`: 0-based global sequence number
 - `scene_id`: inherited from the most recent `///SCENE` header
 - `source_text`: the full paragraph text following the `///` marker
-- `narrative_beat`: same as `source_text` (enriched later by Haiku)
+- `narrative_beat`: same as `source_text` (enriched later by the frame enricher)
 - `is_dialogue`: true if `dlg` flag present
 - `location_id`: inherited from the scene's `location` field
 - `time_of_day`: inherited from the scene's `time_of_day`
@@ -378,7 +379,7 @@ def extract_frame_markers(creative_text: str, scenes: list[SceneNode],
          - frame_id from current frame
          - active_state_tag from cast_states field or scene default
          - frame_role = SUBJECT if only 1 cast, BACKGROUND otherwise
-         - All other fields: None/defaults (Haiku fills them)
+         - All other fields: None/defaults (frame enricher fills them)
       5. Link previous_frame_id / next_frame_id
     """
 ```
@@ -470,9 +471,9 @@ Provenance(
 
 ---
 
-## 3. Haiku Worker Form Specification
+## 3. Frame Enricher Worker Form Specification
 
-Each frame enricher worker receives a single frame and fills out a structured enrichment form. Workers run in parallel (one per frame). The pipeline spawns them via batch Haiku API calls.
+Each frame enricher worker receives a single frame and fills out a structured enrichment form. Workers run in parallel (one per frame). The active pipeline dispatches them through the local Grok reasoning runner.
 
 ### 3.1 Worker Input
 
@@ -715,18 +716,18 @@ Workers return structured JSON. The `composition` fields (shot, angle, movement,
 
 **Output:** Validation report with `{severity, frame_id, check_name, message}` entries. Severities: ERROR (blocks pipeline), WARN (logged, pipeline continues).
 
-**Implementation:** Can be Python-only (deterministic rule checks) OR Haiku (for nuanced spatial/narrative consistency that rule checks miss). Recommended: Python rule checks first, Haiku pass only if rule checks find 0 ERRORs and the project is `televised` or `feature` size.
+**Implementation:** Can be Python-only (deterministic rule checks) or paired with a targeted reasoning audit for nuanced spatial or narrative consistency that rule checks miss. Recommended: Python rule checks first, then a targeted audit only if rule checks find 0 ERRORs and the project is `televised` or `feature` size.
 
 ---
 
 ## 5. Pipeline Phase Changes
 
-### 5.1 Current Pipeline (Being Replaced)
+### 5.1 Retired Pipeline (Historical Reference)
 
 ```
 Phase 0: Server startup
-Phase 1: CC writes skeleton + prose (single Opus agent)
-Phase 2: Morpheus swarm (5 Opus agents, sequential)
+Phase 1: CC writes skeleton + prose (legacy provider wording)
+Phase 2: Morpheus swarm (retired multi-agent path)
   Agent 1: Entity Seeder
   Agent 2: Frame Parser
   Agent 3: Dialogue Wirer
@@ -745,9 +746,9 @@ Phase 0: Server startup (unchanged)
 Phase 1: CC writes skeleton + prose (unchanged)
 Phase 2: Deterministic graph + frame enrichment
   Step 2a: Python parser (cc_parser.py)             — deterministic, <5 seconds
-  Step 2b: Parallel frame enricher workers                    — per-frame enrichment, ~2-10 seconds per frame
+  Step 2b: Parallel frame enricher workers            — per-frame enrichment, ~2-10 seconds per frame
   Step 2b.5: Grok frame tagging (grok_tagger.py)    — per-frame tag assignment, ~10 concurrent
-  Step 2c: Continuity validation                     — deterministic Python checks + optional Haiku audit
+  Step 2c: Continuity validation                     — deterministic Python checks + optional graph auditor
   Step 2d: Prompt assembly + materialization         — existing deterministic code (prompt_assembler.py + materializer.py)
 Phase 3: Asset generation (unchanged)
 Phase 4: Video direction validation (unchanged)
@@ -776,15 +777,14 @@ def run_phase_2a(project_dir: Path, project_node: ProjectNode) -> NarrativeGraph
 
 **Timing:** Deterministic string parsing. Expected <5 seconds for any project size.
 
-### 5.4 Step 2b — Parallel Haiku Workers
+### 5.4 Step 2b — Parallel Frame Enricher Workers
 
 ```python
 def run_phase_2b(graph: NarrativeGraph, project_dir: Path) -> NarrativeGraph:
     """Dispatch parallel frame enricher workers for per-frame enrichment."""
     worker_inputs = build_frame_enricher_inputs(graph)  # one per frame
 
-    # Batch Haiku API call — all frames in parallel
-    # Uses Anthropic batch API or concurrent single calls
+    # Parallel Grok reasoning calls — all frames in parallel
     results = frame_enricher_batch_enrich(worker_inputs, max_concurrent=20)
 
     # Apply enrichments to graph
@@ -797,10 +797,10 @@ def run_phase_2b(graph: NarrativeGraph, project_dir: Path) -> NarrativeGraph:
 ```
 
 **frame enricher worker dispatch options:**
-1. **Anthropic Messages Batches API** — submit all frames as a batch, poll for completion. Most cost-efficient.
-2. **Concurrent single calls** — `asyncio.gather()` with semaphore. Faster wall-clock time, higher concurrency cost.
+1. **Concurrent local Grok calls** — `asyncio.gather()` with semaphore. This is the active runtime path.
+2. **Targeted re-enrichment** — only frames flagged by continuity or contract checks are re-run.
 
-**Cost estimate:** ~200 input tokens + ~300 output tokens per frame. At Haiku pricing, a 100-frame project costs ~$0.005 total for Step 2b.
+**Cost estimate:** depends on the active Grok reasoning model and project size; budget should be measured from live usage rather than the retired Haiku estimate.
 
 ### 5.4.5 Step 2b.5 — Grok Frame Tagging
 
@@ -850,12 +850,12 @@ Phase 2c runs a **validate → auto-fix → re-enrich → re-validate** loop (ma
 
 2. **Issues that cannot be auto-fixed** are tagged `needs_re_enrichment=True` with a `what`
    field describing the specific correction required:
-   - `INCOMPLETE_FRAME_DATA` / `INCOMPLETE_CAST_STATE` — missing required field (need Haiku fill-in)
-   - `SPATIAL_JUMP` / `STAGING_VIOLATION` — positional inconsistency (need Haiku correction)
+   - `INCOMPLETE_FRAME_DATA` / `INCOMPLETE_CAST_STATE` — missing required field (need frame-enricher fill-in)
+   - `SPATIAL_JUMP` / `STAGING_VIOLATION` — positional inconsistency (need frame-enricher correction)
 
-3. **Re-enrichment:** `re_enrich_frames(graph, issues)` dispatches targeted Haiku calls for
+3. **Re-enrichment:** `re_enrich_frames(graph, issues)` dispatches targeted reasoning calls for
    each frame with `needs_re_enrichment=True`. A `CORRECTION REQUIRED` block is appended to
-   the system prompt so Haiku knows exactly what to fix. Results are applied with
+   the system prompt so the frame enricher knows exactly what to fix. Results are applied with
    `apply_frame_enrichment()` and the graph is saved.
 
 4. **Pass 2 — re-validate:** The loop runs `validate_continuity(fix=True)` again to confirm
@@ -870,7 +870,7 @@ validate_continuity(fix=True)
   ├── auto_fixed=True        → edge created, saved to disk
   └── needs_re_enrichment=True
         ↓
-      re_enrich_frames()     → Haiku corrects specific frames
+      re_enrich_frames()     → frame enricher corrects specific frames
         ↓
       apply_frame_enrichment() → graph updated
         ↓
@@ -1097,7 +1097,7 @@ Add to the skeleton output spec:
 ## 9. Migration Strategy
 
 1. **Implement cc_parser.py** — write parser, test against existing CC output from previous pipeline runs
-2. **Implement frame_enricher.py** — build worker input/output, test with mock Haiku responses
+2. **Implement frame_enricher.py** — build worker input/output, test with mock Grok responses
 3. **Implement continuity_validator.py** — port relevant checks from Agent 5 prompt to Python
 4. **Update CC prompt** — add `///TAG` format to skeleton spec, remove `dur:` from frame markers
 5. **Update run_pipeline.py** — replace Morpheus agent spawns with Steps 2a-2d

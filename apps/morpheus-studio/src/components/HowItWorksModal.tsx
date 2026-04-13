@@ -76,201 +76,114 @@ export function HowItWorksModal({ isOpen, onClose }: HowItWorksModalProps) {
   };
 
   return (
-    <div 
+    <div
       className="modal-overlay"
+      data-testid="how-it-works-modal"
       onClick={(e) => {
         if (e.target === e.currentTarget) {
           handleClose();
         }
       }}
     >
-      <div 
+      <div
+        className="how-modal"
         style={{
-          background: 'var(--bg-secondary)',
-          border: '1px solid var(--border-subtle)',
-          borderRadius: '16px',
-          width: '100%',
           maxWidth: isMobile ? '100%' : '420px',
           maxHeight: maxModalHeight,
-          height: 'auto',
-          overflow: 'hidden',
-          display: 'flex',
-          flexDirection: 'column',
           margin: isMobile ? 'auto 0 0 0' : 'auto',
         }}
       >
-        {/* Header */}
-        <div style={{ 
-          padding: isMobile ? '16px' : '20px',
-          borderBottom: '1px solid var(--border-subtle)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          flexShrink: 0,
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <div style={{ 
-              width: '36px', 
-              height: '36px', 
-              borderRadius: '50%', 
-              background: 'var(--accent-dim)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center'
-            }}>
+        <div className="how-modal-header" style={{ padding: isMobile ? '16px' : '20px' }}>
+          <div className="how-modal-header-copy">
+            <div className="how-modal-icon">
               <Icon size={18} style={{ color: 'var(--accent)' }} />
             </div>
             <div>
-              <h3 style={{ fontSize: '16px', fontWeight: 600 }}>How it works</h3>
-              <p style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+              <h3>How it works</h3>
+              <p>
                 Step {currentStep + 1} of {steps.length}
               </p>
             </div>
           </div>
-          <button 
+          <button
+            type="button"
             onClick={handleClose}
-            style={{
-              background: 'none',
-              border: 'none',
-              color: 'var(--text-secondary)',
-              cursor: 'pointer',
-              padding: '6px',
-            }}
+            className="how-modal-close"
+            data-testid="how-it-works-close"
           >
             <X size={20} />
           </button>
         </div>
 
-        {/* Progress Bar */}
-        <div style={{ 
-          height: '3px', 
-          background: 'var(--bg-tertiary)',
-          flexShrink: 0,
-        }}>
-          <div 
-            style={{ 
-              height: '100%', 
-              background: 'var(--accent)',
+        <div className="how-modal-progress">
+          <div
+            className="how-modal-progress-fill"
+            style={{
               width: `${((currentStep + 1) / steps.length) * 100}%`,
-              transition: 'width 0.3s ease'
-            }} 
+            }}
           />
         </div>
 
-        {/* Content - Compact */}
-        <div style={{ 
-          padding: isMobile ? '20px 16px' : '24px 20px',
-          flex: 1,
-          display: 'flex',
-          flexDirection: 'column',
-          justifyContent: 'center',
-          gap: '16px',
-          overflow: 'hidden',
-        }}>
+        <div className="how-modal-content" style={{ padding: isMobile ? '20px 16px' : '24px 20px' }}>
           <div>
-            <h4 style={{ fontSize: '18px', fontWeight: 600, marginBottom: '8px' }}>
+            <h4 className="how-modal-step-title">
               {step.title}
             </h4>
-            <p style={{ fontSize: '14px', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+            <p className="how-modal-step-description">
               {step.description}
             </p>
           </div>
 
-          {/* Simple Visual Indicator */}
-          <div style={{ 
-            display: 'flex',
-            justifyContent: 'center',
-            gap: '8px',
-            padding: '16px',
-            background: 'var(--bg-primary)',
-            borderRadius: '12px',
-          }}>
+          <div className="how-modal-steps">
             {steps.map((s, i) => {
               const StepIcon = s.icon;
               return (
                 <div
                   key={i}
-                  style={{
-                    width: '36px',
-                    height: '36px',
-                    borderRadius: '8px',
-                    background: i === currentStep ? 'var(--accent)' : i < currentStep ? 'var(--success)' : 'var(--bg-tertiary)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    opacity: i > currentStep + 1 ? 0.4 : 1,
-                  }}
+                  className={`how-modal-step-chip ${
+                    i === currentStep ? 'is-current' : i < currentStep ? 'is-complete' : ''
+                  }`}
+                  style={{ opacity: i > currentStep + 1 ? 0.4 : 1 }}
                 >
-                  <StepIcon size={16} style={{ color: i === currentStep || i < currentStep ? 'var(--bg-primary)' : 'var(--text-muted)' }} />
+                  <StepIcon
+                    size={16}
+                    style={{ color: i === currentStep || i < currentStep ? 'var(--bg-primary)' : 'var(--text-muted)' }}
+                  />
                 </div>
               );
             })}
           </div>
         </div>
 
-        {/* Footer */}
-        <div style={{ 
-          padding: isMobile ? '12px 16px 20px' : '16px 20px 20px',
-          borderTop: '1px solid var(--border-subtle)',
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          flexShrink: 0,
-        }}>
-          <button 
+        <div className="how-modal-footer" style={{ padding: isMobile ? '12px 16px 20px' : '16px 20px 20px' }}>
+          <button
+            type="button"
             onClick={handlePrev}
             disabled={currentStep === 0}
-            style={{
-              padding: '8px 14px',
-              background: 'transparent',
-              border: '1px solid var(--border-subtle)',
-              borderRadius: '6px',
-              color: currentStep === 0 ? 'var(--text-muted)' : 'var(--text-primary)',
-              cursor: currentStep === 0 ? 'not-allowed' : 'pointer',
-              fontSize: '13px',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '4px'
-            }}
+            className="how-modal-nav-btn is-secondary"
+            data-testid="how-it-works-back"
           >
             <ChevronLeft size={14} />
             Back
           </button>
 
-          {/* Step Dots */}
-          <div style={{ display: 'flex', gap: '6px' }}>
+          <div className="how-modal-dots">
             {steps.map((_, i) => (
               <button
                 key={i}
+                type="button"
                 onClick={() => setCurrentStep(i)}
-                style={{
-                  width: '8px',
-                  height: '8px',
-                  borderRadius: '50%',
-                  background: i === currentStep ? 'var(--accent)' : i < currentStep ? 'var(--success)' : 'var(--bg-tertiary)',
-                  border: 'none',
-                  cursor: 'pointer',
-                }}
+                className={`how-modal-dot ${i === currentStep ? 'is-current' : i < currentStep ? 'is-complete' : ''}`}
               />
             ))}
           </div>
 
-          <button 
+          <button
+            type="button"
             onClick={handleNext}
             disabled={currentStep === steps.length - 1}
-            style={{
-              padding: '8px 14px',
-              background: currentStep === steps.length - 1 ? 'var(--bg-tertiary)' : 'var(--accent)',
-              border: 'none',
-              borderRadius: '6px',
-              color: currentStep === steps.length - 1 ? 'var(--text-muted)' : 'var(--bg-primary)',
-              cursor: currentStep === steps.length - 1 ? 'not-allowed' : 'pointer',
-              fontSize: '13px',
-              fontWeight: 500,
-              display: 'flex',
-              alignItems: 'center',
-              gap: '4px'
-            }}
+            className="how-modal-nav-btn is-primary"
+            data-testid="how-it-works-next"
           >
             {currentStep === steps.length - 1 ? 'Done' : 'Next'}
             <ChevronRight size={14} />

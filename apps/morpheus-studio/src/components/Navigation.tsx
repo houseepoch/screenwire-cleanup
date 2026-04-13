@@ -1,8 +1,21 @@
 import { useMorpheusStore } from '../store';
 import { ChevronLeft, Plus } from 'lucide-react';
 
+const PROJECT_STATUS_LABELS: Record<string, string> = {
+  draft: 'Draft',
+  onboarding: 'Setup',
+  skeleton_review: 'Building Review Pack',
+  generating_assets: 'Building Review Pack',
+  reference_review: 'Reference Review',
+  generating_frames: 'Generating Frames',
+  timeline_review: 'Timeline Review',
+  generating_video: 'Rendering Video',
+  complete: 'Complete',
+};
+
 export function Navigation() {
   const { setCurrentView, currentProject, selectProject } = useMorpheusStore();
+
   const handleStartCreating = () => {
     window.dispatchEvent(new CustomEvent('morpheus:new-project'));
   };
@@ -14,54 +27,56 @@ export function Navigation() {
 
   return (
     <nav className="navigation">
-      {currentProject ? (
-        // Inside project - show back button
-        <button 
-          onClick={handleBackToProjects}
-          style={{ 
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-            background: 'none',
-            border: 'none',
-            color: 'var(--text-primary)',
-            cursor: 'pointer',
-            fontSize: '14px',
-            fontWeight: 500,
-          }}
-        >
-          <ChevronLeft size={18} />
-          Back to projects
-        </button>
-      ) : (
-        // Home screen - show logo
-        <div className="nav-logo">
-          Morpheus
-        </div>
-      )}
-      
-      {/* Only show start button on home screen when no project */}
-      {!currentProject && (
-        <div className="nav-actions">
+      <div className="nav-side nav-side-left">
+        {currentProject ? (
+          <>
+            <button className="nav-back-btn" data-testid="nav-back-to-projects" onClick={handleBackToProjects}>
+              <ChevronLeft size={18} />
+              Back to projects
+            </button>
+            <div className="nav-project-meta">
+              <span className="nav-project-label">Active project</span>
+              <span className="nav-project-name">{currentProject.name}</span>
+            </div>
+          </>
+        ) : (
+          <div className="nav-brand">
+            <div className="nav-brand-mark">M</div>
+            <div className="nav-brand-copy">
+              <div className="nav-logo">Morpheus</div>
+              <div className="nav-tagline">Studio pipeline</div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className="nav-center">
+        {!currentProject ? (
+          <div className="nav-runtime-pill">Local desktop orchestration</div>
+        ) : (
+          <div className="nav-runtime-pill">
+            {PROJECT_STATUS_LABELS[currentProject.status] ?? currentProject.status}
+          </div>
+        )}
+      </div>
+
+      <div className="nav-actions">
+        {!currentProject ? (
           <button
-            className="btn-accent"
+            className="btn-accent nav-create-btn"
             aria-label="Create new project"
             title="Create new project"
-            style={{
-              width: '40px',
-              height: '40px',
-              padding: 0,
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              borderRadius: '999px',
-            }}
             onClick={handleStartCreating}
           >
-            <Plus size={18} />
+            <Plus size={16} />
+            New Project
           </button>
-        </div>
-      )}
+        ) : (
+          <div className="nav-runtime-pill nav-runtime-pill-live">
+            Stage live
+          </div>
+        )}
+      </div>
     </nav>
   );
 }

@@ -61,20 +61,16 @@ export function ProjectWorkspace() {
       API.ws.disconnect();
       window.clearInterval(interval);
     };
-  }, [currentProject?.id, hydrateWorkspace, setWorkers]);
+  }, [currentProject, hydrateWorkspace, setWorkers]);
 
   if (!currentProject) {
     return (
-      <div 
-        style={{ 
-          display: 'flex', 
-          alignItems: 'center', 
-          justifyContent: 'center',
-          height: 'calc(100vh - 64px)',
-          color: 'var(--text-secondary)'
-        }}
-      >
-        No project selected
+      <div className="workspace-empty-state">
+        <div className="workspace-empty-card glass-panel">
+          <span className="workspace-empty-kicker">No project selected</span>
+          <h2>Pick a production from the dashboard.</h2>
+          <p>The workspace opens once a project is active in the local desktop pipeline.</p>
+        </div>
       </div>
     );
   }
@@ -86,12 +82,7 @@ export function ProjectWorkspace() {
   // Mobile Layout
   if (isMobile) {
     return (
-      <div style={{ 
-        height: 'calc(100vh - 64px)',
-        display: 'flex',
-        flexDirection: 'column',
-        overflow: 'hidden',
-      }}>
+      <div className="project-workspace-mobile" data-testid="project-workspace-mobile">
         {mobileView === 'chat' ? <MobileAgentChat /> : <MobileDetailView />}
         {isTimelineTrayOpen && <MobileTimelineTray />}
         {showWorkers && <WorkerOverlay />}
@@ -101,12 +92,14 @@ export function ProjectWorkspace() {
 
   // Desktop Layout
   return (
-    <div className="project-workspace" data-testid="project-workspace">
-      <div className="workspace-main">
-        <DetailPanel />
-        <AgentChat />
+    <div className="project-workspace-shell" data-testid="project-workspace-shell">
+      <div className="project-workspace" data-testid="project-workspace">
+        <div className="workspace-main">
+          <DetailPanel />
+          <AgentChat />
+        </div>
+        <TimelineBar />
       </div>
-      <TimelineBar />
       {showWorkers && <WorkerOverlay />}
     </div>
   );

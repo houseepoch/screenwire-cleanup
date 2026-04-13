@@ -44,6 +44,7 @@ export interface ScreenwireBridge {
 declare global {
   interface Window {
     screenwire?: ScreenwireBridge;
+    __chatDraft?: string | null;
   }
 }
 
