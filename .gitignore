@@ -5,6 +5,12 @@
 __pycache__/
 *.pyc
 
+# Node / Electron
+node_modules/
+dist/
+apps/*/smoke/artifacts/
+apps/*/smoke/last-run.json
+
 # Project data (all generated content lives inside projects/)
 projects/*/
 !projects/_template/

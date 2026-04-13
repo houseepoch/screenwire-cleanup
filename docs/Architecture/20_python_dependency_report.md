@@ -1,9 +1,9 @@
 # Python Dependency Report
 
-- Generated at: `2026-04-12T19:24:42.750372+00:00`
+- Generated at: `2026-04-12T20:30:04.418526+00:00`
 - Repo root: `/home/nikoles16/Documents/ScreenWire Environments/screenwire-pipeline`
-- Python modules indexed: `51`
-- Internal dependency edges: `136`
+- Python modules indexed: `52`
+- Internal dependency edges: `138`
 - External packages referenced: `57`
 
 ## Mermaid Graph
@@ -15,23 +15,23 @@ See `21_python_dependency_graph.mmd` for the standalone graph artifact.
 - `run_pipeline` -> `20` internal imports
 - `tests.test_alignment_contracts` -> `19` internal imports
 - `handlers` -> `7` internal imports
+- `server` -> `7` internal imports
 - `tests.test_pipeline_smoke_e2e` -> `7` internal imports
-- `graph.reference_collector` -> `6` internal imports
 - `graph.prompt_assembler` -> `6` internal imports
-- `server` -> `5` internal imports
+- `graph.reference_collector` -> `6` internal imports
 - `tests.test_prompt_refactor_unit` -> `5` internal imports
+- `handlers.base` -> `4` internal imports
 - `graph.materializer` -> `4` internal imports
-- `graph.continuity_validator` -> `4` internal imports
 - `graph.runtime_state` -> `4` internal imports
 - `graph.grok_tagger` -> `4` internal imports
-- `handlers.base` -> `4` internal imports
-- `graph.frame_enricher` -> `3` internal imports
+- `graph.continuity_validator` -> `4` internal imports
+- `graph.dialogue_validator` -> `3` internal imports
 - `handlers.frame` -> `3` internal imports
 - `graph.prompt_pair_validator` -> `3` internal imports
 - `handlers.storyboard` -> `3` internal imports
-- `graph.dialogue_validator` -> `3` internal imports
-- `llm.agent_runner` -> `2` internal imports
-- `graph.grid_generate` -> `2` internal imports
+- `graph.frame_enricher` -> `3` internal imports
+- `handlers.cast_image` -> `2` internal imports
+- `tests.test_project_report` -> `2` internal imports
 
 ## Highest Fan-In Modules
 
@@ -40,33 +40,33 @@ See `21_python_dependency_graph.mmd` for the standalone graph artifact.
 - `graph.api` <- `12` internal dependents
 - `llm.xai_client` <- `9` internal dependents
 - `handlers.models` <- `8` internal dependents
-- `telemetry` <- `7` internal dependents
 - `handlers.base` <- `7` internal dependents
+- `telemetry` <- `7` internal dependents
 - `graph.reference_collector` <- `6` internal dependents
-- `graph.materializer` <- `4` internal dependents
 - `handlers.reference_pack` <- `4` internal dependents
 - `graph.prompt_assembler` <- `4` internal dependents
-- `video_prompt_projection` <- `3` internal dependents
+- `graph.materializer` <- `4` internal dependents
+- `screenwire_contracts` <- `3` internal dependents
 - `graph.frame_prompt_refiner` <- `3` internal dependents
 - `graph.feature_flags` <- `3` internal dependents
+- `video_prompt_projection` <- `3` internal dependents
 - `handlers.location_grid` <- `3` internal dependents
-- `screenwire_contracts` <- `3` internal dependents
-- `handlers.storyboard` <- `2` internal dependents
-- `handlers` <- `2` internal dependents
-- `handlers.frame` <- `2` internal dependents
-- `graph.grid_generate` <- `2` internal dependents
+- `graph.frame_enricher` <- `2` internal dependents
+- `graph.continuity_validator` <- `2` internal dependents
+- `llm.project_tools` <- `2` internal dependents
+- `graph.prompt_pair_validator` <- `2` internal dependents
 
 ## External Packages
 
-- `pathlib` referenced `43` time(s)
-- `__future__` referenced `40` time(s)
-- `json` referenced `27` time(s)
-- `typing` referenced `25` time(s)
+- `pathlib` referenced `44` time(s)
+- `__future__` referenced `41` time(s)
+- `json` referenced `28` time(s)
+- `typing` referenced `26` time(s)
 - `re` referenced `19` time(s)
 - `os` referenced `18` time(s)
 - `time` referenced `16` time(s)
 - `argparse` referenced `15` time(s)
-- `datetime` referenced `13` time(s)
+- `datetime` referenced `14` time(s)
 - `sys` referenced `13` time(s)
 - `asyncio` referenced `10` time(s)
 - `PIL` referenced `10` time(s)
@@ -84,6 +84,7 @@ See `21_python_dependency_graph.mmd` for the standalone graph artifact.
 - `dotenv` referenced `4` time(s)
 - `mimetypes` referenced `3` time(s)
 - `tempfile` referenced `3` time(s)
+- `fastapi` referenced `3` time(s)
 - `pytest` referenced `3` time(s)
 - `itertools` referenced `2` time(s)
 - `enum` referenced `2` time(s)
@@ -97,7 +98,6 @@ See `21_python_dependency_graph.mmd` for the standalone graph artifact.
 - `fpdf` referenced `1` time(s)
 - `difflib` referenced `1` time(s)
 - `functools` referenced `1` time(s)
-- `abc` referenced `1` time(s)
 
 ## Module Inventory
 
@@ -152,6 +152,7 @@ See `21_python_dependency_graph.mmd` for the standalone graph artifact.
 - `tests.test_prompt_refactor_unit` -> `tests/test_prompt_refactor_unit.py`
 - `train_agent` -> `train_agent.py`
 - `video_prompt_projection` -> `video_prompt_projection.py`
+- `workspace_api` -> `workspace_api.py`
 
 ## Internal Dependency Edges
 
@@ -251,8 +252,10 @@ See `21_python_dependency_graph.mmd` for the standalone graph artifact.
 - `server` -> `graph.frame_prompt_refiner`
 - `server` -> `handlers`
 - `server` -> `image_tagger`
+- `server` -> `llm.project_tools`
 - `server` -> `llm.xai_client`
 - `server` -> `telemetry`
+- `server` -> `workspace_api`
 - `tests.test_alignment_contracts` -> `graph.api`
 - `tests.test_alignment_contracts` -> `graph.cc_parser`
 - `tests.test_alignment_contracts` -> `graph.continuity_validator`

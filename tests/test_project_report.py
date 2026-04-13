@@ -108,6 +108,25 @@ def _make_project(tmp_path: Path) -> Path:
             indent=2,
         ),
     )
+    _write(project_dir / "reports" / "project_cover_summary.md", "# Cover Summary\nA theatrical summary.\n")
+    _write(
+        project_dir / "reports" / "project_cover_meta.json",
+        json.dumps(
+            {
+                "summary": "A theatrical summary.",
+                "tagline": "Trust the signal.",
+                "topEntities": [
+                    {"entityId": "cast_001", "name": "Monday", "frameCount": 2},
+                    {"entityId": "loc_001", "name": "Apartment", "frameCount": 2},
+                    {"entityId": "prop_001", "name": "Phone", "frameCount": 1},
+                ],
+            },
+            indent=2,
+        ),
+    )
+    cover = project_dir / "reports" / "project_cover.png"
+    cover.parent.mkdir(parents=True, exist_ok=True)
+    cover.write_bytes(b"png")
     _write(project_dir / "scripts" / "custom.py", "print('hi')\n")
     composed = project_dir / "frames" / "composed" / "f_001_gen.png"
     composed.parent.mkdir(parents=True, exist_ok=True)
@@ -124,7 +143,12 @@ def test_generate_project_report_includes_snapshot_and_excludes_media(tmp_path: 
     assert report_path == project_dir / "reports" / "project_report.md"
     assert "## Snapshot Tree" in report
     assert "## Video Prompt Projection" in report
+    assert "## Project Cover" in report
     assert "reports/video_prompt_projection.md" in report
+    assert "reports/project_cover.png" in report
+    assert "reports/project_cover_summary.md" in report
+    assert "Trust the signal." in report
+    assert "Monday (2), Apartment (2), Phone (1)" in report
     assert "creative_output/outline_skeleton.md" in report
     assert "frames/prompts/f_001_image.json" in report
     assert "video/prompts/f_001_video.json" in report

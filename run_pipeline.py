@@ -26,12 +26,14 @@ import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, as_completed, wait
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from dotenv import load_dotenv
 from graph.feature_flags import ENABLE_STORYBOARD_GUIDANCE
 from llm.xai_client import (
     DEFAULT_REASONING_MODEL,
     DEFAULT_STAGE1_REASONING_MODEL,
+    SyncXAIClient,
     build_prompt_cache_key,
 )
 from screenwire_contracts import (
@@ -670,6 +672,309 @@ def _run_project_report(project_dir: Path) -> None:
         raise RuntimeError("Project report generation failed after prompt assembly.")
     generate_video_prompt_projection(project_dir)
     log_ok("Project report generated")
+
+
+def _read_json_file(path: Path, fallback: Any) -> Any:
+    if not path.exists():
+        return fallback
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return fallback
+
+
+def _find_existing_rel_path(project_dir: Path, candidates: list[str]) -> str | None:
+    for rel in candidates:
+        if not rel:
+            continue
+        if (project_dir / rel).exists():
+            return rel
+    return None
+
+
+def _project_cover_entity_candidates(project_dir: Path) -> list[dict[str, Any]]:
+    graph = _read_json_file(project_dir / "graph" / "narrative_graph.json", {})
+    if not isinstance(graph, dict):
+        return []
+
+    frame_sets: dict[tuple[str, str], set[str]] = {}
+
+    for state in (graph.get("cast_frame_states") or {}).values():
+        if not isinstance(state, dict):
+            continue
+        cast_id = str(state.get("cast_id") or "").strip()
+        frame_id = str(state.get("frame_id") or "").strip()
+        if cast_id and frame_id:
+            frame_sets.setdefault(("cast", cast_id), set()).add(frame_id)
+
+    for state in (graph.get("prop_frame_states") or {}).values():
+        if not isinstance(state, dict):
+            continue
+        prop_id = str(state.get("prop_id") or "").strip()
+        frame_id = str(state.get("frame_id") or "").strip()
+        if prop_id and frame_id:
+            frame_sets.setdefault(("prop", prop_id), set()).add(frame_id)
+
+    for frame_id, frame in (graph.get("frames") or {}).items():
+        if not isinstance(frame, dict):
+            continue
+        location_id = str(frame.get("location_id") or "").strip()
+        if location_id:
+            frame_sets.setdefault(("location", location_id), set()).add(str(frame_id))
+
+    counts: list[dict[str, Any]] = []
+    for (entity_type, entity_id), frames in frame_sets.items():
+        if entity_type == "cast":
+            registry = graph.get("cast") or {}
+            node = registry.get(entity_id) or {}
+            identity = node.get("identity") or {}
+            name = node.get("display_name") or node.get("name") or entity_id
+            description = (
+                node.get("description")
+                or identity.get("physical_description")
+                or identity.get("wardrobe_description")
+                or node.get("personality")
+                or ""
+            )
+            image_rel = _find_existing_rel_path(
+                project_dir,
+                [
+                    f"cast/composites/{entity_id}_ref.png",
+                    f"cast/composites/{entity_id}_ref.jpg",
+                    f"cast/composites/{entity_id}.png",
+                    f"cast/composites/{entity_id}.jpg",
+                ],
+            )
+        elif entity_type == "location":
+            registry = graph.get("locations") or {}
+            node = registry.get(entity_id) or {}
+            name = node.get("name") or entity_id
+            description = node.get("description") or node.get("atmosphere") or ""
+            image_rel = _find_existing_rel_path(
+                project_dir,
+                [
+                    f"locations/primary/{entity_id}.png",
+                    f"locations/primary/{entity_id}.jpg",
+                ],
+            )
+        else:
+            registry = graph.get("props") or {}
+            node = registry.get(entity_id) or {}
+            name = node.get("name") or entity_id
+            description = node.get("description") or node.get("narrative_significance") or ""
+            image_rel = _find_existing_rel_path(
+                project_dir,
+                [
+                    f"props/generated/{entity_id}.png",
+                    f"props/generated/{entity_id}.jpg",
+                ],
+            )
+
+        counts.append(
+            {
+                "entityType": entity_type,
+                "entityId": entity_id,
+                "name": str(name),
+                "description": str(description).strip(),
+                "frameCount": len(frames),
+                "imagePath": image_rel,
+            }
+        )
+
+    counts.sort(
+        key=lambda item: (
+            -int(item.get("frameCount") or 0),
+            str(item.get("entityType") or ""),
+            str(item.get("name") or ""),
+        )
+    )
+    return counts
+
+
+def _build_project_cover_summary(project_dir: Path) -> dict[str, Any]:
+    onboarding = _read_onboarding_config(project_dir)
+    manifest = _read_json_file(project_dir / "project_manifest.json", {})
+    skeleton_md = (project_dir / "creative_output" / "outline_skeleton.md").read_text(encoding="utf-8") if (project_dir / "creative_output" / "outline_skeleton.md").exists() else ""
+    creative_md = (project_dir / "creative_output" / "creative_output.md").read_text(encoding="utf-8") if (project_dir / "creative_output" / "creative_output.md").exists() else ""
+
+    top_entities = _project_cover_entity_candidates(project_dir)[:3]
+    project_name = manifest.get("projectName") or onboarding.get("projectName") or project_dir.name
+    media_style = onboarding.get("mediaStyle") or "live_clear"
+    media_style_prefix = onboarding.get("mediaStylePrefix") or ""
+
+    outline_excerpt = skeleton_md[:5000].strip()
+    creative_excerpt = creative_md.strip()
+    if len(creative_excerpt) > 4200:
+        creative_excerpt = creative_excerpt[:2600].strip() + "\n...\n" + creative_excerpt[-1400:].strip()
+
+    top_entity_lines = []
+    for index, item in enumerate(top_entities, start=1):
+        desc = f" — {item['description']}" if item.get("description") else ""
+        top_entity_lines.append(
+            f"{index}. {item['name']} ({item['entityType']}, {item['frameCount']} frame(s)){desc}"
+        )
+
+    fallback_summary = (
+        f"{project_name} centers on {', '.join(item['name'] for item in top_entities[:2])}"
+        if top_entities
+        else f"{project_name} unfolds as a cinematic narrative with escalating character and environment conflict."
+    )
+
+    summary_prompt = "\n".join(
+        [
+            "Write a concise theatrical poster summary for a film project.",
+            "Output exactly two parts:",
+            "1. A 2-sentence summary in plain prose.",
+            "2. On a new line: TAGLINE: <6-12 words>",
+            "Do not use bullets. Do not mention software, pipelines, or production tooling.",
+            "",
+            f"Title: {project_name}",
+            f"Media style: {media_style}",
+            "Top 3 most used entities:",
+            *(top_entity_lines or ["1. No entity counts available"]),
+            "",
+            "Outline excerpt:",
+            outline_excerpt or "(missing)",
+            "",
+            "Creative output excerpt:",
+            creative_excerpt or "(missing)",
+        ]
+    )
+
+    summary_text = fallback_summary
+    tagline = ""
+    try:
+        client = SyncXAIClient()
+        raw = client.generate_text(
+            prompt=summary_prompt,
+            model=DEFAULT_REASONING_MODEL,
+            task_hint="project_cover_summary",
+            temperature=0.4,
+            max_tokens=220,
+            cache_key=build_prompt_cache_key("project-cover-summary", project_dir.name, project_name),
+        )
+        parsed_lines = [line.strip() for line in raw.splitlines() if line.strip()]
+        prose_lines = [line for line in parsed_lines if not line.upper().startswith("TAGLINE:")]
+        summary_text = " ".join(prose_lines).strip() or fallback_summary
+        for line in parsed_lines:
+            if line.upper().startswith("TAGLINE:"):
+                tagline = line.split(":", 1)[1].strip()
+                break
+    except Exception as exc:
+        log_warn(f"Project cover summary generation failed: {exc}")
+
+    return {
+        "projectName": project_name,
+        "mediaStyle": media_style,
+        "mediaStylePrefix": media_style_prefix,
+        "summary": summary_text,
+        "tagline": tagline,
+        "topEntities": top_entities,
+    }
+
+
+def _write_project_cover_summary(project_dir: Path, payload: dict[str, Any]) -> Path:
+    reports_dir = project_dir / "reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    summary_path = reports_dir / "project_cover_summary.md"
+    meta_path = reports_dir / "project_cover_meta.json"
+
+    lines = [
+        "# Project Cover Summary",
+        "",
+        f"- Project: `{payload.get('projectName', project_dir.name)}`",
+        f"- Media Style: `{payload.get('mediaStyle', 'live_clear')}`",
+        "",
+        "## Grok Summary",
+        "",
+        payload.get("summary", "").strip() or "(missing)",
+        "",
+    ]
+    if payload.get("tagline"):
+        lines.extend(["## Tagline", "", payload["tagline"], ""])
+    lines.append("## Top 3 Most Used Entities")
+    lines.append("")
+    top_entities = payload.get("topEntities") or []
+    if top_entities:
+        for item in top_entities:
+            desc = f" — {item['description']}" if item.get("description") else ""
+            lines.append(
+                f"- `{item['name']}` (`{item['entityType']}`, `{item['frameCount']}` frame(s)){desc}"
+            )
+    else:
+        lines.append("- No entity counts available")
+    lines.append("")
+
+    summary_path.write_text("\n".join(lines), encoding="utf-8")
+    meta_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    return summary_path
+
+
+def _generate_project_cover_art(project_dir: Path, *, dry_run: bool) -> None:
+    if dry_run:
+        log("[DRY-RUN] Would generate project cover artwork poster", YELLOW)
+        return
+
+    payload = _build_project_cover_summary(project_dir)
+    summary_path = _write_project_cover_summary(project_dir, payload)
+    reports_dir = project_dir / "reports"
+    cover_path = reports_dir / "project_cover.png"
+
+    top_entities = payload.get("topEntities") or []
+    ref_images = [str(project_dir / item["imagePath"]) for item in top_entities if item.get("imagePath")]
+    ref_images = ref_images[:5]
+
+    focus_names = ", ".join(item["name"] for item in top_entities[:3]) or "the core cast and world"
+    summary = payload.get("summary", "").strip()
+    tagline = payload.get("tagline", "").strip()
+    media_prefix = payload.get("mediaStylePrefix", "")
+    prompt_parts = [
+        media_prefix.strip(),
+        f'Movie cover artwork poster for "{payload.get("projectName", project_dir.name)}".',
+        summary,
+        f"Feature {focus_names} in a single premium theatrical one-sheet composition.",
+        "Emotionally charged cinematic key art, iconic focal hierarchy, dramatic lighting, polished poster finish.",
+        "No text, no title treatment, no credits, no logo, no watermark, no split panels, no collage grid.",
+    ]
+    if tagline:
+        prompt_parts.insert(3, f'Poster feeling: "{tagline}".')
+    cover_prompt = " ".join(part.strip() for part in prompt_parts if part and part.strip())
+
+    args = [
+        sys.executable,
+        str(SKILLS_DIR / "sw_fresh_generation"),
+        "--prompt",
+        cover_prompt,
+        "--size",
+        "portrait_2_3",
+        "--out",
+        str(cover_path),
+        "--run-id",
+        os.environ.get(RUN_ID_ENV, PIPELINE_RUN_ID),
+        "--phase",
+        os.environ.get(PHASE_ENV, ""),
+    ]
+    if ref_images:
+        args.extend(["--ref-images", ",".join(ref_images)])
+
+    result = _stream_subprocess(
+        args,
+        cwd=project_dir,
+        timeout=240,
+        label="project_cover",
+    )
+    if result.returncode != 0:
+        log_warn("Project cover artwork generation failed")
+        return
+
+    meta_path = reports_dir / "project_cover_meta.json"
+    payload["imagePath"] = "reports/project_cover.png"
+    payload["summaryPath"] = str(summary_path.relative_to(project_dir).as_posix())
+    payload["prompt"] = cover_prompt
+    payload["model"] = "google/nano-banana-2 -> google/nano-banana-pro"
+    payload["generatedAt"] = datetime.now(timezone.utc).isoformat()
+    meta_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    log_ok("Project cover artwork generated")
 
 
 # ---------------------------------------------------------------------------
@@ -3740,6 +4045,12 @@ def phase_3_assets(dry_run: bool, phase_timers: dict) -> None:
     else:
         log("Storyboard guidance disabled — bypassing storyboard prompt/composite generation")
 
+    # Step 3g: Project cover artwork poster + summary
+    log("--- Phase 3g: Project cover artwork poster ---")
+    if not dry_run:
+        _generate_project_cover_art(PROJECT_DIR, dry_run=dry_run)
+        _run_project_report(PROJECT_DIR)
+
     created_files = []
     if not dry_run:
         base = PROJECT_DIR
@@ -3748,10 +4059,12 @@ def phase_3_assets(dry_run: bool, phase_timers: dict) -> None:
         list_dir_files(base / "locations" / "primary")
         list_dir_files(base / "props" / "generated")
         list_dir_files(base / "frames" / "storyboards")
+        list_dir_files(base / "reports")
         created_files = (collect_files_in(base / "cast" / "composites") +
                          collect_files_in(base / "locations" / "primary") +
                          collect_files_in(base / "props" / "generated") +
-                         collect_files_in(base / "frames" / "storyboards"))
+                         collect_files_in(base / "frames" / "storyboards") +
+                         collect_files_in(base / "reports"))
         save_phase_report(3, timer, "phase_3_programmatic", None, created_files)
 
         # Quality gate (programmatic checks only)

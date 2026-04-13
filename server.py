@@ -15,7 +15,7 @@ import shutil
 import signal
 import sys
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -24,7 +24,9 @@ load_dotenv(Path(__file__).resolve().parent / ".env")
 
 import httpx
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from tenacity import (
     retry,
@@ -36,7 +38,27 @@ from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
 from llm.xai_client import DEFAULT_REASONING_MODEL
+from llm.project_tools import build_project_tools, make_project_tool_executor
+from llm.xai_client import SyncXAIClient
 from telemetry import activate_run_context, current_phase, current_run_id, emit_event
+from workspace_api import (
+    append_ui_event,
+    build_frame_context,
+    build_workspace_snapshot,
+    classify_ui_gate,
+    entity_upload_path,
+    frame_upload_path,
+    get_graph_node,
+    graph_collection_name,
+    load_json,
+    load_timeline_overrides,
+    load_ui_phase_report,
+    load_workspace_state,
+    patch_graph_node,
+    save_timeline_overrides,
+    save_workspace_state,
+    write_ui_phase_report,
+)
 
 from handlers import (
     get_handler,
@@ -427,6 +449,7 @@ reconciler = ManifestReconciler(PROJECT_DIR)
 sentinel = Sentinel(PROJECT_DIR)
 agent_mgr = AgentProcessManager()
 http_client: httpx.AsyncClient  # initialized in lifespan
+ui_pipeline_jobs: dict[str, dict[str, Any]] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -513,6 +536,16 @@ class GenerateVideoRequest(BaseModel):
     phase: str = ""
 
 
+class ExtendVideoRequest(BaseModel):
+    prompt: str = ""
+    video_path: str
+    duration: int = 5
+    output_path: str
+    extra_params: dict[str, Any] = Field(default_factory=dict)
+    run_id: Optional[str] = None
+    phase: str = ""
+
+
 class UploadToReplicateRequest(BaseModel):
     file_path: str
 
@@ -531,6 +564,52 @@ class SendDirectiveRequest(BaseModel):
 
 class KillAgentRequest(BaseModel):
     agent_id: str
+
+
+class UIChatMessageRequest(BaseModel):
+    content: str
+    mode: str = "suggest"
+    focusTarget: Optional[dict[str, Any]] = None
+    focusTargets: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class UIFocusRequest(BaseModel):
+    focus: Optional[dict[str, Any]] = None
+
+
+class UIApprovalRequest(BaseModel):
+    gate: str
+
+
+class UIChangeRequest(BaseModel):
+    gate: str
+    feedback: str
+
+
+class UIGraphNodePatchRequest(BaseModel):
+    updates: dict[str, Any] = Field(default_factory=dict)
+
+
+class TimelineFrameUpdateRequest(BaseModel):
+    duration: Optional[float] = None
+    prompt: Optional[str] = None
+    dialogueId: Optional[str] = None
+
+
+class TimelineExpandRequest(BaseModel):
+    direction: str = "after"
+
+
+class TimelineDialogueUpdateRequest(BaseModel):
+    text: Optional[str] = None
+    character: Optional[str] = None
+    startFrame: Optional[int] = None
+    endFrame: Optional[int] = None
+    duration: Optional[float] = None
+
+
+class TimelineFrameEditRequest(BaseModel):
+    prompt: str
 
 
 # ---------------------------------------------------------------------------
@@ -567,6 +646,59 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="ScreenWire AI Engine", version="0.1.0", lifespan=lifespan)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.middleware("http")
+async def ui_route_audit_middleware(request: Request, call_next):
+    path = request.url.path
+    is_ui_route = path.startswith("/api/projects/")
+    started = datetime.now(timezone.utc)
+
+    try:
+        response = await call_next(request)
+    except Exception as exc:
+        if is_ui_route:
+            duration_ms = (datetime.now(timezone.utc) - started).total_seconds() * 1000.0
+            append_ui_event(
+                PROJECT_DIR,
+                {
+                    "projectId": PROJECT_DIR.name,
+                    "method": request.method,
+                    "path": path,
+                    "gate": classify_ui_gate(path),
+                    "statusCode": 500,
+                    "ok": False,
+                    "durationMs": round(duration_ms, 2),
+                    "error": str(exc),
+                },
+            )
+            write_ui_phase_report(PROJECT_DIR.name, PROJECT_DIR)
+        raise
+
+    if is_ui_route:
+        duration_ms = (datetime.now(timezone.utc) - started).total_seconds() * 1000.0
+        append_ui_event(
+            PROJECT_DIR,
+            {
+                "projectId": PROJECT_DIR.name,
+                "method": request.method,
+                "path": path,
+                "gate": classify_ui_gate(path),
+                "statusCode": response.status_code,
+                "ok": response.status_code < 400,
+                "durationMs": round(duration_ms, 2),
+            },
+        )
+        write_ui_phase_report(PROJECT_DIR.name, PROJECT_DIR)
+
+    return response
 
 
 # ---------------------------------------------------------------------------
@@ -602,6 +734,348 @@ def _resolve_output(output_path: str) -> Path:
     return p
 
 
+def _assert_project(project_id: str) -> None:
+    if project_id != PROJECT_DIR.name:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Project '{project_id}' is not active in this backend session",
+        )
+
+
+def _workspace_snapshot(project_id: str) -> dict[str, Any]:
+    _assert_project(project_id)
+    return build_workspace_snapshot(project_id, PROJECT_DIR)
+
+
+def _chat_history_path() -> Path:
+    path = PROJECT_DIR / "logs" / "ui_chat_history.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _load_chat_history() -> list[dict[str, Any]]:
+    data = load_json(_chat_history_path(), [])
+    return data if isinstance(data, list) else []
+
+
+def _save_chat_history(history: list[dict[str, Any]]) -> None:
+    path = _chat_history_path()
+    path.write_text(json.dumps(history, indent=2) + "\n", encoding="utf-8")
+
+
+def _chat_focus_path() -> Path:
+    path = PROJECT_DIR / "logs" / "ui_chat_focus.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _save_chat_focus(focus: dict[str, Any] | None) -> None:
+    _chat_focus_path().write_text(json.dumps({"focus": focus}, indent=2) + "\n", encoding="utf-8")
+
+
+def _workspace_state() -> dict[str, Any]:
+    return load_workspace_state(PROJECT_DIR)
+
+
+def _save_workspace_state_file(state: dict[str, Any]) -> None:
+    save_workspace_state(PROJECT_DIR, state)
+
+
+def _timeline_overrides() -> dict[str, Any]:
+    return load_timeline_overrides(PROJECT_DIR)
+
+
+def _save_timeline_overrides(overrides: dict[str, Any]) -> None:
+    save_timeline_overrides(PROJECT_DIR, overrides)
+
+
+def _timeline_prompt_path(frame_id: str, kind: str) -> Path:
+    root = PROJECT_DIR / ("video" if kind == "video" else "frames") / "prompts"
+    return root / f"{frame_id}_{kind}.json"
+
+
+def _normalize_timeline_duration(value: float | int | None) -> float:
+    try:
+        numeric = float(value if value is not None else 5)
+    except Exception:
+        numeric = 5.0
+    return round(max(1.0, min(15.0, numeric)), 1)
+
+
+def _timeline_image_rel_from_url(image_url: str | None) -> str | None:
+    if not image_url:
+        return None
+    prefix = "/api/project/file/"
+    return image_url[len(prefix):] if str(image_url).startswith(prefix) else str(image_url)
+
+
+def _set_timeline_frame_duration(frame_id: str, duration: float, overrides: dict[str, Any]) -> None:
+    expanded_frames = overrides.get("expandedFrames") or []
+    expanded = next((item for item in expanded_frames if item.get("id") == frame_id), None)
+    if expanded is not None:
+        expanded["duration"] = _normalize_timeline_duration(duration)
+        overrides["expandedFrames"] = expanded_frames
+        return
+
+    video_prompt_path = _timeline_prompt_path(frame_id, "video")
+    video_prompt = load_json(video_prompt_path, {})
+    video_prompt["duration"] = _normalize_timeline_duration(duration)
+    video_prompt_path.parent.mkdir(parents=True, exist_ok=True)
+    video_prompt_path.write_text(json.dumps(video_prompt, indent=2) + "\n", encoding="utf-8")
+
+
+def _set_timeline_frame_dialogue(frame_id: str, dialogue_id: str | None, overrides: dict[str, Any]) -> None:
+    expanded_frames = overrides.get("expandedFrames") or []
+    expanded = next((item for item in expanded_frames if item.get("id") == frame_id), None)
+    if expanded is not None:
+        expanded["dialogueId"] = dialogue_id
+        overrides["expandedFrames"] = expanded_frames
+        return
+
+    frame_overrides = overrides.get("frameOverrides") or {}
+    current = dict(frame_overrides.get(frame_id) or {})
+    current["dialogueId"] = dialogue_id
+    frame_overrides[frame_id] = current
+    overrides["frameOverrides"] = frame_overrides
+
+
+def _set_timeline_frame_image(frame_id: str, image_rel: str, overrides: dict[str, Any]) -> None:
+    expanded_frames = overrides.get("expandedFrames") or []
+    expanded = next((item for item in expanded_frames if item.get("id") == frame_id), None)
+    if expanded is not None:
+        expanded["imageRel"] = image_rel
+        overrides["expandedFrames"] = expanded_frames
+
+
+def _set_timeline_frame_prompt(frame_id: str, prompt: str, overrides: dict[str, Any]) -> None:
+    expanded_frames = overrides.get("expandedFrames") or []
+    expanded = next((item for item in expanded_frames if item.get("id") == frame_id), None)
+    if expanded is not None:
+        expanded["prompt"] = prompt
+        overrides["expandedFrames"] = expanded_frames
+        return
+
+    image_prompt_path = _timeline_prompt_path(frame_id, "image")
+    image_prompt = load_json(image_prompt_path, {})
+    image_prompt["prompt"] = prompt
+    image_prompt_path.parent.mkdir(parents=True, exist_ok=True)
+    image_prompt_path.write_text(json.dumps(image_prompt, indent=2) + "\n", encoding="utf-8")
+
+
+def _set_timeline_dialogue_override(dialogue_id: str, field: str, value: Any, overrides: dict[str, Any]) -> None:
+    dialogue_overrides = overrides.get("dialogueOverrides") or {}
+    current = dict(dialogue_overrides.get(dialogue_id) or {})
+    current[field] = value
+    dialogue_overrides[dialogue_id] = current
+    overrides["dialogueOverrides"] = dialogue_overrides
+
+
+def _redistribute_dialogue_frames(
+    project_id: str,
+    dialogue_id: str,
+    overrides: dict[str, Any],
+    *,
+    pinned_frame_id: str | None = None,
+    pinned_duration: float | None = None,
+) -> None:
+    snapshot = _workspace_snapshot(project_id)
+    dialogue = next((item for item in snapshot["dialogueBlocks"] if item["id"] == dialogue_id), None)
+    if not dialogue:
+        return
+
+    linked_frame_ids = list(dialogue.get("linkedFrameIds") or [])
+    if not linked_frame_ids:
+        return
+
+    effective_total = max(float(dialogue.get("duration") or 0), float(len(linked_frame_ids)))
+    effective_total = round(effective_total, 1)
+    if effective_total != float(dialogue.get("duration") or 0):
+        _set_timeline_dialogue_override(dialogue_id, "duration", effective_total, overrides)
+
+    if len(linked_frame_ids) == 1:
+        only_frame = linked_frame_ids[0]
+        duration = _normalize_timeline_duration(pinned_duration if pinned_frame_id == only_frame else effective_total)
+        _set_timeline_frame_duration(only_frame, duration, overrides)
+        _set_timeline_dialogue_override(dialogue_id, "duration", duration, overrides)
+        return
+
+    assignments: dict[str, float] = {}
+    if pinned_frame_id and pinned_frame_id in linked_frame_ids and pinned_duration is not None:
+        max_pinned = max(1.0, effective_total - float(len(linked_frame_ids) - 1))
+        assignments[pinned_frame_id] = min(_normalize_timeline_duration(pinned_duration), round(max_pinned, 1))
+
+    remaining_ids = [frame_id for frame_id in linked_frame_ids if frame_id not in assignments]
+    remaining_total = effective_total - sum(assignments.values())
+    if remaining_ids:
+        min_required = float(len(remaining_ids))
+        if remaining_total < min_required:
+            remaining_total = min_required
+            effective_total = round(sum(assignments.values()) + remaining_total, 1)
+            _set_timeline_dialogue_override(dialogue_id, "duration", effective_total, overrides)
+        base_value = round(remaining_total / len(remaining_ids), 1)
+        running_total = sum(assignments.values())
+        for index, frame_id in enumerate(remaining_ids):
+            if index == len(remaining_ids) - 1:
+                duration = round(effective_total - running_total, 1)
+            else:
+                duration = base_value
+                running_total += duration
+            assignments[frame_id] = _normalize_timeline_duration(duration)
+
+    for frame_id, duration in assignments.items():
+        _set_timeline_frame_duration(frame_id, duration, overrides)
+
+
+def _project_workers_payload() -> list[dict[str, Any]]:
+    workers: list[dict[str, Any]] = []
+    for job in ui_pipeline_jobs.values():
+        workers.append(
+            {
+                "id": job["id"],
+                "name": job["name"],
+                "status": job["status"],
+                "progress": job["progress"],
+                "message": job["message"],
+            }
+        )
+    return workers
+
+
+def _focus_summary(focus_target: dict[str, Any] | None, focus_targets: list[dict[str, Any]] | None = None) -> str:
+    focus_targets = [item for item in (focus_targets or []) if isinstance(item, dict) and item.get("id")]
+    if focus_targets:
+        ordered = [f"{item.get('type')}::{item.get('id')} ({item.get('name')})" for item in focus_targets]
+        return " Current focus selection: " + "; ".join(ordered) + ". Prioritize these items together."
+    if focus_target:
+        return (
+            f" Current focus target: {focus_target.get('type')}::{focus_target.get('id')} "
+            f"({focus_target.get('name')}). Prioritize that context."
+        )
+    return ""
+
+
+def _approval_key(gate: str) -> str:
+    normalized = str(gate or "").strip().lower()
+    mapping = {
+        "skeleton": "skeletonApprovedAt",
+        "references": "referencesApprovedAt",
+        "reference": "referencesApprovedAt",
+        "timeline": "timelineApprovedAt",
+        "video": "videoApprovedAt",
+    }
+    if normalized not in mapping:
+        raise HTTPException(status_code=400, detail=f"Unknown approval gate: {gate}")
+    return mapping[normalized]
+
+
+def _run_morpheus_chat(
+    content: str,
+    focus_target: dict[str, Any] | None = None,
+    focus_targets: list[dict[str, Any]] | None = None,
+    mode: str = "suggest",
+) -> str:
+    if not XAI_API_KEY:
+        return (
+            "Morpheus is not configured yet because XAI_API_KEY is missing on the local backend. "
+            "The workspace is loaded, but chat reasoning is unavailable."
+        )
+
+    mode_normalized = str(mode or "suggest").strip().lower()
+    system_prompt = (
+        "You are Morpheus, the local ScreenWire creative assistant. "
+        "You help the user understand, edit, and regenerate the currently selected project. "
+        "Use the provided tools to inspect the project files, Greenlight reports, graph, prompts, and assets. "
+        "Prefer structured graph edits and targeted media actions over loose freeform rewrites. "
+        "Do not edit source code outside the project. Be direct, practical, and concise."
+    )
+    if mode_normalized == "apply":
+        system_prompt += (
+            " The user wants you to apply changes directly when it is safe to do so. "
+            "Prefer update_graph_node, query_graph_database, and targeted image/video actions. "
+            "Only write project files when a graph edit is not sufficient, then summarize exactly what changed."
+        )
+    elif mode_normalized == "regenerate":
+        system_prompt += (
+            " The user wants targeted regeneration help. Prefer updating relevant prompt/output artifacts "
+            "for the focused project items. Use Nano Banana for image generation/editing and Grok video tools for clip generation/extension when requested."
+        )
+    else:
+        system_prompt += (
+            " Default to suggestion mode unless the user explicitly asks you to apply edits."
+        )
+    system_prompt += (
+        " Greenlight is the QA and diagnostics lane. Use Greenlight reports for health findings, "
+        "but keep your own role focused on assisting the user's creative and operational intent."
+    )
+    system_prompt += _focus_summary(focus_target, focus_targets)
+
+    tool_executor = make_project_tool_executor(
+        project_root=PROJECT_DIR,
+        repo_root=APP_DIR,
+        skills_dir=APP_DIR / "skills",
+    )
+    client = SyncXAIClient(api_key=XAI_API_KEY)
+    return client.generate_text_with_tools(
+        prompt=content,
+        system_prompt=system_prompt,
+        tools=build_project_tools(),
+        tool_executor=tool_executor,
+        task_hint="morpheus-ui-chat",
+        cache_key=f"{PROJECT_DIR.name}-ui-chat-{mode_normalized}",
+        max_tool_turns=16,
+    )
+
+
+async def _spawn_pipeline_phase_job(job_name: str, phase_number: int) -> dict[str, Any]:
+    existing = ui_pipeline_jobs.get(job_name)
+    if existing and existing.get("process") and existing["process"].returncode is None:
+        return existing
+
+    cmd = [
+        sys.executable,
+        str(APP_DIR / "run_pipeline.py"),
+        "--project",
+        PROJECT_DIR.name,
+        "--phase",
+        str(phase_number),
+        "--live",
+    ]
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        cwd=str(APP_DIR),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=dict(os.environ),
+    )
+    job = {
+        "id": job_name,
+        "name": job_name.replace("_", " ").title(),
+        "status": "running",
+        "progress": 5,
+        "message": f"Running pipeline phase {phase_number}",
+        "process": proc,
+    }
+    ui_pipeline_jobs[job_name] = job
+
+    async def _watch() -> None:
+        stdout_data, stderr_data = await proc.communicate()
+        if stdout_data:
+            log("UIJob", stdout_data.decode(errors="ignore"))
+        if stderr_data:
+            log("UIJob", stderr_data.decode(errors="ignore"))
+        if proc.returncode == 0:
+            job["status"] = "complete"
+            job["progress"] = 100
+            job["message"] = f"Phase {phase_number} completed"
+        else:
+            job["status"] = "error"
+            job["progress"] = 100
+            job["message"] = f"Phase {phase_number} failed"
+
+    asyncio.create_task(_watch())
+    return job
+
+
 # ---------------------------------------------------------------------------
 # Public API Routes
 # ---------------------------------------------------------------------------
@@ -618,6 +1092,562 @@ async def get_current_project():
             reconciler.manifest_path.read_text(encoding="utf-8")
         )
     return reconciler.manifest
+
+
+@app.get("/api/project/file/{requested_path:path}")
+async def get_project_file(requested_path: str):
+    target = (PROJECT_DIR / requested_path).resolve()
+    if not str(target).startswith(str(PROJECT_DIR.resolve())):
+        raise HTTPException(status_code=403, detail="Requested path escapes project root")
+    if not target.exists() or not target.is_file():
+        raise HTTPException(status_code=404, detail="Project file not found")
+    return FileResponse(target, media_type=mimetypes.guess_type(str(target))[0] or "application/octet-stream")
+
+
+@app.get("/api/projects/{project_id}/workspace")
+async def get_workspace(project_id: str):
+    return _workspace_snapshot(project_id)
+
+
+@app.get("/api/projects/{project_id}/diagnostics")
+async def get_workspace_diagnostics(project_id: str):
+    _assert_project(project_id)
+    path = write_ui_phase_report(project_id, PROJECT_DIR)
+    return load_ui_phase_report(PROJECT_DIR) | {
+        "path": f"/api/project/file/{path.relative_to(PROJECT_DIR).as_posix()}",
+    }
+
+
+@app.get("/api/projects/{project_id}/greenlight")
+async def get_greenlight_report(project_id: str):
+    _assert_project(project_id)
+    path = write_ui_phase_report(project_id, PROJECT_DIR)
+    return load_ui_phase_report(PROJECT_DIR) | {
+        "path": f"/api/project/file/{path.relative_to(PROJECT_DIR).as_posix()}",
+        "agent": "greenlight",
+    }
+
+
+@app.get("/api/projects/{project_id}/concept")
+async def get_project_concept(project_id: str):
+    return _workspace_snapshot(project_id)["creativeConcept"]
+
+
+@app.post("/api/projects/{project_id}/concept")
+async def set_project_concept(project_id: str, payload: dict[str, Any]):
+    _assert_project(project_id)
+    onboarding_path = PROJECT_DIR / "source_files" / "onboarding_config.json"
+    onboarding = load_json(onboarding_path, {})
+    onboarding["extraDetails"] = payload.get("synopsis") or payload.get("sourceText") or onboarding.get("extraDetails", "")
+    if payload.get("genre"):
+        onboarding["genre"] = [item.strip() for item in str(payload["genre"]).split(",") if item.strip()]
+    elif payload.get("genres"):
+        genres = payload.get("genres") or []
+        if isinstance(genres, str):
+            onboarding["genre"] = [item.strip() for item in genres.split(",") if item.strip()]
+        else:
+            onboarding["genre"] = [str(item).strip() for item in genres if str(item).strip()]
+    if payload.get("tone"):
+        onboarding["mood"] = [item.strip() for item in str(payload["tone"]).split(",") if item.strip()]
+    if payload.get("mediaStyle"):
+        onboarding["mediaStyle"] = str(payload["mediaStyle"]).strip()
+    if payload.get("frameCount") is not None:
+        frame_count = payload.get("frameCount")
+        onboarding["frameBudget"] = frame_count if frame_count not in ("", None) else onboarding.get("frameBudget", "auto")
+    if payload.get("creativityLevel"):
+        onboarding["creativeFreedom"] = str(payload["creativityLevel"]).strip()
+    onboarding_path.write_text(json.dumps(onboarding, indent=2) + "\n", encoding="utf-8")
+
+    pitch_path = PROJECT_DIR / "source_files" / "pitch.md"
+    source_text = payload.get("sourceText") or payload.get("synopsis") or ""
+    if source_text:
+        pitch_path.write_text(str(source_text).strip() + "\n", encoding="utf-8")
+
+    return _workspace_snapshot(project_id)["creativeConcept"]
+
+
+@app.post("/api/projects/{project_id}/concept/upload")
+async def upload_project_concept_file(project_id: str, file: UploadFile = File(...)):
+    _assert_project(project_id)
+    source_dir = PROJECT_DIR / "source_files"
+    source_dir.mkdir(parents=True, exist_ok=True)
+    target = source_dir / (file.filename or "upload.bin")
+    content = await file.read()
+    target.write_bytes(content)
+
+    extracted_text = ""
+    if target.suffix.lower() in {".md", ".txt", ".json"}:
+        extracted_text = target.read_text(encoding="utf-8", errors="ignore")
+
+    return {"text": extracted_text, "path": str(target.relative_to(PROJECT_DIR))}
+
+
+@app.get("/api/projects/{project_id}/skeleton")
+async def get_project_skeleton(project_id: str):
+    return _workspace_snapshot(project_id)["skeletonPlan"]
+
+
+@app.post("/api/projects/{project_id}/skeleton/generate")
+async def generate_project_skeleton(project_id: str):
+    _assert_project(project_id)
+    job = await _spawn_pipeline_phase_job("skeleton_generation", 1)
+    return {
+        "jobId": job["id"],
+        "status": job["status"],
+        "message": job["message"],
+    }
+
+
+@app.post("/api/projects/{project_id}/skeleton/approve")
+async def approve_project_skeleton(project_id: str):
+    _assert_project(project_id)
+    state = _workspace_state()
+    approvals = dict(state.get("approvals") or {})
+    approvals["skeletonApprovedAt"] = datetime.now(timezone.utc).isoformat()
+    state["approvals"] = approvals
+    _save_workspace_state_file(state)
+    return {"ok": True}
+
+
+@app.post("/api/projects/{project_id}/approve")
+async def approve_project_gate(project_id: str, req: UIApprovalRequest):
+    _assert_project(project_id)
+    state = _workspace_state()
+    approvals = dict(state.get("approvals") or {})
+    approvals[_approval_key(req.gate)] = datetime.now(timezone.utc).isoformat()
+    state["approvals"] = approvals
+    _save_workspace_state_file(state)
+    return _workspace_snapshot(project_id)
+
+
+@app.post("/api/projects/{project_id}/request-changes")
+async def request_project_changes(project_id: str, req: UIChangeRequest):
+    _assert_project(project_id)
+    state = _workspace_state()
+    requests = list(state.get("changeRequests") or [])
+    requests.append(
+        {
+            "gate": str(req.gate).strip().lower(),
+            "feedback": str(req.feedback).strip(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+    state["changeRequests"] = requests
+    approvals = dict(state.get("approvals") or {})
+    approvals.pop(_approval_key(req.gate), None)
+    state["approvals"] = approvals
+    _save_workspace_state_file(state)
+    return {"ok": True, "changeRequests": requests}
+
+
+@app.post("/api/projects/{project_id}/skeleton/edit-request")
+async def request_project_skeleton_edit(project_id: str, payload: dict[str, Any]):
+    _assert_project(project_id)
+    feedback = str(payload.get("feedback") or "").strip()
+    requests_path = PROJECT_DIR / "logs" / "ui_skeleton_feedback.json"
+    existing = load_json(requests_path, [])
+    if not isinstance(existing, list):
+        existing = []
+    existing.append(
+        {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "feedback": feedback,
+        }
+    )
+    requests_path.parent.mkdir(parents=True, exist_ok=True)
+    requests_path.write_text(json.dumps(existing, indent=2) + "\n", encoding="utf-8")
+    return _workspace_snapshot(project_id)["skeletonPlan"]
+
+
+@app.get("/api/projects/{project_id}/entities")
+async def get_project_entities(project_id: str):
+    return _workspace_snapshot(project_id)["entities"]
+
+
+@app.get("/api/projects/{project_id}/graph/{node_type}/{node_id}")
+async def get_project_graph_node(project_id: str, node_type: str, node_id: str):
+    _assert_project(project_id)
+    try:
+        graph_collection_name(node_type)
+        node = get_graph_node(PROJECT_DIR, node_type, node_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if node is None:
+        raise HTTPException(status_code=404, detail=f"{node_type}:{node_id} not found")
+    return node
+
+
+@app.get("/api/projects/{project_id}/graph/frame/{frame_id}/context")
+async def get_project_frame_context(project_id: str, frame_id: str):
+    _assert_project(project_id)
+    context = build_frame_context(PROJECT_DIR, frame_id)
+    if context is None:
+        raise HTTPException(status_code=404, detail=f"frame:{frame_id} not found")
+    return context
+
+
+@app.patch("/api/projects/{project_id}/graph/{node_type}/{node_id}")
+async def patch_project_graph_node(project_id: str, node_type: str, node_id: str, req: UIGraphNodePatchRequest):
+    _assert_project(project_id)
+    try:
+        patch_graph_node(PROJECT_DIR, node_type, node_id, req.updates, modified_by="ui")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"{node_type}:{node_id} not found") from exc
+    return _workspace_snapshot(project_id)
+
+
+@app.post("/api/projects/{project_id}/entities/{entity_id}/upload")
+async def upload_entity_image(project_id: str, entity_id: str, image: UploadFile = File(...)):
+    _assert_project(project_id)
+    snapshot = _workspace_snapshot(project_id)
+    entity = next((item for item in snapshot["entities"] if item["id"] == entity_id), None)
+    if not entity:
+        raise HTTPException(status_code=404, detail=f"Entity '{entity_id}' not found")
+
+    target = entity_upload_path(PROJECT_DIR, entity_id, entity["type"], image.filename or ".png")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(await image.read())
+    return {"imageUrl": f"/api/project/file/{target.relative_to(PROJECT_DIR).as_posix()}"}
+
+
+@app.get("/api/projects/{project_id}/storyboard")
+async def get_project_storyboard(project_id: str):
+    return _workspace_snapshot(project_id)["storyboardFrames"]
+
+
+@app.post("/api/projects/{project_id}/storyboard/{frame_id}/upload")
+async def upload_storyboard_frame(project_id: str, frame_id: str, image: UploadFile = File(...)):
+    _assert_project(project_id)
+    target = frame_upload_path(PROJECT_DIR, frame_id, image.filename or ".png")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(await image.read())
+    return {"imageUrl": f"/api/project/file/{target.relative_to(PROJECT_DIR).as_posix()}"}
+
+
+@app.get("/api/projects/{project_id}/timeline")
+async def get_project_timeline(project_id: str):
+    return _workspace_snapshot(project_id)["timelineFrames"]
+
+
+@app.get("/api/projects/{project_id}/timeline/dialogue")
+async def get_project_timeline_dialogue(project_id: str):
+    return _workspace_snapshot(project_id)["dialogueBlocks"]
+
+
+@app.put("/api/projects/{project_id}/timeline/{frame_id}")
+async def update_project_timeline_frame(project_id: str, frame_id: str, req: TimelineFrameUpdateRequest):
+    _assert_project(project_id)
+    overrides = _timeline_overrides()
+    snapshot_before = _workspace_snapshot(project_id)
+    current_frame = next((item for item in snapshot_before["timelineFrames"] if item["id"] == frame_id), None)
+    if not current_frame:
+        raise HTTPException(status_code=404, detail=f"Frame '{frame_id}' not found")
+
+    previous_dialogue_id = current_frame.get("dialogueId")
+    if req.prompt is not None:
+        _set_timeline_frame_prompt(frame_id, req.prompt, overrides)
+
+    if req.dialogueId is not None:
+        new_dialogue_id = req.dialogueId or None
+        if previous_dialogue_id and previous_dialogue_id != new_dialogue_id:
+            previous_dialogue = next((item for item in snapshot_before["dialogueBlocks"] if item["id"] == previous_dialogue_id), None)
+            if previous_dialogue and len(previous_dialogue.get("linkedFrameIds") or []) <= 1:
+                raise HTTPException(status_code=400, detail="A dialogue block must keep at least one linked frame")
+        _set_timeline_frame_dialogue(frame_id, new_dialogue_id, overrides)
+        if previous_dialogue_id and previous_dialogue_id != new_dialogue_id:
+            _redistribute_dialogue_frames(project_id, previous_dialogue_id, overrides)
+        if new_dialogue_id:
+            _redistribute_dialogue_frames(project_id, new_dialogue_id, overrides)
+
+    if req.duration is not None:
+        if previous_dialogue_id and req.dialogueId is None:
+          _redistribute_dialogue_frames(
+              project_id,
+              previous_dialogue_id,
+              overrides,
+              pinned_frame_id=frame_id,
+              pinned_duration=req.duration,
+          )
+        elif req.dialogueId:
+            new_dialogue_id = req.dialogueId or None
+            if new_dialogue_id:
+                _redistribute_dialogue_frames(
+                    project_id,
+                    new_dialogue_id,
+                    overrides,
+                    pinned_frame_id=frame_id,
+                    pinned_duration=req.duration,
+                )
+            else:
+                _set_timeline_frame_duration(frame_id, req.duration, overrides)
+        else:
+            _set_timeline_frame_duration(frame_id, req.duration, overrides)
+
+    _save_timeline_overrides(overrides)
+
+    timeline = _workspace_snapshot(project_id)["timelineFrames"]
+    frame = next((item for item in timeline if item["id"] == frame_id), None)
+    if not frame:
+        raise HTTPException(status_code=404, detail=f"Frame '{frame_id}' not found")
+    return frame
+
+
+@app.post("/api/projects/{project_id}/timeline/{frame_id}/regenerate")
+async def regenerate_project_timeline_frame(project_id: str, frame_id: str):
+    _assert_project(project_id)
+    overrides = _timeline_overrides()
+    expanded = next((item for item in overrides.get("expandedFrames") or [] if item.get("id") == frame_id), None)
+    source_frame_id = expanded.get("sourceFrameId") if expanded else frame_id
+
+    image_prompt_path = _timeline_prompt_path(source_frame_id, "image")
+    prompt_data = load_json(image_prompt_path, {})
+    if not prompt_data:
+        raise HTTPException(status_code=404, detail=f"Prompt data for frame '{frame_id}' not found")
+
+    prompt_text = expanded.get("prompt") if expanded else prompt_data.get("prompt")
+    output_rel = f"frames/composed/{frame_id}_gen.png"
+    request = GenerateFrameRequest(
+        prompt=prompt_text or prompt_data.get("prompt") or "",
+        size=prompt_data.get("size") or "landscape_16_9",
+        output_path=output_rel,
+        output_format="png",
+        reference_images=list(prompt_data.get("reference_images") or prompt_data.get("ref_images") or []),
+        storyboard_image=prompt_data.get("storyboard_image"),
+        frame_id=frame_id,
+        phase="ui_regenerate_frame",
+    )
+    result = await generate_frame(request)
+
+    if expanded is not None:
+        expanded["imageRel"] = output_rel
+        _save_timeline_overrides(overrides)
+
+    timeline = _workspace_snapshot(project_id)["timelineFrames"]
+    frame = next((item for item in timeline if item["id"] == frame_id), None)
+    return frame or result
+
+
+@app.delete("/api/projects/{project_id}/timeline/{frame_id}")
+async def remove_project_timeline_frame(project_id: str, frame_id: str):
+    _assert_project(project_id)
+    overrides = _timeline_overrides()
+    snapshot = _workspace_snapshot(project_id)
+    current_frame = next((item for item in snapshot["timelineFrames"] if item["id"] == frame_id), None)
+    if not current_frame:
+        raise HTTPException(status_code=404, detail=f"Frame '{frame_id}' not found")
+    dialogue_id = current_frame.get("dialogueId")
+    if dialogue_id:
+        dialogue = next((item for item in snapshot["dialogueBlocks"] if item["id"] == dialogue_id), None)
+        if dialogue and len(dialogue.get("linkedFrameIds") or []) <= 1:
+            raise HTTPException(status_code=400, detail="A dialogue block must keep at least one linked frame")
+
+    expanded_frames = overrides.get("expandedFrames") or []
+    existing_len = len(expanded_frames)
+    overrides["expandedFrames"] = [item for item in expanded_frames if item.get("id") != frame_id]
+    if len(overrides["expandedFrames"]) == existing_len:
+        hidden = set(overrides.get("hiddenFrameIds") or [])
+        hidden.add(frame_id)
+        overrides["hiddenFrameIds"] = sorted(hidden)
+    if dialogue_id:
+        _redistribute_dialogue_frames(project_id, dialogue_id, overrides)
+    _save_timeline_overrides(overrides)
+    return {"ok": True}
+
+
+@app.post("/api/projects/{project_id}/timeline/{frame_id}/expand")
+async def expand_project_timeline_frame(project_id: str, frame_id: str, req: TimelineExpandRequest):
+    _assert_project(project_id)
+    direction = "before" if str(req.direction).lower() == "before" else "after"
+    timeline = _workspace_snapshot(project_id)["timelineFrames"]
+    source_frame = next((item for item in timeline if item["id"] == frame_id), None)
+    if not source_frame:
+        raise HTTPException(status_code=404, detail=f"Frame '{frame_id}' not found")
+
+    overrides = _timeline_overrides()
+    expanded_frames = overrides.get("expandedFrames") or []
+    suffix = len(expanded_frames) + 1
+    new_id = f"{frame_id}_{direction}_{suffix:02d}"
+    image_rel = None
+    if source_frame.get("imageUrl"):
+        prefix = "/api/project/file/"
+        image_url = str(source_frame["imageUrl"])
+        image_rel = image_url[len(prefix):] if image_url.startswith(prefix) else image_url
+
+    expanded_frames.append(
+        {
+            "id": new_id,
+            "sourceFrameId": source_frame.get("sourceFrameId") or frame_id,
+            "storyboardId": source_frame.get("storyboardId"),
+            "direction": direction,
+            "prompt": source_frame.get("prompt") or "",
+            "duration": source_frame.get("duration") or 5,
+            "dialogueId": source_frame.get("dialogueId"),
+            "imageRel": image_rel,
+        }
+    )
+    overrides["expandedFrames"] = expanded_frames
+    _save_timeline_overrides(overrides)
+
+    refreshed = _workspace_snapshot(project_id)["timelineFrames"]
+    return [item for item in refreshed if item["id"] == new_id]
+
+
+@app.put("/api/projects/{project_id}/timeline/dialogue/{dialogue_id}")
+async def update_project_timeline_dialogue(project_id: str, dialogue_id: str, req: TimelineDialogueUpdateRequest):
+    _assert_project(project_id)
+    overrides = _timeline_overrides()
+    if req.text is not None:
+        _set_timeline_dialogue_override(dialogue_id, "text", req.text, overrides)
+    if req.character is not None:
+        _set_timeline_dialogue_override(dialogue_id, "character", req.character, overrides)
+    if req.startFrame is not None:
+        _set_timeline_dialogue_override(dialogue_id, "startFrame", req.startFrame, overrides)
+    if req.endFrame is not None:
+        _set_timeline_dialogue_override(dialogue_id, "endFrame", req.endFrame, overrides)
+    if req.duration is not None:
+        _set_timeline_dialogue_override(dialogue_id, "duration", max(0.5, float(req.duration)), overrides)
+        _redistribute_dialogue_frames(project_id, dialogue_id, overrides)
+    _save_timeline_overrides(overrides)
+    dialogue = _workspace_snapshot(project_id)["dialogueBlocks"]
+    block = next((item for item in dialogue if item["id"] == dialogue_id), None)
+    if not block:
+        raise HTTPException(status_code=404, detail=f"Dialogue '{dialogue_id}' not found")
+    return block
+
+
+@app.post("/api/projects/{project_id}/timeline/{frame_id}/edit")
+async def edit_project_timeline_frame(project_id: str, frame_id: str, req: TimelineFrameEditRequest):
+    _assert_project(project_id)
+    if not req.prompt.strip():
+        raise HTTPException(status_code=400, detail="Edit prompt is required")
+
+    timeline = _workspace_snapshot(project_id)["timelineFrames"]
+    frame = next((item for item in timeline if item["id"] == frame_id), None)
+    if not frame:
+        raise HTTPException(status_code=404, detail=f"Frame '{frame_id}' not found")
+    image_rel = _timeline_image_rel_from_url(frame.get("imageUrl"))
+    if not image_rel:
+        raise HTTPException(status_code=400, detail="Frame has no image to edit")
+
+    source_frame_id = frame.get("sourceFrameId") or frame_id
+    image_prompt = load_json(_timeline_prompt_path(source_frame_id, "image"), {})
+    base_prompt = str(image_prompt.get("prompt") or frame.get("prompt") or "").strip()
+    edit_prompt = req.prompt.strip()
+    if base_prompt:
+        edit_prompt = (
+            f"{edit_prompt}\n\n"
+            f"Preserve continuity with the existing frame. Original frame intent:\n{base_prompt[:2000]}"
+        )
+
+    output_rel = f"frames/composed/{frame_id}_gen.png"
+    request = EditImageRequest(
+        input_path=image_rel,
+        prompt=edit_prompt,
+        size=image_prompt.get("size") or "landscape_16_9",
+        output_path=output_rel,
+        output_format="png",
+        phase="ui_edit_frame",
+    )
+    result = await edit_image(request)
+
+    overrides = _timeline_overrides()
+    _set_timeline_frame_image(frame_id, output_rel, overrides)
+    _save_timeline_overrides(overrides)
+
+    refreshed = _workspace_snapshot(project_id)["timelineFrames"]
+    updated = next((item for item in refreshed if item["id"] == frame_id), None)
+    return updated or result
+
+
+@app.post("/api/projects/{project_id}/timeline/{frame_id}/upload")
+async def upload_timeline_frame(project_id: str, frame_id: str, image: UploadFile = File(...)):
+    _assert_project(project_id)
+    target = frame_upload_path(PROJECT_DIR, frame_id, image.filename or ".png")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(await image.read())
+    overrides = _timeline_overrides()
+    for item in overrides.get("expandedFrames") or []:
+        if item.get("id") == frame_id:
+            item["imageRel"] = target.relative_to(PROJECT_DIR).as_posix()
+            _save_timeline_overrides(overrides)
+            break
+    return {"imageUrl": f"/api/project/file/{target.relative_to(PROJECT_DIR).as_posix()}"}
+
+
+@app.get("/api/projects/{project_id}/workers")
+async def get_project_workers(project_id: str):
+    _assert_project(project_id)
+    return _project_workers_payload()
+
+
+@app.get("/api/projects/{project_id}/chat")
+async def get_project_chat(project_id: str):
+    _assert_project(project_id)
+    return _load_chat_history()
+
+
+@app.post("/api/projects/{project_id}/chat")
+async def send_project_chat(project_id: str, req: UIChatMessageRequest):
+    _assert_project(project_id)
+    history = _load_chat_history()
+    user_message = {
+        "id": f"user-{int(datetime.now(timezone.utc).timestamp() * 1000)}",
+        "role": "user",
+        "content": req.content,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "mode": req.mode,
+        "focusTarget": req.focusTarget,
+    }
+    history.append(user_message)
+
+    response_text = _run_morpheus_chat(req.content, req.focusTarget, req.focusTargets, req.mode)
+    agent_message = {
+        "id": f"agent-{int(datetime.now(timezone.utc).timestamp() * 1000)}",
+        "role": "agent",
+        "content": response_text,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "mode": req.mode,
+    }
+    history.append(agent_message)
+    _save_chat_history(history)
+    return {"response": agent_message}
+
+
+@app.post("/api/projects/{project_id}/chat/focus")
+async def set_project_chat_focus(project_id: str, req: UIFocusRequest):
+    _assert_project(project_id)
+    _save_chat_focus(req.focus)
+    return {"ok": True}
+
+
+@app.delete("/api/projects/{project_id}/chat")
+async def clear_project_chat(project_id: str):
+    _assert_project(project_id)
+    _save_chat_history([])
+    _save_chat_focus(None)
+    return {"ok": True}
+
+
+@app.websocket("/ws/projects/{project_id}")
+async def project_events_socket(websocket: WebSocket, project_id: str):
+    _assert_project(project_id)
+    await websocket.accept()
+    try:
+        await websocket.send_json({"type": "connected", "data": {"projectId": project_id}})
+        while True:
+            try:
+                await asyncio.wait_for(websocket.receive_text(), timeout=5.0)
+            except asyncio.TimeoutError:
+                snapshot = _workspace_snapshot(project_id)
+                await websocket.send_json({"type": "workspace_update", "data": snapshot})
+                await websocket.send_json({"type": "worker_snapshot", "data": _project_workers_payload()})
+                await websocket.send_json({"type": "project_update", "data": snapshot["project"]})
+                for worker in _project_workers_payload():
+                    await websocket.send_json({"type": "worker_update", "data": worker})
+    except WebSocketDisconnect:
+        return
 
 
 @app.post("/api/images/tag-all")
@@ -1246,6 +2276,96 @@ async def generate_video(req: GenerateVideoRequest):
         "prediction_id": "",
         "model": result.model_used,
         "duration": result.duration,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Layer 1: POST /internal/extend-video
+# ---------------------------------------------------------------------------
+
+@app.post("/internal/extend-video")
+async def extend_video(req: ExtendVideoRequest):
+    """Extend a generated Grok video clip via Replicate."""
+    output = _resolve_output(req.output_path)
+    input_video = Path(req.video_path)
+    if not input_video.is_absolute():
+        input_video = PROJECT_DIR / input_video
+    if not input_video.exists():
+        raise HTTPException(
+            status_code=400,
+            detail="video_path is required and must exist for video extension",
+        )
+
+    duration = min(max(int(req.duration or 5), 2), 15)
+
+    try:
+        video_uri = await _upload_to_replicate(input_video)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Failed to upload video for extension: {exc}") from exc
+
+    pred_input: dict[str, Any] = {
+        "video": video_uri,
+        "duration": duration,
+    }
+    if req.prompt.strip():
+        pred_input["prompt"] = req.prompt.strip()
+    if isinstance(req.extra_params, dict):
+        pred_input.update(req.extra_params)
+
+    headers = {
+        "Authorization": f"Bearer {REPLICATE_API_TOKEN}",
+        "Content-Type": "application/json",
+        "Prefer": "wait",
+    }
+
+    with activate_run_context(run_id=req.run_id or "", phase=req.phase):
+        try:
+            pred_data = await _replicate_predict(
+                "xai/grok-imagine-video-extension",
+                pred_input,
+                headers,
+            )
+            prediction_id = pred_data.get("id")
+            if pred_data.get("status") not in ("succeeded", "failed", "canceled"):
+                pred_data = await _poll_replicate_prediction(prediction_id, headers)
+        except httpx.HTTPError as exc:
+            detail = exc.response.text if getattr(exc, "response", None) is not None else str(exc)
+            raise HTTPException(status_code=502, detail=detail) from exc
+
+    if pred_data.get("status") != "succeeded":
+        detail = pred_data.get("error") or pred_data
+        raise HTTPException(status_code=502, detail=detail)
+
+    out = pred_data.get("output")
+    if isinstance(out, list):
+        output_url = next((item for item in out if isinstance(item, str)), "")
+    else:
+        output_url = out if isinstance(out, str) else ""
+    if not output_url:
+        raise HTTPException(status_code=502, detail="Video extension returned no output URL")
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    await _download_file(output_url, output)
+
+    emit_event(
+        PROJECT_DIR,
+        event="video_extended",
+        run_id=req.run_id or "",
+        phase=req.phase,
+        handler="video_extension",
+        details={
+            "path": str(output),
+            "model": "xai/grok-imagine-video-extension",
+            "duration": duration,
+            "source": str(input_video),
+        },
+    )
+    return {
+        "success": True,
+        "path": str(output),
+        "prediction_id": pred_data.get("id", ""),
+        "model": "xai/grok-imagine-video-extension",
+        "duration": duration,
     }
 
 

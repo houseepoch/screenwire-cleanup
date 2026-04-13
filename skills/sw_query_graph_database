@@ -1,0 +1,19 @@
+#!/usr/bin/env python3
+"""sw_query_graph_database — friendly wrapper around graph_query for graph/database lookups."""
+
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+
+def main():
+    script_dir = Path(__file__).resolve().parent
+    graph_query = script_dir / "graph_query"
+    cmd = [sys.executable, str(graph_query), *sys.argv[1:]]
+    env = dict(os.environ)
+    raise SystemExit(subprocess.call(cmd, env=env))
+
+
+if __name__ == "__main__":
+    main()

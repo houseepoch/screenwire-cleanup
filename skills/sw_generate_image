@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""sw_generate_image — POST to /internal/generate-image (prunaai/p-image) for reference assets.
+"""sw_generate_image — POST to /internal/fresh-generation via Nano Banana for new images.
 
 On safety filter failure, prints structured error with rephrase hints so the
 calling agent can modify the prompt and retry.
@@ -14,15 +14,15 @@ import httpx
 
 PROJECT_DIR_DEFAULT = os.getcwd()
 
-MAX_RETRIES = 2  # agent handles retries via prompt rephrasing, but we auto-retry once with seed change
-
-
 def main():
-    parser = argparse.ArgumentParser(description="Generate a reference image via p-image (mood/cast/location/prop).")
+    parser = argparse.ArgumentParser(description="Generate a new image via Nano Banana.")
     parser.add_argument("--prompt", required=True, help="Image generation prompt")
     parser.add_argument("--out", required=True, help="Output file path (relative or absolute)")
     parser.add_argument("--size", default="landscape_16_9", help="Image size preset (default: landscape_16_9)")
     parser.add_argument("--seed", type=int, default=None, help="Seed for reproducibility")
+    parser.add_argument("--reference-image", action="append", default=[], help="Optional reference image path (repeatable)")
+    parser.add_argument("--image-search", action="store_true", default=False, help="Enable Google Image Search grounding")
+    parser.add_argument("--google-search", action="store_true", default=False, help="Enable Google Web Search grounding")
     args = parser.parse_args()
 
     project_dir = os.environ.get("PROJECT_DIR", PROJECT_DIR_DEFAULT)
@@ -34,12 +34,18 @@ def main():
         "size": args.size,
         "output_path": out_abs,
         "output_format": "png",
+        "reference_images": [
+            ref if os.path.isabs(ref) else os.path.join(project_dir, ref)
+            for ref in args.reference_image
+        ],
+        "image_search": args.image_search,
+        "google_search": args.google_search,
     }
     if args.seed is not None:
         body["seed"] = args.seed
 
     try:
-        resp = httpx.post("http://localhost:8000/internal/generate-image", json=body, timeout=120)
+        resp = httpx.post("http://localhost:8000/internal/fresh-generation", json=body, timeout=180)
         if resp.status_code == 502:
             _handle_prediction_failure(resp, args.prompt, out_abs)
             return

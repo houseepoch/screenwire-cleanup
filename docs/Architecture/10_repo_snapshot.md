@@ -1,17 +1,17 @@
 # Repo Snapshot Index
 
-- Generated at: `2026-04-12T19:24:42.749443+00:00`
+- Generated at: `2026-04-12T20:30:04.416911+00:00`
 - Repo root: `/home/nikoles16/Documents/ScreenWire Environments/screenwire-pipeline`
-- Included files: `125`
-- Text files embedded across parts: `124`
-- Binary files summarized across parts: `1`
-- Total bytes scanned: `2215351`
+- Included files: `282`
+- Text files embedded across parts: `247`
+- Binary files summarized across parts: `35`
+- Total bytes scanned: `6089451`
 - Snapshot part count: `1`
 - Max snapshot part size: `26214400` bytes
 
 ## Snapshot Parts
 
-- `10_repo_snapshot_part_001.md`: part `1` of `1`, `2085800` bytes
+- `10_repo_snapshot_part_001.md`: part `1` of `1`, `3548217` bytes
 
 ## Notes
 

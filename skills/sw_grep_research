@@ -1,0 +1,67 @@
+#!/usr/bin/env python3
+"""sw_grep_research — search project and support files for text matches."""
+
+import argparse
+import os
+import re
+import sys
+from pathlib import Path
+
+
+TEXT_EXTENSIONS = {
+    ".md",
+    ".txt",
+    ".json",
+    ".yaml",
+    ".yml",
+    ".csv",
+    ".py",
+    ".js",
+    ".ts",
+    ".tsx",
+    ".jsx",
+    ".html",
+    ".css",
+    ".sh",
+    ".log",
+}
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Search project files for a text pattern.")
+    parser.add_argument("--pattern", required=True, help="Regex pattern to search for")
+    parser.add_argument("--path", default=".", help="Relative search root inside the project")
+    parser.add_argument("--max-results", type=int, default=50, help="Maximum number of matches to print")
+    parser.add_argument("--case-sensitive", action="store_true", default=False, help="Use case-sensitive matching")
+    args = parser.parse_args()
+
+    project_dir = Path(os.environ.get("PROJECT_DIR", os.getcwd())).resolve()
+    search_root = (project_dir / args.path).resolve()
+    if not str(search_root).startswith(str(project_dir)):
+        print("ERROR: search path escapes project root")
+        sys.exit(1)
+    if not search_root.exists():
+        print("ERROR: search path not found")
+        sys.exit(1)
+
+    flags = 0 if args.case_sensitive else re.IGNORECASE
+    regex = re.compile(args.pattern, flags)
+    matches = 0
+    for file_path in sorted(search_root.rglob("*")):
+        if not file_path.is_file() or file_path.suffix.lower() not in TEXT_EXTENSIONS:
+            continue
+        try:
+            text = file_path.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            continue
+        for line_no, line in enumerate(text.splitlines(), start=1):
+            if regex.search(line):
+                rel = file_path.relative_to(project_dir).as_posix()
+                print(f"{rel}:{line_no}: {line.strip()}")
+                matches += 1
+                if matches >= args.max_results:
+                    return
+
+
+if __name__ == "__main__":
+    main()

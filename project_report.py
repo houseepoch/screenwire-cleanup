@@ -330,6 +330,27 @@ def _output_coverage(
     }
 
 
+def _load_project_cover(project_dir: Path) -> dict[str, Any]:
+    reports_dir = project_dir / "reports"
+    cover_path = reports_dir / "project_cover.png"
+    summary_path = reports_dir / "project_cover_summary.md"
+    meta_path = reports_dir / "project_cover_meta.json"
+    meta: dict[str, Any] = {}
+    if meta_path.exists():
+        try:
+            payload = json.loads(meta_path.read_text(encoding="utf-8"))
+            if isinstance(payload, dict):
+                meta = payload
+        except Exception:
+            meta = {}
+    return {
+        "image_path": cover_path.relative_to(project_dir).as_posix() if cover_path.exists() else None,
+        "summary_path": summary_path.relative_to(project_dir).as_posix() if summary_path.exists() else None,
+        "meta_path": meta_path.relative_to(project_dir).as_posix() if meta_path.exists() else None,
+        "meta": meta,
+    }
+
+
 def generate_project_report(project_dir: Path) -> Path:
     project_dir = project_dir.resolve()
     reports_dir = project_dir / "reports"
@@ -346,6 +367,7 @@ def generate_project_report(project_dir: Path) -> Path:
     video_prompts = sorted((project_dir / "video" / "prompts").glob("*_video.json")) if (project_dir / "video" / "prompts").exists() else []
     output_coverage = _output_coverage(project_dir, graph, image_prompts)
     video_projection_md, video_projection_json = generate_video_prompt_projection(project_dir)
+    project_cover = _load_project_cover(project_dir)
 
     lines: list[str] = []
     lines.append("# Project Report")
@@ -368,6 +390,32 @@ def generate_project_report(project_dir: Path) -> Path:
     lines.append(
         f"- Video request projection JSON: `{video_projection_json.relative_to(project_dir).as_posix()}`"
     )
+    lines.append("")
+    lines.append("## Project Cover")
+    lines.append("")
+    lines.append(
+        f"- Poster image: `{project_cover['image_path']}`" if project_cover["image_path"] else "- Poster image: not generated"
+    )
+    lines.append(
+        f"- Cover summary: `{project_cover['summary_path']}`" if project_cover["summary_path"] else "- Cover summary: not generated"
+    )
+    lines.append(
+        f"- Cover metadata: `{project_cover['meta_path']}`" if project_cover["meta_path"] else "- Cover metadata: not generated"
+    )
+    cover_meta = project_cover["meta"]
+    if cover_meta.get("summary"):
+        lines.append(f"- Poster summary: {cover_meta['summary']}")
+    if cover_meta.get("tagline"):
+        lines.append(f"- Tagline: {cover_meta['tagline']}")
+    top_entities = cover_meta.get("topEntities") or []
+    if top_entities:
+        entity_text = ", ".join(
+            f"{item.get('name') or item.get('entityId')} ({item.get('frameCount', 0)})"
+            for item in top_entities[:3]
+            if isinstance(item, dict)
+        )
+        if entity_text:
+            lines.append(f"- Top 3 most used entities: {entity_text}")
     lines.append("")
     lines.append(f"- Text snapshot files included: `{len(snapshot_files)}`")
     lines.append(f"- Image prompt files: `{len(image_prompts)}`")

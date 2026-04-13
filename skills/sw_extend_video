@@ -1,0 +1,76 @@
+#!/usr/bin/env python3
+"""sw_extend_video — POST to /internal/extend-video via Grok video extension on Replicate."""
+
+import argparse
+import os
+import sys
+
+import httpx
+
+
+PROJECT_DIR_DEFAULT = os.getcwd()
+HTTP_TIMEOUT_S = float(os.environ.get("SCREENWIRE_VIDEO_HTTP_TIMEOUT", "1800"))
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Extend an existing Grok video clip.")
+    parser.add_argument("--video", required=True, help="Input video path (relative or absolute)")
+    parser.add_argument("--out", required=True, help="Extended output video path (relative or absolute)")
+    parser.add_argument("--prompt", default="", help="Optional extension instruction prompt")
+    parser.add_argument("--duration", type=int, default=5, help="Extension duration in seconds (2-15)")
+    parser.add_argument("--run-id", default=os.environ.get("SCREENWIRE_RUN_ID", ""), help="Pipeline run ID for telemetry correlation")
+    parser.add_argument("--phase", default=os.environ.get("SCREENWIRE_PHASE", ""), help="Pipeline phase label for telemetry correlation")
+    args = parser.parse_args()
+
+    project_dir = os.environ.get("PROJECT_DIR", PROJECT_DIR_DEFAULT)
+
+    def resolve(path: str) -> str:
+        return path if os.path.isabs(path) else os.path.join(project_dir, path)
+
+    input_abs = resolve(args.video)
+    out_abs = resolve(args.out)
+    os.makedirs(os.path.dirname(out_abs), exist_ok=True)
+
+    if not os.path.exists(input_abs):
+        print(f"ERROR: Source video not found: {input_abs}")
+        sys.exit(1)
+
+    body = {
+        "video_path": input_abs,
+        "output_path": out_abs,
+        "prompt": args.prompt,
+        "duration": min(max(args.duration, 2), 15),
+        "run_id": args.run_id or None,
+        "phase": args.phase,
+    }
+
+    try:
+        resp = httpx.post(
+            "http://localhost:8000/internal/extend-video",
+            json=body,
+            timeout=HTTP_TIMEOUT_S,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except httpx.HTTPError as exc:
+        print(f"ERROR: HTTP request failed: {exc}")
+        response = getattr(exc, "response", None)
+        if response is not None:
+            try:
+                print(response.text)
+            except Exception:
+                pass
+        sys.exit(1)
+    except Exception as exc:
+        print(f"ERROR: {exc}")
+        sys.exit(1)
+
+    print(f"SUCCESS: Video extended -> {out_abs}")
+    if isinstance(data, dict):
+        for key, value in data.items():
+            if key != "output_path":
+                print(f"  {key}: {value}")
+
+
+if __name__ == "__main__":
+    main()

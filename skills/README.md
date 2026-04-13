@@ -50,7 +50,7 @@ Reads `logs/{agent}/state.json`, merges new fields, and writes it back.
 
 ## `sw_generate_image`
 
-POSTs to `/internal/generate-image`.
+POSTs to `/internal/fresh-generation` using the Nano Banana generation chain.
 
 ```
 ./sw_generate_image --prompt "A greenhouse at golden hour" --out assets/frame_01.png
@@ -61,8 +61,52 @@ POSTs to `/internal/generate-image`.
 | `--prompt` | yes | — | Generation prompt |
 | `--out` | yes | — | Output path |
 | `--size` | no | `landscape_16_9` | Image size preset |
-| `--steps` | no | `28` | Inference steps |
-| `--guidance` | no | `3.5` | Guidance scale |
+| `--reference-image` | no | — | Optional reference image path (repeatable) |
+| `--image-search` | no | `false` | Enable image grounding |
+| `--google-search` | no | `false` | Enable web grounding |
+
+---
+
+## `sw_edit_image`
+
+POSTs to `/internal/edit-image` using the Nano Banana edit chain.
+
+```
+./sw_edit_image --input assets/frame_01.png --prompt "make the coat red" --out assets/frame_01_edit.png
+```
+
+| Arg | Required | Description |
+|---|---|---|
+| `--input` | yes | Source image path |
+| `--prompt` | yes | Edit instruction |
+| `--out` | yes | Output path |
+
+---
+
+## `sw_query_graph_database`
+
+Friendly wrapper around `graph_query` for database-style graph lookups.
+
+```
+./sw_query_graph_database --type frame --filter '{"scene_id":"scene_04"}'
+./sw_query_graph_database --frame-context f_014
+```
+
+---
+
+## `sw_grep_research`
+
+Searches project and support text files for matches.
+
+```
+./sw_grep_research --pattern "dialogue density" --path reports
+```
+
+| Arg | Required | Description |
+|---|---|---|
+| `--pattern` | yes | Regex pattern |
+| `--path` | no | Relative search root inside project |
+| `--max-results` | no | Max matches to print |
 
 ---
 
@@ -82,6 +126,23 @@ structured `AUDIO:` section.
 | `--prompt` | yes | Structured motion + native-audio prompt |
 | `--out` | yes | Output path |
 | `--duration` | no | Optional duration in seconds |
+
+---
+
+## `sw_extend_video`
+
+POSTs to `/internal/extend-video` using Grok video extension on Replicate.
+
+```
+./sw_extend_video --video render/clip_01.mp4 --prompt "continue the slow dolly and keep the same mood" --out render/clip_01_ext.mp4
+```
+
+| Arg | Required | Description |
+|---|---|---|
+| `--video` | yes | Source video file |
+| `--out` | yes | Output video path |
+| `--prompt` | no | Optional extension instruction |
+| `--duration` | no | Extension duration in seconds |
 
 ---
 

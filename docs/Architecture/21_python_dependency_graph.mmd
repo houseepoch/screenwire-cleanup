@@ -50,6 +50,7 @@ graph TD
     tests_test_prompt_refactor_unit["tests.test_prompt_refactor_unit"]
     train_agent["train_agent"]
     video_prompt_projection["video_prompt_projection"]
+    workspace_api["workspace_api"]
     create_project --> screenwire_contracts
     graph_api --> graph_schema
     graph_api --> graph_store
@@ -146,8 +147,10 @@ graph TD
     server --> graph_frame_prompt_refiner
     server --> handlers
     server --> image_tagger
+    server --> llm_project_tools
     server --> llm_xai_client
     server --> telemetry
+    server --> workspace_api
     tests_test_alignment_contracts --> graph_api
     tests_test_alignment_contracts --> graph_cc_parser
     tests_test_alignment_contracts --> graph_continuity_validator
