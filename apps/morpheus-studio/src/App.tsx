@@ -5,6 +5,7 @@ import { HomeScreen } from './components/HomeScreen';
 import { OnboardingWizard } from './components/OnboardingWizard';
 import { ProjectWorkspace } from './components/ProjectWorkspace';
 import { GrainOverlay } from './components/GrainOverlay';
+import { VideoExportWizard } from './components/VideoExportWizard';
 import { desktopService } from './services';
 import './App.css';
 
@@ -89,6 +90,7 @@ function App() {
         {currentView === 'onboarding' && <OnboardingWizard />}
         {currentView === 'project' && <ProjectWorkspace />}
       </main>
+      <VideoExportWizard />
     </div>
   );
 }

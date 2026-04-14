@@ -138,6 +138,8 @@ interface MorpheusState {
   setIsChatOpen: (open: boolean) => void;
   isTimelineExpanded: boolean;
   setIsTimelineExpanded: (expanded: boolean) => void;
+  isExportWizardOpen: boolean;
+  setIsExportWizardOpen: (open: boolean) => void;
   mediaView: 'prompt' | 'image' | 'video';
   setMediaView: (view: 'prompt' | 'image' | 'video') => void;
   
@@ -418,6 +420,8 @@ export const useMorpheusStore = create<MorpheusState>()(
       setIsChatOpen: (open) => set({ isChatOpen: open }),
       isTimelineExpanded: false,
       setIsTimelineExpanded: (expanded) => set({ isTimelineExpanded: expanded }),
+      isExportWizardOpen: false,
+      setIsExportWizardOpen: (open) => set({ isExportWizardOpen: open }),
       mediaView: 'image',
       setMediaView: (view) => set({ mediaView: view }),
       

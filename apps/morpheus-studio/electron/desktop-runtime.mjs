@@ -11,12 +11,16 @@ export class DesktopRuntime {
     this.appRoot = appRoot;
     this.projectsRoot = path.join(repoRoot, 'projects');
     this.createProjectScript = path.join(repoRoot, 'create_project.py');
+    this.projectCoverScript = path.join(repoRoot, 'generate_project_cover.py');
     this.serverScript = path.join(repoRoot, 'server.py');
     this.pythonBin = pythonBin;
     this.backendPort = preferredBackendPort;
     this.backendBaseUrl = `http://127.0.0.1:${this.backendPort}`;
     this.backendProc = null;
     this.currentProjectId = null;
+    this.pendingProjectCoverJobs = new Map();
+    this.projectCoverRetryAt = new Map();
+    this.projectCoverCooldownMs = 15 * 60 * 1000;
   }
 
   setBackendPort(port) {
@@ -159,6 +163,54 @@ export class DesktopRuntime {
     return JSON.parse(raw);
   }
 
+  shouldGenerateProjectCover(projectDir, phaseSummary) {
+    if (!phaseSummary || phaseSummary.status === 'draft' || phaseSummary.status === 'onboarding') {
+      return false;
+    }
+    return (
+      existsSync(path.join(projectDir, 'creative_output', 'outline_skeleton.md'))
+      || existsSync(path.join(projectDir, 'creative_output', 'creative_output.md'))
+      || existsSync(path.join(projectDir, 'graph', 'narrative_graph.json'))
+      || existsSync(path.join(projectDir, 'video', 'clips'))
+    );
+  }
+
+  ensureProjectCover(projectId, projectDir, phaseSummary) {
+    const coverPath = path.join(projectDir, 'reports', 'project_cover.png');
+    const now = Date.now();
+    const retryAt = this.projectCoverRetryAt.get(projectId) || 0;
+    if (
+      existsSync(coverPath)
+      || !existsSync(this.projectCoverScript)
+      || this.pendingProjectCoverJobs.has(projectId)
+      || retryAt > now
+      || !this.shouldGenerateProjectCover(projectDir, phaseSummary)
+    ) {
+      return;
+    }
+
+    try {
+      this.projectCoverRetryAt.set(projectId, now + this.projectCoverCooldownMs);
+      const job = spawn(this.pythonBin, [this.projectCoverScript, '--project', projectId], {
+        cwd: this.repoRoot,
+        env: {
+          ...process.env,
+          PYTHONUNBUFFERED: '1',
+        },
+        stdio: 'ignore',
+        windowsHide: true,
+      });
+      this.pendingProjectCoverJobs.set(projectId, job);
+      const cleanup = () => {
+        this.pendingProjectCoverJobs.delete(projectId);
+      };
+      job.once('close', cleanup);
+      job.once('error', cleanup);
+    } catch (error) {
+      console.error(`Failed to queue project cover generation for ${projectId}:`, error);
+    }
+  }
+
   async listProjects() {
     if (!existsSync(this.projectsRoot)) {
       return [];
@@ -180,6 +232,7 @@ export class DesktopRuntime {
       const workspaceState = await this.readJsonIfExists(path.join(projectDir, 'logs', 'ui_workspace_state.json'), {});
       const phaseSummary = await this.deriveWorkflowStatus({ manifest, projectDir, graph, workspaceState });
       const coverPath = path.join(projectDir, 'reports', 'project_cover.png');
+      this.ensureProjectCover(entry.name, projectDir, phaseSummary);
 
       projects.push({
         id: entry.name,

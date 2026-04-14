@@ -34,6 +34,7 @@ export function Navigation() {
     currentProject,
     selectProject,
     hydrateWorkspace,
+    setIsExportWizardOpen,
     activeTab,
     timelineFrames,
     selectedFrameId,
@@ -107,11 +108,7 @@ export function Navigation() {
       return;
     }
     setContinueError(null);
-    const anchor = document.createElement('a');
-    anchor.href = exportUrl;
-    anchor.download = exportUrl.split('/').pop()?.split('?')[0] || `${currentProject?.name || 'morpheus'}-export.mp4`;
-    anchor.rel = 'noopener';
-    anchor.click();
+    setIsExportWizardOpen(true);
   };
 
   return (

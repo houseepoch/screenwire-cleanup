@@ -90,6 +90,7 @@ export function DetailPanel() {
     timelineFrames,
     selectedFrameId,
     setSelectedFrameId,
+    setIsExportWizardOpen,
     skeletonPlan,
     scriptText,
     currentProject,
@@ -328,6 +329,7 @@ export function DetailPanel() {
         }));
       if (reports.finalExport) {
         mediaWindow.unshift({
+          imageUrl: previewPosterUrl,
           posterUrl: previewPosterUrl,
           videoUrl: reports.finalExport,
         });
@@ -590,19 +592,6 @@ export function DetailPanel() {
     const nextFrame = playbackQueue[currentPlaybackQueueIndex + 1];
     setSelectedFrameId(nextFrame.id);
     setShouldAutoplayQueuedVideo(true);
-  };
-
-  const handleExportVideoPreview = () => {
-    if (!previewVideoUrl) {
-      return;
-    }
-    const anchor = document.createElement('a');
-    anchor.href = previewVideoUrl;
-    anchor.download =
-      previewVideoUrl.split('/').pop()?.split('?')[0] ||
-      `${currentProject?.name || 'morpheus'}-${reports.finalExport ? 'final-export' : 'clip-preview'}.mp4`;
-    anchor.rel = 'noopener';
-    anchor.click();
   };
 
   const renderEntityCard = (entity: Entity, typeLabel: string) => {
@@ -1068,11 +1057,11 @@ export function DetailPanel() {
                     <button
                       type="button"
                       className="video-panel-action is-secondary"
-                        onClick={handleExportVideoPreview}
-                      >
-                        <Download size={15} />
-                        Export
-                      </button>
+                      onClick={() => setIsExportWizardOpen(true)}
+                    >
+                      <Download size={15} />
+                      Export
+                    </button>
                     </div>
                   </div>
                   {!isVideoPreviewPlaying ? (

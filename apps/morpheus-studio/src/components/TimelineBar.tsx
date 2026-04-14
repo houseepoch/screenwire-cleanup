@@ -24,7 +24,9 @@ const MIN_DURATION = 2;
 const MAX_DURATION = 15;
 const MIN_FRAME_WIDTH = PX_PER_SECOND;
 const MAX_FRAME_WIDTH = PX_PER_SECOND * MAX_DURATION;
-const TRIM_HANDLE_WIDTH = 30;
+const COMPACT_FRAME_HEIGHT = 92;
+const EXPANDED_FRAME_HEIGHT = 156;
+const TRIM_HANDLE_WIDTH = 12;
 const TIMELINE_DIALOGUE_FONT_VAR = '--timeline-dialogue-font-size' as const;
 const TIMELINE_PAGE_SIZE = 16;
 
@@ -54,17 +56,33 @@ function clampTrim(value: number): number {
   return roundTiming(Math.max(0, value));
 }
 
-function getDialogueFontSize(frameWidth: number, dialogueChars: number): number {
-  if (dialogueChars <= 20) {
-    return Math.min(24, Math.max(16, Math.round(frameWidth * 0.14)));
+function getDialogueFontSize(
+  frameWidth: number,
+  frameHeight: number,
+  dialogueChars: number,
+  dialogueLineCount: number,
+): number {
+  const usableWidth = Math.max(frameWidth - 20, 44);
+  const usableHeight = Math.max(frameHeight - 24, 28);
+  const estimatedLineCount = Math.max(1, dialogueLineCount);
+  const maxFontSize = 34;
+  const minFontSize = 9;
+  const averageCharWidthRatio = 0.56;
+  const lineHeightRatio = 1.16;
+  const stackGap = 6;
+
+  for (let fontSize = maxFontSize; fontSize >= minFontSize; fontSize -= 1) {
+    const charsPerLine = Math.max(4, Math.floor(usableWidth / (fontSize * averageCharWidthRatio)));
+    const wrappedLines = Math.max(estimatedLineCount, Math.ceil(dialogueChars / charsPerLine));
+    const estimatedHeight =
+      wrappedLines * fontSize * lineHeightRatio + Math.max(0, estimatedLineCount - 1) * stackGap;
+
+    if (estimatedHeight <= usableHeight) {
+      return fontSize;
+    }
   }
-  if (dialogueChars <= 40) {
-    return Math.min(22, Math.max(14, Math.round(frameWidth * 0.105)));
-  }
-  if (dialogueChars <= 70) {
-    return Math.min(18, Math.max(12, Math.round(frameWidth * 0.082)));
-  }
-  return Math.min(15, Math.max(10, Math.round(frameWidth * 0.062)));
+
+  return minFontSize;
 }
 
 function getBaseTiming(frame: TimelineFrame): FrameTimingDraft {
@@ -541,9 +559,8 @@ export function TimelineBar() {
               aria-label={`Play clip for frame ${frame.sequence}`}
             >
               <span className="timeline-video-launch-icon">
-                <Play size={isLarge ? 18 : 14} fill="currentColor" />
+                <Play size={isLarge ? 13 : 10} fill="currentColor" />
               </span>
-              <span className="timeline-video-launch-copy">Play Clip</span>
             </button>
           </div>
         ) : (
@@ -600,12 +617,13 @@ export function TimelineBar() {
       MIN_FRAME_WIDTH,
       Math.min(MAX_FRAME_WIDTH, Math.round(timing.duration * PX_PER_SECOND)),
     );
+    const frameHeight = isTimelineExpanded ? EXPANDED_FRAME_HEIGHT : COMPACT_FRAME_HEIGHT;
     const dialogueChars = frameDialogues.reduce(
       (total, dialogue) => total + `${dialogue.character}: ${dialogue.text}`.length,
       0,
     );
     const dialogueOverlayStyle: CSSProperties & Record<typeof TIMELINE_DIALOGUE_FONT_VAR, string> = {
-      [TIMELINE_DIALOGUE_FONT_VAR]: `${getDialogueFontSize(frameWidth, dialogueChars)}px`,
+      [TIMELINE_DIALOGUE_FONT_VAR]: `${getDialogueFontSize(frameWidth, frameHeight, dialogueChars, frameDialogues.length)}px`,
     };
     const shellStyle: CSSProperties = {
       width: `${frameWidth + TRIM_HANDLE_WIDTH * 2}px`,

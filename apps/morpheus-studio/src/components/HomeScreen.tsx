@@ -1,11 +1,23 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useMorpheusStore } from '../store';
-import { Plus, ChevronRight, ChevronLeft } from 'lucide-react';
+import {
+  ArrowRight,
+  ChevronDown,
+  ChevronUp,
+  Clock3,
+  FolderOpen,
+  Plus,
+  Sparkles,
+} from 'lucide-react';
 import { HowItWorksModal } from './HowItWorksModal';
 import { desktopService } from '../services';
 import type { Project } from '../types';
 
-// Cover images for project cards
+const HOME_SPLASH_MIN_DURATION_MS = 3500;
+const HOME_SPLASH_SESSION_KEY = 'morpheus-home-splash-seen';
+const LAST_OPENED_PROJECT_KEY = 'morpheus-last-opened-project-id';
+const RECENT_PROJECT_LIMIT = 4;
+
 const PROJECT_COVERS = [
   '/storyboard-01.jpg',
   '/storyboard-02.jpg',
@@ -30,6 +42,13 @@ const PROJECT_STATUS_LABELS: Record<Project['status'], string> = {
   complete: 'Complete',
 };
 
+function getStoredProjectId(key: string): string | null {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+  return window.localStorage.getItem(key);
+}
+
 export function HomeScreen() {
   const { projects, selectProject, setCurrentView } = useMorpheusStore();
   const [showNewProjectModal, setShowNewProjectModal] = useState(false);
@@ -38,32 +57,39 @@ export function HomeScreen() {
   const [newProjectDescription, setNewProjectDescription] = useState('');
   const [displayProjects, setDisplayProjects] = useState<Project[]>(projects);
   const [actionError, setActionError] = useState<string | null>(null);
-  
-  const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const [canScrollLeft, setCanScrollLeft] = useState(false);
-  const [canScrollRight, setCanScrollRight] = useState(true);
+  const [showAllProjects, setShowAllProjects] = useState(false);
+  const [lastOpenedProjectId, setLastOpenedProjectId] = useState<string | null>(() =>
+    getStoredProjectId(LAST_OPENED_PROJECT_KEY),
+  );
+  const [showSplash, setShowSplash] = useState(() => {
+    if (typeof window === 'undefined') {
+      return false;
+    }
+    return window.sessionStorage.getItem(HOME_SPLASH_SESSION_KEY) !== '1';
+  });
+  const [isSplashFading, setIsSplashFading] = useState(false);
+
+  const rememberProject = (projectId: string) => {
+    setLastOpenedProjectId(projectId);
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(LAST_OPENED_PROJECT_KEY, projectId);
+    }
+  };
 
   const openCreateProjectModal = () => {
     setActionError(null);
     setShowNewProjectModal(true);
   };
 
-  function checkScroll() {
-    const container = scrollContainerRef.current;
-    if (container) {
-      setCanScrollLeft(container.scrollLeft > 0);
-      setCanScrollRight(
-        container.scrollLeft < container.scrollWidth - container.clientWidth - 10
-      );
-    }
-  }
-
   useEffect(() => {
     let cancelled = false;
+    let refreshTimer: number | undefined;
 
-    async function hydrateProjects() {
+    async function hydrateProjects(surfaceErrors: boolean) {
       if (!desktopService.isAvailable()) {
-        setDisplayProjects(projects);
+        if (!cancelled) {
+          setDisplayProjects(projects);
+        }
         return;
       }
       try {
@@ -73,16 +99,27 @@ export function HomeScreen() {
         }
       } catch (error) {
         console.error('Failed to load desktop projects:', error);
-        setActionError('Failed to load local projects.');
         if (!cancelled) {
+          if (surfaceErrors) {
+            setActionError('Failed to load local projects.');
+          }
           setDisplayProjects(projects);
         }
       }
     }
 
-    hydrateProjects();
+    void hydrateProjects(true);
+    if (desktopService.isAvailable()) {
+      refreshTimer = window.setInterval(() => {
+        void hydrateProjects(false);
+      }, 9000);
+    }
+
     return () => {
       cancelled = true;
+      if (refreshTimer) {
+        window.clearInterval(refreshTimer);
+      }
     };
   }, [projects]);
 
@@ -93,53 +130,69 @@ export function HomeScreen() {
   }, []);
 
   useEffect(() => {
-    checkScroll();
-  }, [displayProjects.length]);
+    if (!showSplash || typeof window === 'undefined') {
+      return;
+    }
+    const fadeTimer = window.setTimeout(() => {
+      setIsSplashFading(true);
+      window.sessionStorage.setItem(HOME_SPLASH_SESSION_KEY, '1');
+    }, HOME_SPLASH_MIN_DURATION_MS);
+    const hideTimer = window.setTimeout(() => {
+      setShowSplash(false);
+    }, HOME_SPLASH_MIN_DURATION_MS + 420);
+
+    return () => {
+      window.clearTimeout(fadeTimer);
+      window.clearTimeout(hideTimer);
+    };
+  }, [showSplash]);
 
   const handleCreateProject = async () => {
     setActionError(null);
-    if (newProjectName.trim()) {
-      if (desktopService.isElectronHost() && !desktopService.isAvailable()) {
-        setActionError('Desktop bridge unavailable. Fully restart Morpheus and try again.');
-        return;
-      }
-      if (desktopService.isAvailable()) {
-        try {
-          const created = await desktopService.createProject({
-            name: newProjectName,
-            description: newProjectDescription,
-            creativityLevel: 'balanced',
-            frameBudget: 'auto',
-            mediaStyle: 'live_clear',
-          });
-          if (!created) {
-            setActionError('Project creation returned no project. Restart Morpheus and try again.');
-            return;
-          }
-          const selected = await desktopService.selectProject(created.id);
-          if (!selected) {
-            setActionError('Project backend failed to start. Check the local backend logs and try again.');
-            return;
-          }
-          setDisplayProjects((prev) => [created, ...prev.filter((p) => p.id !== created.id)]);
-          selectProject(created);
-          setCurrentView('onboarding');
-        } catch (error) {
-          console.error('Failed to create desktop project:', error);
-          setActionError(error instanceof Error ? error.message : 'Failed to create project.');
+    if (!newProjectName.trim()) {
+      return;
+    }
+    if (desktopService.isElectronHost() && !desktopService.isAvailable()) {
+      setActionError('Desktop bridge unavailable. Fully restart Morpheus and try again.');
+      return;
+    }
+    if (desktopService.isAvailable()) {
+      try {
+        const created = await desktopService.createProject({
+          name: newProjectName,
+          description: newProjectDescription,
+          creativityLevel: 'balanced',
+          frameBudget: 'auto',
+          mediaStyle: 'live_clear',
+        });
+        if (!created) {
+          setActionError('Project creation returned no project. Restart Morpheus and try again.');
           return;
         }
-      } else {
-        setActionError('Desktop backend is unavailable. Launch Morpheus through Electron to create a project.');
+        const selected = await desktopService.selectProject(created.id);
+        if (!selected) {
+          setActionError('Project backend failed to start. Check the local backend logs and try again.');
+          return;
+        }
+        rememberProject(created.id);
+        setDisplayProjects((prev) => [created, ...prev.filter((project) => project.id !== created.id)]);
+        selectProject(created);
+        setCurrentView('onboarding');
+      } catch (error) {
+        console.error('Failed to create desktop project:', error);
+        setActionError(error instanceof Error ? error.message : 'Failed to create project.');
         return;
       }
-      setShowNewProjectModal(false);
-      setNewProjectName('');
-      setNewProjectDescription('');
+    } else {
+      setActionError('Desktop backend is unavailable. Launch Morpheus through Electron to create a project.');
+      return;
     }
+    setShowNewProjectModal(false);
+    setNewProjectName('');
+    setNewProjectDescription('');
   };
 
-  const handleProjectClick = async (proj: Project) => {
+  const handleProjectClick = async (project: Project) => {
     setActionError(null);
     if (desktopService.isElectronHost() && !desktopService.isAvailable()) {
       setActionError('Desktop bridge unavailable. Fully restart Morpheus and try again.');
@@ -147,7 +200,7 @@ export function HomeScreen() {
     }
     if (desktopService.isAvailable()) {
       try {
-        const selected = await desktopService.selectProject(proj.id);
+        const selected = await desktopService.selectProject(project.id);
         if (!selected) {
           setActionError('Project backend failed to start. Check the local backend logs and try again.');
           return;
@@ -162,310 +215,279 @@ export function HomeScreen() {
       setActionError('Desktop backend is unavailable. Launch Morpheus through Electron to open a project.');
       return;
     }
-    selectProject(proj);
+    rememberProject(project.id);
+    selectProject(project);
   };
 
-  const getProjectCover = (index: number) => {
-    return PROJECT_COVERS[index % PROJECT_COVERS.length];
-  };
+  const sortedProjects = useMemo(
+    () =>
+      [...displayProjects].sort(
+        (left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime(),
+      ),
+    [displayProjects],
+  );
 
-  const coverForProject = (project: Project, index: number) => {
-    return project.coverImageUrl || getProjectCover(index);
-  };
-
-  const scroll = (direction: 'left' | 'right') => {
-    const container = scrollContainerRef.current;
-    if (container) {
-      const scrollAmount = direction === 'left' ? -400 : 400;
-      container.scrollBy({ left: scrollAmount, behavior: 'smooth' });
-      setTimeout(checkScroll, 300);
+  const featuredProject = useMemo(() => {
+    if (!sortedProjects.length) {
+      return null;
     }
-  };
+    return (
+      sortedProjects.find((project) => project.id === lastOpenedProjectId) ?? sortedProjects[0] ?? null
+    );
+  }, [lastOpenedProjectId, sortedProjects]);
 
-  const formatDate = (date: Date) => {
-    return new Intl.DateTimeFormat('en-US', {
+  const recentProjects = useMemo(
+    () => sortedProjects.filter((project) => project.id !== featuredProject?.id),
+    [featuredProject?.id, sortedProjects],
+  );
+  const visibleProjects = showAllProjects
+    ? recentProjects
+    : recentProjects.slice(0, RECENT_PROJECT_LIMIT);
+  const hasHiddenProjects = recentProjects.length > RECENT_PROJECT_LIMIT;
+
+  const getProjectCover = (index: number) => PROJECT_COVERS[index % PROJECT_COVERS.length];
+  const coverForProject = (project: Project, index: number) => project.coverImageUrl || getProjectCover(index);
+
+  const formatDate = (date: Date) =>
+    new Intl.DateTimeFormat('en-US', {
       month: 'short',
       day: 'numeric',
     }).format(new Date(date));
-  };
-
-  const activeProjects = displayProjects.filter((project) => project.status !== 'complete').length;
-  const completedProjects = displayProjects.filter((project) => project.status === 'complete').length;
-  const averageProgress = displayProjects.length
-    ? Math.round(displayProjects.reduce((sum, project) => sum + project.progress, 0) / displayProjects.length)
-    : 0;
-  const latestProject = displayProjects[0] ?? null;
 
   const projectSummary = (project: Project) =>
     project.coverSummary ||
     project.description ||
     'Open the workspace to continue shaping cast, scenes, and timeline output.';
 
+  const activeProjects = sortedProjects.filter((project) => project.status !== 'complete').length;
+  const completedProjects = sortedProjects.filter((project) => project.status === 'complete').length;
+  const averageProgress = sortedProjects.length
+    ? Math.round(
+        sortedProjects.reduce((sum, project) => sum + project.progress, 0) / sortedProjects.length,
+      )
+    : 0;
+
+  const renderProjectCard = (project: Project, index: number) => (
+    <button
+      type="button"
+      key={project.id}
+      className="directory-project-card"
+      data-testid={`project-card-${project.id}`}
+      onClick={() => void handleProjectClick(project)}
+    >
+      <div className="directory-project-card-cover">
+        <img src={coverForProject(project, index)} alt={project.name} className="directory-project-card-image" />
+        <div className="directory-project-card-gradient" />
+        <div className="directory-project-card-status">
+          <span
+            className="status-dot"
+            style={{
+              background:
+                project.status === 'complete'
+                  ? 'var(--success)'
+                  : project.status.includes('generating')
+                    ? 'var(--accent)'
+                    : 'var(--warning)',
+            }}
+          />
+          <span>{PROJECT_STATUS_LABELS[project.status]}</span>
+        </div>
+      </div>
+      <div className="directory-project-card-body">
+        <div className="directory-project-card-head">
+          <span className="directory-project-card-title">{project.name}</span>
+          <span className="directory-project-card-progress">{project.progress}%</span>
+        </div>
+        <p className="directory-project-card-summary">{projectSummary(project)}</p>
+        <div className="directory-project-card-meta">
+          <span>{formatDate(project.updatedAt)}</span>
+          <span>{project.creativityLevel}</span>
+        </div>
+      </div>
+    </button>
+  );
+
   return (
-    <div className="home-screen">
-      <section className="hero-section">
-        <div className="hero-background">
-          <img src="/hero-lighthouse.jpg" alt="Morpheus Studio" />
-        </div>
-        <div className="hero-vignette" />
-        <div className="hero-grid">
-          <div className="hero-content">
-            <span className="hero-eyebrow">AI preproduction suite</span>
-            <h1 className="hero-title">Turn a story into a cinematic production system.</h1>
-            <p className="hero-subtitle">
-              Morpheus turns source material into a working pipeline: outline, cast, locations,
-              storyboard, timeline, and export-ready visual direction in one workspace.
+    <div className="home-screen home-directory-screen">
+      {showSplash ? (
+        <section className={`home-splash ${isSplashFading ? 'is-fading' : ''}`.trim()}>
+          <div className="home-splash-background">
+            <img src="/hero-lighthouse.jpg" alt="Morpheus Studio splash" />
+          </div>
+          <div className="home-splash-vignette" />
+          <div className="home-splash-copy">
+            <span className="hero-eyebrow">Morpheus Studio</span>
+            <h1 className="home-splash-title">Build the visual world before the first final render.</h1>
+            <p className="home-splash-subtitle">
+              Loading your project directory, recent work, and cover art.
             </p>
-            <div className="hero-actions">
-              <button
-                className="btn-accent"
-                data-testid="home-start-creating"
-                onClick={openCreateProjectModal}
-              >
-                Start a new project
-              </button>
-              <button
-                className="secondary-link"
-                data-testid="home-see-how-it-works"
-                onClick={() => setShowHowItWorks(true)}
-              >
-                See how it works
-                <ChevronRight size={14} />
-              </button>
-            </div>
-            <div className="hero-metrics">
-              <div className="hero-metric-card glass-panel">
-                <span className="hero-metric-value">{displayProjects.length}</span>
-                <span className="hero-metric-label">projects tracked</span>
-              </div>
-              <div className="hero-metric-card glass-panel">
-                <span className="hero-metric-value">{activeProjects}</span>
-                <span className="hero-metric-label">currently in flight</span>
-              </div>
-              <div className="hero-metric-card glass-panel">
-                <span className="hero-metric-value">{averageProgress}%</span>
-                <span className="hero-metric-label">average progress</span>
-              </div>
+            <div className="home-splash-progress" aria-hidden="true">
+              <span className="home-splash-progress-bar" />
             </div>
           </div>
+        </section>
+      ) : null}
 
-          <aside className="hero-summary-card glass-panel">
-            <div className="hero-summary-header">
-              <span className="hero-summary-kicker">Pipeline snapshot</span>
-              <span className="hero-summary-badge">{completedProjects} delivered</span>
-            </div>
-            <div className="hero-summary-flow">
-              <div className="hero-summary-step">
-                <span>01</span>
-                <p>Ingest scripts, treatments, prompts, and visual references.</p>
-              </div>
-              <div className="hero-summary-step">
-                <span>02</span>
-                <p>Build scenes, cast, locations, and storyboard logic.</p>
-              </div>
-              <div className="hero-summary-step">
-                <span>03</span>
-                <p>Shape frames, timing, and agent-driven revisions in one control room.</p>
-              </div>
-            </div>
-
-            {latestProject ? (
-              <button
-                type="button"
-                className="hero-summary-project"
-                onClick={() => void handleProjectClick(latestProject)}
-              >
-                <span className="hero-summary-project-label">Resume latest</span>
-                <strong>{latestProject.name}</strong>
-                <p>{projectSummary(latestProject)}</p>
-                <div className="hero-summary-project-meta">
-                  <span>{PROJECT_STATUS_LABELS[latestProject.status]}</span>
-                  <span>{latestProject.progress}% ready</span>
-                </div>
-              </button>
-            ) : (
-              <div className="hero-summary-empty">
-                <strong>No productions started yet.</strong>
-                <p>Create a project to open the full Morpheus workflow.</p>
-              </div>
-            )}
-          </aside>
-        </div>
-      </section>
-
-      <section className="projects-section">
-        <div className="section-header">
-          <div>
-            <span className="section-kicker">Workspace</span>
-            <h2 className="section-title">Recent productions</h2>
-            <p className="section-description">
-              Pick up an active pipeline, review completed work, or start a new visual production.
+      <section className={`project-directory ${showSplash ? 'is-obscured' : 'is-ready'}`.trim()}>
+        <div className="project-directory-header">
+          <div className="project-directory-title-block">
+            <span className="section-kicker">Project Directory</span>
+            <h1 className="project-directory-title">Projects first, workspace one click away.</h1>
+            <p className="project-directory-description">
+              The latest project stays on top, recent productions stay centered, and the full directory opens only when you want it.
             </p>
           </div>
-          <button type="button" className="btn-secondary section-action" onClick={openCreateProjectModal}>
-            <Plus size={14} />
-            New project
-          </button>
+          <div className="project-directory-actions">
+            <button
+              type="button"
+              className="btn-secondary project-directory-action"
+              data-testid="home-see-how-it-works"
+              onClick={() => setShowHowItWorks(true)}
+            >
+              <Sparkles size={15} />
+              How it works
+            </button>
+            <button
+              type="button"
+              className="btn-accent project-directory-action"
+              data-testid="home-start-creating"
+              onClick={openCreateProjectModal}
+            >
+              <Plus size={15} />
+              New project
+            </button>
+          </div>
         </div>
 
-        {actionError && (
+        {actionError ? (
           <div className="inline-alert" data-testid="home-action-error">
             {actionError}
           </div>
+        ) : null}
+
+        {featuredProject ? (
+          <div className="project-directory-top">
+            <button
+              type="button"
+              className="directory-feature-card glass-panel"
+              onClick={() => void handleProjectClick(featuredProject)}
+            >
+              <div className="directory-feature-visual">
+                <img
+                  src={coverForProject(featuredProject, 0)}
+                  alt={featuredProject.name}
+                  className="directory-feature-image"
+                />
+                <div className="directory-feature-gradient" />
+                <div className="directory-feature-badges">
+                  <span className="directory-feature-chip">
+                    {featuredProject.id === lastOpenedProjectId ? 'Last opened' : 'Latest update'}
+                  </span>
+                  <span className="directory-feature-chip is-muted">
+                    {PROJECT_STATUS_LABELS[featuredProject.status]}
+                  </span>
+                </div>
+              </div>
+              <div className="directory-feature-body">
+                <span className="directory-feature-kicker">Resume first</span>
+                <h2 className="directory-feature-title">{featuredProject.name}</h2>
+                <p className="directory-feature-summary">{projectSummary(featuredProject)}</p>
+                <div className="directory-feature-meta">
+                  <span>
+                    <Clock3 size={13} />
+                    Updated {formatDate(featuredProject.updatedAt)}
+                  </span>
+                  <span>{featuredProject.progress}% ready</span>
+                  <span>{featuredProject.creativityLevel}</span>
+                </div>
+                <span className="directory-feature-cta">
+                  Open workspace
+                  <ArrowRight size={14} />
+                </span>
+              </div>
+            </button>
+
+            <aside className="directory-stats-panel glass-panel">
+              <span className="section-kicker">Overview</span>
+              <div className="directory-stats-grid">
+                <div className="directory-stat">
+                  <strong>{sortedProjects.length}</strong>
+                  <span>projects tracked</span>
+                </div>
+                <div className="directory-stat">
+                  <strong>{activeProjects}</strong>
+                  <span>in progress</span>
+                </div>
+                <div className="directory-stat">
+                  <strong>{completedProjects}</strong>
+                  <span>completed</span>
+                </div>
+                <div className="directory-stat">
+                  <strong>{averageProgress}%</strong>
+                  <span>average readiness</span>
+                </div>
+              </div>
+              <button
+                type="button"
+                className="directory-folder-link"
+                onClick={() => void handleProjectClick(featuredProject)}
+              >
+                <FolderOpen size={15} />
+                Jump back into the last opened project
+              </button>
+            </aside>
+          </div>
+        ) : (
+          <div className="directory-empty-state glass-panel">
+            <span className="workspace-empty-kicker">Fresh directory</span>
+            <h2>No projects yet.</h2>
+            <p>Start a project and Morpheus will generate the workspace, directory cover art, and the first review pack from here.</p>
+            <button type="button" className="btn-accent" onClick={openCreateProjectModal}>
+              <Plus size={15} />
+              Create the first project
+            </button>
+          </div>
         )}
 
-        <div className="projects-scroll-container desktop-only">
-          {displayProjects.length > 0 && (
-            <>
-              <button
-                type="button"
-                className={`scroll-arrow scroll-left ${canScrollLeft ? 'visible' : ''}`}
-                onClick={() => scroll('left')}
-              >
-                <ChevronLeft size={24} />
-              </button>
-              <button
-                type="button"
-                className={`scroll-arrow scroll-right ${canScrollRight ? 'visible' : ''}`}
-                onClick={() => scroll('right')}
-              >
-                <ChevronRight size={24} />
-              </button>
-            </>
-          )}
-          
-          <div 
-            ref={scrollContainerRef}
-            className="projects-scroll"
-            onScroll={checkScroll}
-          >
-            <button
-              type="button"
-              className="project-card new-project-card"
-              data-testid="new-project-card"
-              onClick={openCreateProjectModal}
-            >
-              <div className="project-card-cover">
-                <div className="new-project-overlay">
-                  <Plus size={34} />
-                  <span className="project-card-kicker">Create</span>
-                  <span className="project-card-title">New Project</span>
-                  <span className="project-card-summary">Start with a concept, brief, or script upload.</span>
-                </div>
-              </div>
-            </button>
-
-            {displayProjects.map((project, index) => (
-              <button
-                type="button"
-                key={project.id}
-                className="project-card"
-                data-testid={`project-card-${project.id}`}
-                onClick={() => handleProjectClick(project)}
-              >
-                <div className="project-card-cover">
-                  <img 
-                    src={coverForProject(project, index)} 
-                    alt={project.name}
-                    className="project-card-image"
-                  />
-                  <div className="project-card-gradient" />
-                  <div className="project-card-status">
-                    <span
-                      className="status-dot"
-                      style={{
-                        background:
-                          project.status === 'complete'
-                            ? 'var(--success)'
-                            : project.status.includes('generating')
-                              ? 'var(--accent)'
-                              : 'var(--warning)',
-                      }}
-                    />
-                    <span>{PROJECT_STATUS_LABELS[project.status]}</span>
-                  </div>
-                  <div className="project-card-info">
-                    <span className="project-card-kicker">{project.progress}% ready</span>
-                    <span className="project-card-title">{project.name}</span>
-                    <span className="project-card-summary">{projectSummary(project)}</span>
-                    <div className="project-card-meta">
-                      <span className="project-card-date">{formatDate(project.updatedAt)}</span>
-                      <span>{project.creativityLevel}</span>
-                    </div>
-                  </div>
-                </div>
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div className="projects-grid mobile-only">
-          <button
-            type="button"
-            className="project-card new-project-card"
-            data-testid="new-project-card-mobile"
-            onClick={openCreateProjectModal}
-          >
-            <div className="project-card-cover">
-              <div className="new-project-overlay">
-                <Plus size={32} />
-                <span className="project-card-kicker">Create</span>
-                <span className="project-card-title">New Project</span>
-                <span className="project-card-summary">Start with a concept or uploaded source material.</span>
-              </div>
+        <section className="directory-recent-section glass-panel">
+          <div className="directory-section-header">
+            <div>
+              <span className="section-kicker">Recent Projects</span>
+              <h2 className="directory-section-title">Recent projects stay centered.</h2>
+              <p className="directory-section-description">
+                Keep the current work visible without scrolling through duplicate layouts.
+              </p>
             </div>
-          </button>
+            {hasHiddenProjects ? (
+              <button
+                type="button"
+                className="btn-secondary directory-browse-toggle"
+                onClick={() => setShowAllProjects((value) => !value)}
+              >
+                {showAllProjects ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
+                {showAllProjects ? 'Show fewer' : 'Browse all'}
+              </button>
+            ) : null}
+          </div>
 
-          {displayProjects.map((project, index) => (
-            <button
-              type="button"
-              key={project.id}
-              className="project-card"
-              data-testid={`project-card-mobile-${project.id}`}
-              onClick={() => handleProjectClick(project)}
-            >
-              <div className="project-card-cover">
-                <img 
-                  src={coverForProject(project, index)} 
-                  alt={project.name}
-                  className="project-card-image"
-                />
-                <div className="project-card-gradient" />
-                <div className="project-card-status">
-                  <span
-                    className="status-dot"
-                    style={{
-                      background:
-                        project.status === 'complete'
-                          ? 'var(--success)'
-                          : project.status.includes('generating')
-                            ? 'var(--accent)'
-                            : 'var(--warning)',
-                    }}
-                  />
-                  <span>{PROJECT_STATUS_LABELS[project.status]}</span>
-                </div>
-                <div className="project-card-info">
-                  <span className="project-card-kicker">{project.progress}% ready</span>
-                  <span className="project-card-title">{project.name}</span>
-                  <span className="project-card-summary">{projectSummary(project)}</span>
-                  <div className="project-card-meta">
-                    <span className="project-card-date">{formatDate(project.updatedAt)}</span>
-                    <span>{project.creativityLevel}</span>
-                  </div>
-                </div>
-              </div>
-            </button>
-          ))}
-        </div>
+          {visibleProjects.length > 0 ? (
+            <div className="directory-project-grid">
+              {visibleProjects.map((project, index) => renderProjectCard(project, index + 1))}
+            </div>
+          ) : featuredProject ? (
+            <div className="directory-recent-empty">
+              <p>The featured project is currently the only project in the directory.</p>
+            </div>
+          ) : null}
+        </section>
       </section>
 
-      {showNewProjectModal && (
+      {showNewProjectModal ? (
         <div
           className="modal-overlay"
           data-testid="create-project-modal"
-          onClick={(e) => {
-            if (e.target === e.currentTarget) {
+          onClick={(event) => {
+            if (event.target === event.currentTarget) {
               setShowNewProjectModal(false);
             }
           }}
@@ -478,37 +500,33 @@ export function HomeScreen() {
               </p>
             </div>
 
-            {actionError && (
+            {actionError ? (
               <div className="inline-alert" data-testid="create-project-error">
                 {actionError}
               </div>
-            )}
+            ) : null}
 
             <div className="modal-form-group">
-              <label className="field-label">
-                Project Name *
-              </label>
+              <label className="field-label">Project Name *</label>
               <input
                 type="text"
                 className="input-field"
                 data-testid="create-project-name"
                 placeholder="e.g., The Lighthouse"
                 value={newProjectName}
-                onChange={(e) => setNewProjectName(e.target.value)}
+                onChange={(event) => setNewProjectName(event.target.value)}
                 autoFocus
               />
             </div>
 
             <div className="modal-form-group">
-              <label className="field-label">
-                Description
-              </label>
+              <label className="field-label">Description</label>
               <textarea
                 className="input-field textarea-field"
                 data-testid="create-project-description"
                 placeholder="Brief description of your project..."
                 value={newProjectDescription}
-                onChange={(e) => setNewProjectDescription(e.target.value)}
+                onChange={(event) => setNewProjectDescription(event.target.value)}
                 rows={3}
               />
             </div>
@@ -526,7 +544,7 @@ export function HomeScreen() {
                 type="button"
                 className="btn-accent"
                 data-testid="create-project-submit"
-                onClick={handleCreateProject}
+                onClick={() => void handleCreateProject()}
                 disabled={!newProjectName.trim()}
               >
                 Create Project
@@ -534,12 +552,9 @@ export function HomeScreen() {
             </div>
           </div>
         </div>
-      )}
+      ) : null}
 
-      <HowItWorksModal
-        isOpen={showHowItWorks}
-        onClose={() => setShowHowItWorks(false)}
-      />
+      <HowItWorksModal isOpen={showHowItWorks} onClose={() => setShowHowItWorks(false)} />
     </div>
   );
 }
