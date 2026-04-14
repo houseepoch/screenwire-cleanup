@@ -100,6 +100,7 @@ interface MorpheusState {
   reports: {
     projectReport?: string | null;
     videoPromptProjection?: string | null;
+    finalExport?: string | null;
     projectCover?: string | null;
     projectCoverSummary?: string | null;
     projectCoverMeta?: string | null;
@@ -123,6 +124,7 @@ interface MorpheusState {
     reports?: {
       projectReport?: string | null;
       videoPromptProjection?: string | null;
+      finalExport?: string | null;
       projectCover?: string | null;
       projectCoverSummary?: string | null;
       projectCoverMeta?: string | null;
@@ -295,7 +297,7 @@ export const useMorpheusStore = create<MorpheusState>()(
       updateFrameDuration: (id, duration) => {
         set((state) => ({
           timelineFrames: state.timelineFrames.map((f) =>
-            f.id === id ? { ...f, duration: Math.max(1, Math.min(15, duration)) } : f
+            f.id === id ? { ...f, duration: Math.max(2, Math.min(15, duration)) } : f
           ),
         }));
         // Redistribute durations if frame is linked to dialogue
@@ -341,7 +343,7 @@ export const useMorpheusStore = create<MorpheusState>()(
         const dialogue = get().dialogueBlocks.find((d) => d.id === dialogueId);
         if (!dialogue || dialogue.linkedFrameIds.length === 0) return;
         
-        const durationPerFrame = dialogue.duration / dialogue.linkedFrameIds.length;
+        const durationPerFrame = Math.max(2, dialogue.duration / dialogue.linkedFrameIds.length);
         
         set((state) => ({
           timelineFrames: state.timelineFrames.map((f) =>

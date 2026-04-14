@@ -23,6 +23,7 @@ type DesktopBridgeScenario = {
 export type DesktopBridgeCallLog = {
   createProject: DesktopCreateProjectRequest[];
   selectProject: string[];
+  returnToProjects: number;
   listProjects: number;
 };
 
@@ -56,6 +57,7 @@ export async function mockDesktopBridge(page: Page, scenario: DesktopBridgeScena
     const calls = {
       createProject: [],
       selectProject: [],
+      returnToProjects: 0,
       listProjects: 0,
     };
 
@@ -121,6 +123,14 @@ export async function mockDesktopBridge(page: Page, scenario: DesktopBridgeScena
             running: false,
           }
         );
+      },
+      async returnToProjects() {
+        calls.returnToProjects += 1;
+        return {
+          currentProjectId: null,
+          apiBaseUrl,
+          running: false,
+        };
       },
       async openProjectFolder() {
         return '';

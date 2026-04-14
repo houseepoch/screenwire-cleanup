@@ -36,6 +36,7 @@ export interface ScreenwireBridge {
     projectDir: string;
     apiBaseUrl: string;
   }>;
+  returnToProjects(): Promise<DesktopBackendState>;
   getBackendState(): Promise<DesktopBackendState>;
   openProjectFolder(projectId: string): Promise<string>;
   chooseFile(): Promise<string | null>;

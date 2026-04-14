@@ -128,6 +128,7 @@ export function OnboardingWizard() {
   const { 
     currentProject, 
     setCurrentView, 
+    selectProject,
     creativityLevel, 
     setCreativityLevel,
     setCreativeConcept,
@@ -255,7 +256,7 @@ export function OnboardingWizard() {
             name: 'Preproduction Build',
             status: 'running',
             progress: 5,
-            message: job.message || 'Generating script, graph, and review assets...',
+            message: job.message || 'Initializing project build...',
           },
         ]);
         updateProjectStatus('generating_assets');
@@ -269,11 +270,20 @@ export function OnboardingWizard() {
     }
   };
 
-  const handleBack = () => {
+  const handleBack = async () => {
     if (step > 1) {
       setStep(step - 1);
     } else {
-      setCurrentView('home');
+      try {
+        if (desktopService.isAvailable()) {
+          await desktopService.returnToProjects();
+        }
+        selectProject(null);
+        setCurrentView('home');
+      } catch (error) {
+        console.error('Failed to return to projects:', error);
+        setSubmitError(error instanceof Error ? error.message : 'Failed to return to projects.');
+      }
     }
   };
 
@@ -551,7 +561,7 @@ export function OnboardingWizard() {
             type="button"
             className="btn-secondary" 
             data-testid="onboarding-back"
-            onClick={handleBack}
+            onClick={() => void handleBack()}
           >
             {step === 1 ? 'Back to Projects' : 'Back'}
           </button>

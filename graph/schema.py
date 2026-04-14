@@ -476,6 +476,7 @@ class CastNode(BaseModel):
     personality: str = ""
     role: NarrativeRole = NarrativeRole.SUPPORTING
     arc_summary: str = ""
+    story_summary: str = ""
     voice_notes: str = ""                   # From creative output — prose description of voice
     relationships: list[dict] = Field(default_factory=list)
 
@@ -676,6 +677,7 @@ class LocationNode(BaseModel):
     description: str = ""
     atmosphere: str = ""
     narrative_purpose: str = ""
+    story_summary: str = ""
 
     # Visual
     material_palette: list[str] = Field(default_factory=list)  # wood, stone, metal — texture anchors
@@ -712,6 +714,7 @@ class PropNode(BaseModel):
 
     description: str = ""                   # Base physical description (intact state)
     narrative_significance: str = ""
+    story_summary: str = ""
     material_context: list[str] = Field(default_factory=list)  # from Lucid Lines EntityFields
 
     # Ownership tracking (temporal)

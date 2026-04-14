@@ -10,6 +10,8 @@ def test_build_project_tools_exposes_morpheus_media_and_research_tools() -> None
     names = {tool["name"] for tool in project_tools.build_project_tools()}
     assert "query_graph_database" in names
     assert "get_frame_context" in names
+    assert "create_graph_node" in names
+    assert "delete_graph_node" in names
     assert "grep_project_research" in names
     assert "generate_image_with_nanobanana" in names
     assert "edit_image_with_nanobanana" in names
@@ -168,3 +170,53 @@ def test_tool_executor_media_routes_hit_internal_handlers(tmp_path: Path, monkey
     ]
     assert calls[1][1]["input_path"].endswith("inputs/source.png")
     assert calls[3][1]["video_path"].endswith("inputs/clip.mp4")
+
+
+def test_tool_executor_marks_pipeline_dirty_for_project_writes(tmp_path: Path) -> None:
+    project_root = tmp_path / "project"
+    repo_root = tmp_path / "repo"
+    skills_dir = repo_root / "skills"
+    for path in (project_root, repo_root, skills_dir):
+        path.mkdir(parents=True, exist_ok=True)
+    (project_root / "project_manifest.json").write_text(
+        json.dumps(
+            {
+                "projectName": "Dirty Project",
+                "phases": {f"phase_{idx}": {"status": "complete"} for idx in range(7)},
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    (project_root / "logs").mkdir(exist_ok=True)
+    (project_root / "logs" / "ui_workspace_state.json").write_text(
+        json.dumps(
+            {
+                "approvals": {
+                    "skeletonApprovedAt": "2026-04-13T07:00:00Z",
+                    "referencesApprovedAt": "2026-04-13T07:05:00Z",
+                    "timelineApprovedAt": "2026-04-13T07:10:00Z",
+                    "videoApprovedAt": "2026-04-13T07:15:00Z",
+                }
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    execute = project_tools.make_project_tool_executor(
+        project_root=project_root,
+        repo_root=repo_root,
+        skills_dir=skills_dir,
+    )
+    execute(
+        "write_file",
+        json.dumps({"path": "creative_output/creative_output.md", "content": "Reworked narrative beats.\n"}),
+    )
+
+    state = json.loads((project_root / "logs" / "ui_workspace_state.json").read_text(encoding="utf-8"))
+    manifest = json.loads((project_root / "project_manifest.json").read_text(encoding="utf-8"))
+
+    assert set(state["pipelineInvalidations"]) >= {"phase_2", "phase_3", "phase_4", "phase_5"}
+    assert "timelineApprovedAt" not in state["approvals"]
+    assert manifest["phases"]["phase_2"]["status"] == "ready"

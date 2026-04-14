@@ -15,12 +15,12 @@ test('shows an inline error when a workflow approval request fails', async ({ pa
   await seedPersistedState(page, buildPersistedStateFromSnapshot(referenceReviewSnapshot));
 
   await page.goto('/');
-  await page.getByTestId('workflow-approve-button').click();
+  await page.getByTestId('workflow-continue-button').click();
 
-  await expect(page.getByTestId('workflow-approval-error')).toHaveText('Approval pipeline is temporarily unavailable.');
+  await expect(page.getByTestId('workflow-continue-error')).toHaveText('Approval pipeline is temporarily unavailable.');
 });
 
-test('shows an inline error when a timeline quick-approve action fails', async ({ page }) => {
+test('shows an inline error when the top-bar continue action fails during timeline review', async ({ page }) => {
   await mockWorkflowApi(page, {
     initialSnapshot: timelineReviewSnapshot,
     approvalResponses: {
@@ -33,7 +33,7 @@ test('shows an inline error when a timeline quick-approve action fails', async (
   await seedPersistedState(page, buildPersistedStateFromSnapshot(timelineReviewSnapshot));
 
   await page.goto('/');
-  await page.getByTestId('timeline-approve-button').click();
+  await page.getByTestId('workflow-continue-button').click();
 
-  await expect(page.getByTestId('timeline-approval-error')).toHaveText('Timeline approval failed while the render queue is locked.');
+  await expect(page.getByTestId('workflow-continue-error')).toHaveText('Timeline approval failed while the render queue is locked.');
 });

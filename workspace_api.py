@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -101,23 +102,312 @@ def patch_graph_node(
     if not isinstance(updates, dict):
         raise ValueError("Graph updates must be an object")
 
-    graph = load_graph(project_dir)
     collection_name = graph_collection_name(node_type)
-    collection = graph.get(collection_name) or {}
-    if not isinstance(collection, dict):
+    from graph.runtime_state import save_graph_projection
+    from graph.store import GraphStore
+
+    store = GraphStore(project_dir)
+    graph = store.load()
+    collection = getattr(graph, collection_name, None)
+    if collection is None:
         raise ValueError(f"Graph collection '{collection_name}' is not editable")
     existing = collection.get(node_id)
-    if not isinstance(existing, dict):
+    if existing is None:
         raise KeyError(node_id)
 
-    updated = _deep_merge_node(existing, updates)
-    provenance = dict(updated.get("provenance") or {})
-    provenance["last_modified_at"] = datetime.now(timezone.utc).isoformat()
-    provenance["last_modified_by"] = modified_by
-    updated["provenance"] = provenance
-    collection[node_id] = updated
-    graph[collection_name] = collection
-    save_graph(project_dir, graph)
+    updated = _deep_merge_node(existing.model_dump(), updates)
+    updated_model = existing.__class__.model_validate(updated)
+    provenance = getattr(updated_model, "provenance", None)
+    if provenance is not None:
+        provenance.last_modified_at = datetime.now(timezone.utc).isoformat()
+        provenance.last_modified_by = modified_by
+    collection[node_id] = updated_model
+    save_graph_projection(graph, project_dir, store=store)
+    if collection_name in {"cast", "locations", "props"}:
+        record_review_entity_change(project_dir, node_type, node_id, action="updated")
+        mark_pipeline_invalidation(
+            project_dir,
+            4,
+            "entity_graph_updated",
+            source=modified_by,
+            subject_type=node_type,
+            subject_id=node_id,
+            clear_approvals=("referencesApprovedAt", "timelineApprovedAt", "videoApprovedAt"),
+        )
+    elif collection_name in {"scenes", "frames", "dialogue", "cast_frame_states", "prop_frame_states", "location_frame_states"}:
+        mark_pipeline_invalidation(
+            project_dir,
+            4,
+            "graph_downstream_updated",
+            source=modified_by,
+            subject_type=node_type,
+            subject_id=node_id,
+            clear_approvals=("timelineApprovedAt", "videoApprovedAt"),
+        )
+    return updated_model.model_dump()
+
+
+def _slug_token(value: str) -> str:
+    cleaned = re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower())
+    cleaned = re.sub(r"_+", "_", cleaned).strip("_")
+    return cleaned or "item"
+
+
+def _entity_collection_and_id_field(node_type: str) -> tuple[str, str]:
+    collection_name = graph_collection_name(node_type)
+    mapping = {
+        "cast": ("cast", "cast_id"),
+        "locations": ("locations", "location_id"),
+        "props": ("props", "prop_id"),
+    }
+    if collection_name not in mapping:
+        raise ValueError(f"Unsupported entity node type: {node_type}")
+    return mapping[collection_name]
+
+
+def _next_entity_id(collection: Any, node_type: str, preferred_name: str) -> str:
+    prefix_map = {
+        "cast": "cast",
+        "location": "loc",
+        "prop": "prop",
+    }
+    normalized_type = str(node_type or "").strip().lower().rstrip("s")
+    prefix = prefix_map.get(normalized_type, normalized_type or "entity")
+    base = f"{prefix}_{_slug_token(preferred_name)}"
+    candidate = base
+    counter = 2
+    while candidate in collection:
+        candidate = f"{base}_{counter:02d}"
+        counter += 1
+    return candidate
+
+
+def create_graph_node(
+    project_dir: Path,
+    node_type: str,
+    data: dict[str, Any],
+    *,
+    modified_by: str = "ui",
+) -> dict[str, Any]:
+    from graph.api import upsert_node
+    from graph.runtime_state import save_graph_projection
+    from graph.store import GraphStore
+
+    if not isinstance(data, dict):
+        raise ValueError("Graph node payload must be an object")
+
+    normalized_type = str(node_type or "").strip().lower().rstrip("s")
+    collection_name, id_field = _entity_collection_and_id_field(normalized_type)
+    store = GraphStore(project_dir)
+    graph = store.load()
+    registry = getattr(graph, collection_name)
+
+    name = str(data.get("name") or "").strip()
+    if not name:
+        raise ValueError("Entity name is required")
+
+    node_id = str(data.get(id_field) or "").strip() or _next_entity_id(registry, normalized_type, name)
+    description = str(data.get("description") or "").strip()
+    metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
+
+    if normalized_type == "cast":
+        payload = {
+            "cast_id": node_id,
+            "name": name,
+            "display_name": name,
+            "source_name": name,
+            "personality": description,
+            "story_summary": str(metadata.get("story_summary") or ""),
+            "identity": {
+                "physical_description": str(metadata.get("physical_description") or description),
+                "wardrobe_description": str(metadata.get("wardrobe_description") or ""),
+            },
+        }
+    elif normalized_type == "location":
+        payload = {
+            "location_id": node_id,
+            "name": name,
+            "description": description,
+            "atmosphere": str(metadata.get("atmosphere") or ""),
+            "story_summary": str(metadata.get("story_summary") or ""),
+            "location_type": str(metadata.get("location_type") or "exterior"),
+        }
+    else:
+        payload = {
+            "prop_id": node_id,
+            "name": name,
+            "description": description,
+            "narrative_significance": str(metadata.get("narrative_significance") or ""),
+            "story_summary": str(metadata.get("story_summary") or ""),
+        }
+
+    upsert_node(
+        graph,
+        normalized_type,
+        payload,
+        {
+            "source_prose_chunk": f"UI entity creation: {name}",
+            "generated_by": modified_by,
+            "confidence": 1.0,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+    save_graph_projection(graph, project_dir, store=store)
+    record_review_entity_change(project_dir, normalized_type, node_id, action="created")
+    mark_pipeline_invalidation(
+        project_dir,
+        4,
+        "entity_created",
+        source=modified_by,
+        subject_type=normalized_type,
+        subject_id=node_id,
+        clear_approvals=("referencesApprovedAt", "timelineApprovedAt", "videoApprovedAt"),
+    )
+    return getattr(graph, collection_name)[node_id].model_dump()
+
+
+def delete_graph_node(
+    project_dir: Path,
+    node_type: str,
+    node_id: str,
+    *,
+    modified_by: str = "ui",
+) -> None:
+    from graph.runtime_state import save_graph_projection
+    from graph.store import GraphStore
+
+    normalized_type = str(node_type or "").strip().lower().rstrip("s")
+    collection_name, _id_field = _entity_collection_and_id_field(normalized_type)
+    store = GraphStore(project_dir)
+    graph = store.load()
+    registry = getattr(graph, collection_name)
+    if node_id not in registry:
+        raise KeyError(node_id)
+
+    if normalized_type == "cast":
+        if any(dialogue.cast_id == node_id for dialogue in graph.dialogue.values()):
+            raise ValueError(f"Cannot delete cast '{node_id}' while dialogue still references it")
+        for scene in graph.scenes.values():
+            scene.cast_present = [cast_id for cast_id in scene.cast_present if cast_id != node_id]
+        for state_id in [state_id for state_id, state in graph.cast_frame_states.items() if state.cast_id == node_id]:
+            graph.cast_frame_states.pop(state_id, None)
+    elif normalized_type == "location":
+        if any(scene.location_id == node_id for scene in graph.scenes.values()) or any(
+            frame.location_id == node_id for frame in graph.frames.values()
+        ):
+            raise ValueError(f"Cannot delete location '{node_id}' while scenes or frames still reference it")
+        for state_id in [state_id for state_id, state in graph.location_frame_states.items() if state.location_id == node_id]:
+            graph.location_frame_states.pop(state_id, None)
+    elif normalized_type == "prop":
+        for scene in graph.scenes.values():
+            scene.props_present = [prop_id for prop_id in scene.props_present if prop_id != node_id]
+        for state_id in [state_id for state_id, state in graph.prop_frame_states.items() if state.prop_id == node_id]:
+            graph.prop_frame_states.pop(state_id, None)
+
+    graph.edges = [
+        edge for edge in graph.edges
+        if edge.source_id != node_id and edge.target_id != node_id
+    ]
+    registry.pop(node_id, None)
+    save_graph_projection(graph, project_dir, store=store)
+    record_review_entity_change(project_dir, normalized_type, node_id, action="deleted")
+    mark_pipeline_invalidation(
+        project_dir,
+        4,
+        "entity_deleted",
+        source=modified_by,
+        subject_type=normalized_type,
+        subject_id=node_id,
+        clear_approvals=("referencesApprovedAt", "timelineApprovedAt", "videoApprovedAt"),
+    )
+
+
+def record_review_entity_change(
+    project_dir: Path,
+    node_type: str,
+    node_id: str,
+    *,
+    action: str,
+    image_path: str | None = None,
+) -> None:
+    normalized_type = str(node_type or "").strip().lower().rstrip("s")
+    if normalized_type not in {"cast", "location", "prop"}:
+        return
+
+    state = load_workspace_state(project_dir)
+    entries = [item for item in state.get("reviewEntityChanges") or [] if isinstance(item, dict)]
+    existing = next(
+        (
+            item
+            for item in entries
+            if item.get("nodeType") == normalized_type and item.get("nodeId") == node_id
+        ),
+        None,
+    )
+    if existing is None:
+        existing = {
+            "nodeType": normalized_type,
+            "nodeId": node_id,
+            "actions": [],
+        }
+        entries.append(existing)
+
+    actions = [str(item).strip() for item in existing.get("actions") or [] if str(item).strip()]
+    if action not in actions:
+        actions.append(action)
+    existing["actions"] = actions
+    if image_path:
+        existing["imagePath"] = image_path
+    existing["updatedAt"] = datetime.now(timezone.utc).isoformat()
+    state["reviewEntityChanges"] = entries
+    save_workspace_state(project_dir, state)
+
+
+def load_review_entity_changes(project_dir: Path) -> list[dict[str, Any]]:
+    state = load_workspace_state(project_dir)
+    return [item for item in state.get("reviewEntityChanges") or [] if isinstance(item, dict)]
+
+
+def clear_review_entity_changes(project_dir: Path) -> None:
+    state = load_workspace_state(project_dir)
+    state["reviewEntityChanges"] = []
+    save_workspace_state(project_dir, state)
+
+
+def attach_entity_image(
+    project_dir: Path,
+    entity_type: str,
+    entity_id: str,
+    target_path: Path,
+    *,
+    modified_by: str = "ui_upload",
+) -> dict[str, Any]:
+    rel_path = target_path.relative_to(project_dir).as_posix()
+    if entity_type == "cast":
+        updates = {
+            "composite_path": rel_path,
+            "composite_status": "complete",
+        }
+    elif entity_type == "location":
+        updates = {
+            "primary_image_path": rel_path,
+            "image_status": "complete",
+        }
+    else:
+        updates = {
+            "image_path": rel_path,
+        }
+    updated = patch_graph_node(project_dir, entity_type, entity_id, updates, modified_by=modified_by)
+    record_review_entity_change(project_dir, entity_type, entity_id, action="image_updated", image_path=rel_path)
+    mark_pipeline_invalidation(
+        project_dir,
+        4,
+        "entity_reference_image_updated",
+        source=modified_by,
+        subject_type=entity_type,
+        subject_id=entity_id,
+        clear_approvals=("referencesApprovedAt", "timelineApprovedAt", "videoApprovedAt"),
+    )
     return updated
 
 
@@ -204,6 +494,8 @@ def load_workspace_state(project_dir: Path) -> dict[str, Any]:
         {
             "approvals": {},
             "changeRequests": [],
+            "reviewEntityChanges": [],
+            "pipelineInvalidations": {},
         },
     )
     if not isinstance(data, dict):
@@ -211,6 +503,8 @@ def load_workspace_state(project_dir: Path) -> dict[str, Any]:
     return {
         "approvals": dict(data.get("approvals") or {}),
         "changeRequests": list(data.get("changeRequests") or []),
+        "reviewEntityChanges": list(data.get("reviewEntityChanges") or []),
+        "pipelineInvalidations": _normalize_pipeline_invalidations(data.get("pipelineInvalidations")),
     }
 
 
@@ -218,8 +512,270 @@ def save_workspace_state(project_dir: Path, state: dict[str, Any]) -> None:
     payload = {
         "approvals": dict(state.get("approvals") or {}),
         "changeRequests": list(state.get("changeRequests") or []),
+        "reviewEntityChanges": list(state.get("reviewEntityChanges") or []),
+        "pipelineInvalidations": _normalize_pipeline_invalidations(state.get("pipelineInvalidations")),
     }
     workspace_state_path(project_dir).write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
+def _normalize_pipeline_invalidations(value: Any) -> dict[str, dict[str, Any]]:
+    if not isinstance(value, dict):
+        return {}
+
+    normalized: dict[str, dict[str, Any]] = {}
+    for raw_key, raw_payload in value.items():
+        phase_key = str(raw_key or "").strip().lower()
+        if not re.fullmatch(r"phase_\d+", phase_key):
+            continue
+        payload = raw_payload if isinstance(raw_payload, dict) else {}
+        try:
+            phase_number = int(phase_key.split("_", 1)[1])
+        except (IndexError, ValueError):
+            continue
+        normalized[phase_key] = {
+            "phase": phase_number,
+            "dirtyAt": str(payload.get("dirtyAt") or ""),
+            "reason": str(payload.get("reason") or ""),
+            "source": str(payload.get("source") or ""),
+            "subjectType": str(payload.get("subjectType") or ""),
+            "subjectId": str(payload.get("subjectId") or ""),
+        }
+    return normalized
+
+
+def load_pipeline_invalidations(project_dir: Path) -> dict[str, dict[str, Any]]:
+    state = load_workspace_state(project_dir)
+    return _normalize_pipeline_invalidations(state.get("pipelineInvalidations"))
+
+
+def dirty_pipeline_phases(project_dir: Path) -> list[int]:
+    invalidations = load_pipeline_invalidations(project_dir)
+    phases: list[int] = []
+    for key in invalidations:
+        try:
+            phases.append(int(key.split("_", 1)[1]))
+        except (IndexError, ValueError):
+            continue
+    return sorted(set(phases))
+
+
+def _parse_iso_datetime(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def mark_pipeline_invalidation(
+    project_dir: Path,
+    start_phase: int,
+    reason: str,
+    *,
+    source: str = "ui",
+    subject_type: str | None = None,
+    subject_id: str | None = None,
+    clear_approvals: tuple[str, ...] = (),
+) -> dict[str, dict[str, Any]]:
+    normalized_start = max(0, min(5, int(start_phase)))
+    state = load_workspace_state(project_dir)
+    invalidations = _normalize_pipeline_invalidations(state.get("pipelineInvalidations"))
+    timestamp = datetime.now(timezone.utc).isoformat()
+
+    for phase_number in range(normalized_start, 6):
+        phase_key = f"phase_{phase_number}"
+        invalidations[phase_key] = {
+            "phase": phase_number,
+            "dirtyAt": timestamp,
+            "reason": str(reason or "").strip(),
+            "source": str(source or "").strip(),
+            "subjectType": str(subject_type or "").strip(),
+            "subjectId": str(subject_id or "").strip(),
+        }
+
+    approvals = dict(state.get("approvals") or {})
+    for approval_key in clear_approvals:
+        approvals.pop(approval_key, None)
+    state["approvals"] = approvals
+    state["pipelineInvalidations"] = invalidations
+    save_workspace_state(project_dir, state)
+    return invalidations
+
+
+def clear_pipeline_invalidations(
+    project_dir: Path,
+    *phase_numbers: int,
+    not_after: datetime | None = None,
+) -> dict[str, dict[str, Any]]:
+    state = load_workspace_state(project_dir)
+    invalidations = _normalize_pipeline_invalidations(state.get("pipelineInvalidations"))
+    cutoff = not_after
+    if isinstance(cutoff, datetime):
+        if cutoff.tzinfo is None:
+            cutoff = cutoff.replace(tzinfo=timezone.utc)
+        else:
+            cutoff = cutoff.astimezone(timezone.utc)
+    for phase_number in phase_numbers:
+        phase_key = f"phase_{int(phase_number)}"
+        payload = invalidations.get(phase_key)
+        if payload is None:
+            continue
+        if cutoff is None:
+            invalidations.pop(phase_key, None)
+            continue
+        dirty_at = _parse_iso_datetime(payload.get("dirtyAt"))
+        if dirty_at is None or dirty_at <= cutoff:
+            invalidations.pop(phase_key, None)
+    state["pipelineInvalidations"] = invalidations
+    save_workspace_state(project_dir, state)
+    return invalidations
+
+
+def rewind_manifest_phases(
+    project_dir: Path,
+    start_phase: int,
+    reason: str,
+    *,
+    source: str = "ui",
+) -> dict[str, Any]:
+    normalized_start = max(1, min(6, int(start_phase)))
+    manifest_path = project_dir / "project_manifest.json"
+    manifest = load_json(manifest_path, {})
+    if not isinstance(manifest, dict):
+        manifest = {}
+
+    timestamp = datetime.now(timezone.utc).isoformat()
+    phases = manifest.get("phases")
+    if not isinstance(phases, dict):
+        phases = {}
+
+    for phase_number in range(normalized_start, 7):
+        phase_key = f"phase_{phase_number}"
+        phase_payload = phases.get(phase_key)
+        if not isinstance(phase_payload, dict):
+            phase_payload = {}
+        phase_payload["status"] = "ready" if phase_number == normalized_start else "pending"
+        phase_payload.pop("completedAt", None)
+        phase_payload["invalidatedAt"] = timestamp
+        phase_payload["invalidationReason"] = str(reason or "").strip()
+        phase_payload["invalidationSource"] = str(source or "").strip()
+        phases[phase_key] = phase_payload
+
+    manifest["phases"] = phases
+    manifest["updatedAt"] = timestamp
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    return manifest
+
+
+def mark_project_file_change(
+    project_dir: Path,
+    rel_path: str | Path,
+    *,
+    source: str = "ui_write",
+) -> dict[str, Any] | None:
+    normalized = Path(rel_path).as_posix().lstrip("./")
+    if not normalized:
+        return None
+
+    if normalized.startswith("source_files/"):
+        reason = "concept_source_updated"
+        mark_pipeline_invalidation(
+            project_dir,
+            1,
+            reason,
+            source=source,
+            subject_type="file",
+            subject_id=normalized,
+            clear_approvals=("skeletonApprovedAt", "referencesApprovedAt", "timelineApprovedAt", "videoApprovedAt"),
+        )
+        rewind_manifest_phases(project_dir, 1, reason, source=source)
+        return {"startPhase": 1, "reason": reason}
+
+    if normalized.startswith("creative_output/"):
+        reason = "creative_output_updated"
+        mark_pipeline_invalidation(
+            project_dir,
+            2,
+            reason,
+            source=source,
+            subject_type="file",
+            subject_id=normalized,
+            clear_approvals=("skeletonApprovedAt", "referencesApprovedAt", "timelineApprovedAt", "videoApprovedAt"),
+        )
+        rewind_manifest_phases(project_dir, 2, reason, source=source)
+        return {"startPhase": 2, "reason": reason}
+
+    if normalized.startswith("graph/"):
+        reason = "graph_artifact_updated"
+        mark_pipeline_invalidation(
+            project_dir,
+            4,
+            reason,
+            source=source,
+            subject_type="file",
+            subject_id=normalized,
+            clear_approvals=("timelineApprovedAt", "videoApprovedAt"),
+        )
+        return {"startPhase": 4, "reason": reason}
+
+    if normalized.startswith(("cast/", "locations/", "props/")):
+        reason = "reference_asset_updated"
+        mark_pipeline_invalidation(
+            project_dir,
+            4,
+            reason,
+            source=source,
+            subject_type="file",
+            subject_id=normalized,
+            clear_approvals=("referencesApprovedAt", "timelineApprovedAt", "videoApprovedAt"),
+        )
+        return {"startPhase": 4, "reason": reason}
+
+    if normalized.startswith("frames/prompts/"):
+        reason = "frame_prompt_updated"
+        mark_pipeline_invalidation(
+            project_dir,
+            4,
+            reason,
+            source=source,
+            subject_type="file",
+            subject_id=normalized,
+            clear_approvals=("timelineApprovedAt", "videoApprovedAt"),
+        )
+        return {"startPhase": 4, "reason": reason}
+
+    if normalized.startswith("video/prompts/"):
+        reason = "video_prompt_updated"
+        mark_pipeline_invalidation(
+            project_dir,
+            5,
+            reason,
+            source=source,
+            subject_type="file",
+            subject_id=normalized,
+            clear_approvals=("videoApprovedAt",),
+        )
+        return {"startPhase": 5, "reason": reason}
+
+    if normalized.startswith("frames/composed/"):
+        reason = "frame_asset_updated"
+        mark_pipeline_invalidation(
+            project_dir,
+            5,
+            reason,
+            source=source,
+            subject_type="file",
+            subject_id=normalized,
+            clear_approvals=("timelineApprovedAt", "videoApprovedAt"),
+        )
+        return {"startPhase": 5, "reason": reason}
+
+    return None
 
 
 def append_ui_event(project_dir: Path, event: dict[str, Any]) -> None:
@@ -273,7 +829,7 @@ def load_timeline_overrides(project_dir: Path) -> dict[str, Any]:
     }
 
 
-def save_timeline_overrides(project_dir: Path, overrides: dict[str, Any]) -> None:
+def save_timeline_overrides(project_dir: Path, overrides: dict[str, Any], *, mark_dirty: bool = True) -> None:
     path = timeline_overrides_path(project_dir)
     payload = {
         "hiddenFrameIds": list(overrides.get("hiddenFrameIds") or []),
@@ -282,15 +838,43 @@ def save_timeline_overrides(project_dir: Path, overrides: dict[str, Any]) -> Non
         "dialogueOverrides": dict(overrides.get("dialogueOverrides") or {}),
     }
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    if mark_dirty:
+        mark_pipeline_invalidation(
+            project_dir,
+            5,
+            "timeline_override_updated",
+            source="timeline_override",
+            clear_approvals=("timelineApprovedAt", "videoApprovedAt"),
+        )
 
 
-def _project_file_url(rel_path: str | Path | None) -> str | None:
+_VERSIONED_ASSET_SUFFIXES = {
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".webp",
+    ".gif",
+    ".bmp",
+    ".svg",
+    ".mp4",
+    ".mov",
+    ".webm",
+}
+
+
+def _project_file_url(project_dir: Path, rel_path: str | Path | None) -> str | None:
     if not rel_path:
         return None
     rel = Path(rel_path).as_posix().lstrip("./")
     if not rel:
         return None
-    return f"/api/project/file/{rel}"
+    project_id = project_dir.name
+    url = f"/api/projects/{project_id}/file/{rel}"
+    target = (project_dir / rel).resolve()
+    if target.exists() and target.is_file() and target.suffix.lower() in _VERSIONED_ASSET_SUFFIXES:
+        stat = target.stat()
+        return f"{url}?v={stat.st_mtime_ns}"
+    return url
 
 
 def _sequence_for_frame(frame: dict[str, Any], fallback: int) -> int:
@@ -299,6 +883,46 @@ def _sequence_for_frame(frame: dict[str, Any], fallback: int) -> int:
         return int(value)
     except Exception:
         return fallback
+
+
+def pipeline_artifact_progress(
+    project_dir: Path,
+    manifest: dict[str, Any],
+    graph: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    graph_data = graph if graph is not None else _graph_data(project_dir)
+    manifest_frames = _materialized_manifest_frames(manifest, graph_data)
+    expected_frame_count = len(manifest_frames)
+
+    composed_frame_count = 0
+    clip_count = 0
+    for frame in manifest_frames:
+        frame_id = str(frame.get("frameId") or "").strip()
+        if not frame_id:
+            continue
+        if _resolve_frame_image_rel(project_dir, frame_id, frame.get("generatedImagePath")):
+            composed_frame_count += 1
+        if _resolve_existing_rel_path(
+            project_dir,
+            [
+                f"video/clips/{frame_id}.mp4",
+                f"video/clips/{frame_id}.mov",
+                f"video/clips/{frame_id}.webm",
+                f"video/clips/{frame_id}.*",
+            ],
+            frame.get("videoPath"),
+        ):
+            clip_count += 1
+
+    return {
+        "expectedFrameCount": expected_frame_count,
+        "composedFrameCount": composed_frame_count,
+        "clipCount": clip_count,
+        "hasAnyComposedFrames": composed_frame_count > 0,
+        "hasAnyClips": clip_count > 0,
+        "allComposedFramesReady": expected_frame_count > 0 and composed_frame_count >= expected_frame_count,
+        "allClipsReady": expected_frame_count > 0 and clip_count >= expected_frame_count,
+    }
 
 
 def _status_from_phase_files(project_dir: Path, manifest: dict[str, Any]) -> tuple[str, int]:
@@ -312,25 +936,47 @@ def _status_from_phase_files(project_dir: Path, manifest: dict[str, Any]) -> tup
 
     creative_output = project_dir / "creative_output" / "creative_output.md"
     skeleton = project_dir / "creative_output" / "outline_skeleton.md"
-    composed_dir = project_dir / "frames" / "composed"
-    clips_dir = project_dir / "video" / "clips"
+    graph = _graph_data(project_dir)
     state = load_workspace_state(project_dir)
     approvals = state.get("approvals") or {}
+    invalidations = _normalize_pipeline_invalidations(state.get("pipelineInvalidations"))
+    dirty_preproduction = any(phase_key in invalidations for phase_key in ("phase_1", "phase_2", "phase_3"))
+    dirty_phase_4 = "phase_4" in invalidations
+    dirty_phase_5 = "phase_5" in invalidations
+    artifact_progress = pipeline_artifact_progress(project_dir, manifest, graph)
 
-    has_clips = clips_dir.exists() and any(clips_dir.glob("*.mp4"))
-    has_composed_frames = composed_dir.exists() and any(composed_dir.glob("*_gen.*"))
     has_skeleton = skeleton.exists() or creative_output.exists()
-    has_reference_assets = any((project_dir / "cast" / "composites").glob("*.png")) or any(
-        (project_dir / "locations" / "primary").glob("*.png")
-    ) or any((project_dir / "props" / "generated").glob("*.png"))
+    reference_expected = _expected_reference_entity_count(project_dir, manifest, graph)
+    reference_ready = _completed_reference_entity_count(project_dir, manifest, graph)
+    has_reference_assets = reference_expected > 0 and reference_ready >= reference_expected
 
-    if has_clips:
+    if dirty_preproduction:
+        if approvals.get("skeletonApprovedAt"):
+            return "generating_assets", max(28, round((completed / total) * 100))
+        if has_skeleton:
+            return "skeleton_review", max(24, round((completed / total) * 100))
+        return "onboarding", max(0, round((completed / total) * 100))
+    if dirty_phase_5:
+        if approvals.get("timelineApprovedAt"):
+            return "generating_video", max(82, round((completed / total) * 100))
+        if artifact_progress["allComposedFramesReady"]:
+            return "timeline_review", max(70, round((completed / total) * 100))
+    if dirty_phase_4:
+        if approvals.get("referencesApprovedAt"):
+            return "generating_frames", max(58, round((completed / total) * 100))
+        if has_reference_assets:
+            return "reference_review", max(45, round((completed / total) * 100))
+    if artifact_progress["allClipsReady"]:
         return "complete", max(92, round((completed / total) * 100))
     if approvals.get("timelineApprovedAt"):
+        if not artifact_progress["allComposedFramesReady"]:
+            return "generating_frames", max(58, round((completed / total) * 100))
         return "generating_video", max(82, round((completed / total) * 100))
-    if has_composed_frames:
+    if artifact_progress["hasAnyClips"]:
+        return "generating_video", max(82, round((completed / total) * 100))
+    if artifact_progress["allComposedFramesReady"]:
         return "timeline_review", max(70, round((completed / total) * 100))
-    if approvals.get("referencesApprovedAt"):
+    if approvals.get("referencesApprovedAt") or artifact_progress["hasAnyComposedFrames"]:
         return "generating_frames", max(58, round((completed / total) * 100))
     if has_reference_assets:
         return "reference_review", max(45, round((completed / total) * 100))
@@ -358,6 +1004,7 @@ def classify_ui_gate(path: str) -> str:
 
 def _artifact_stats(project_dir: Path, graph: dict[str, Any], manifest: dict[str, Any]) -> dict[str, Any]:
     count = lambda pattern: len(list(pattern))
+    artifact_progress = pipeline_artifact_progress(project_dir, manifest, graph)
     return {
         "hasOnboardingConfig": (project_dir / "source_files" / "onboarding_config.json").exists(),
         "hasSkeleton": (project_dir / "creative_output" / "outline_skeleton.md").exists(),
@@ -370,11 +1017,12 @@ def _artifact_stats(project_dir: Path, graph: dict[str, Any], manifest: dict[str
         "propReferenceCount": count((project_dir / "props" / "generated").glob("*.png")),
         "imagePromptCount": count((project_dir / "frames" / "prompts").glob("*_image.json")),
         "videoPromptCount": count((project_dir / "video" / "prompts").glob("*_video.json")),
-        "composedFrameCount": count((project_dir / "frames" / "composed").glob("f_*_gen.*")),
-        "clipCount": count((project_dir / "video" / "clips").glob("*.mp4")),
+        "composedFrameCount": artifact_progress["composedFrameCount"],
+        "clipCount": artifact_progress["clipCount"],
         "projectCoverPresent": (project_dir / "reports" / "project_cover.png").exists(),
         "sceneCount": len(graph.get("scenes") or {}) if isinstance(graph.get("scenes"), dict) else 0,
         "frameCount": len(graph.get("frames") or {}) if isinstance(graph.get("frames"), dict) else len(manifest.get("frames") or []),
+        "expectedFrameCount": artifact_progress["expectedFrameCount"],
         "dialogueNodeCount": len(graph.get("dialogue") or {}) if isinstance(graph.get("dialogue"), dict) else 0,
     }
 
@@ -437,10 +1085,19 @@ def _ui_break_findings(workflow: dict[str, Any], artifacts: dict[str, Any], rout
         artifacts["castReferenceCount"] + artifacts["locationReferenceCount"] + artifacts["propReferenceCount"] == 0
     ):
         add("error", "approved_without_references", "References were approved but no cast/location/prop reference images exist.")
-    if approvals.get("timelineApprovedAt") and artifacts["composedFrameCount"] == 0:
-        add("error", "approved_without_frames", "Timeline was approved but no composed frames exist.")
-    if approvals.get("videoApprovedAt") and artifacts["clipCount"] == 0:
-        add("error", "approved_without_clips", "Video was approved but no rendered clips exist.")
+    expected_frames = int(artifacts.get("expectedFrameCount") or artifacts.get("frameCount") or 0)
+    if approvals.get("timelineApprovedAt") and expected_frames and artifacts["composedFrameCount"] < expected_frames:
+        add(
+            "error",
+            "approved_without_frames",
+            f"Timeline was approved but only {artifacts['composedFrameCount']} of {expected_frames} composed frames exist.",
+        )
+    if approvals.get("videoApprovedAt") and expected_frames and artifacts["clipCount"] < expected_frames:
+        add(
+            "error",
+            "approved_without_clips",
+            f"Video was approved but only {artifacts['clipCount']} of {expected_frames} rendered clips exist.",
+        )
     if artifacts["frameCount"] and artifacts["imagePromptCount"] < artifacts["frameCount"]:
         add("warning", "missing_image_prompts", "Image prompt count is lower than graph frame count.")
     if artifacts["frameCount"] and artifacts["videoPromptCount"] < artifacts["frameCount"]:
@@ -529,7 +1186,7 @@ def _build_project_summary(
         "creativityLevel": onboarding.get("creativeFreedom", "balanced"),
         "generationMode": "assisted",
         "progress": progress,
-        "coverImageUrl": _project_file_url(cover_rel),
+        "coverImageUrl": _project_file_url(project_dir, cover_rel),
         "coverSummary": cover_meta.get("summary"),
     }
 
@@ -647,24 +1304,75 @@ def _manifest_frame_map(manifest: dict[str, Any]) -> dict[str, dict[str, Any]]:
 def _relative_image_path_from_url(image_url: str | None) -> str | None:
     if not image_url:
         return None
-    prefix = "/api/project/file/"
-    if image_url.startswith(prefix):
-        return image_url[len(prefix):]
+    image_url = str(image_url).split("?", 1)[0]
+    project_prefix = "/api/projects/"
+    legacy_prefix = "/api/project/file/"
+    if image_url.startswith(project_prefix):
+        parts = image_url.split("/", 5)
+        if len(parts) >= 6 and parts[4] == "file":
+            return parts[5]
+    if image_url.startswith(legacy_prefix):
+        return image_url[len(legacy_prefix):]
     return image_url
 
 
-def _build_expanded_frame(source_frame: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+_IMAGE_ASSET_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp")
+
+
+def _resolve_path_with_variants(project_dir: Path, rel_path: str | None) -> str | None:
+    if not rel_path:
+        return None
+    normalized = Path(rel_path).as_posix().lstrip("./")
+    if not normalized:
+        return None
+
+    if any(token in normalized for token in ("*", "?", "[")):
+        for match in sorted(project_dir.glob(normalized)):
+            if match.is_file():
+                return match.relative_to(project_dir).as_posix()
+        return None
+
+    target = project_dir / normalized
+    if target.exists() and target.is_file():
+        return normalized
+
+    stem = target.with_suffix("")
+    for suffix in _IMAGE_ASSET_SUFFIXES:
+        variant = stem.with_suffix(suffix)
+        if variant.exists() and variant.is_file():
+            return variant.relative_to(project_dir).as_posix()
+    return None
+
+
+def _resolve_frame_image_rel(project_dir: Path, frame_id: str, declared: str | None = None) -> str | None:
+    return _resolve_existing_rel_path(
+        project_dir,
+        [
+            f"frames/composed/{frame_id}_gen.png",
+            f"frames/composed/{frame_id}.png",
+            f"frames/composed/{frame_id}_gen.*",
+            f"frames/composed/{frame_id}.*",
+        ],
+        declared,
+    )
+
+
+def _build_expanded_frame(project_dir: Path, source_frame: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
     rel_image = override.get("imageRel") or _relative_image_path_from_url(source_frame.get("imageUrl"))
+    rel_video = override.get("videoRel") or _relative_image_path_from_url(source_frame.get("videoUrl"))
     source_duration = float(source_frame.get("duration") or 5)
     frame = {
         "id": override.get("id"),
         "storyboardId": override.get("storyboardId") or source_frame.get("storyboardId") or source_frame.get("id"),
         "sequence": 0,
-        "imageUrl": _project_file_url(rel_image),
+        "imageUrl": _project_file_url(project_dir, rel_image),
+        "videoUrl": _project_file_url(project_dir, rel_video),
         "prompt": override.get("prompt") or source_frame.get("prompt") or "",
         "status": "complete" if rel_image else "pending",
-        "duration": max(1, min(15, float(override.get("duration") or source_duration or 5))),
+        "duration": max(2, min(15, float(override.get("duration") or source_duration or 5))),
         "dialogueId": override.get("dialogueId", source_frame.get("dialogueId")),
+        "trimStart": float(override.get("trimStart") if override.get("trimStart") is not None else source_frame.get("trimStart") or 0),
+        "trimEnd": float(override.get("trimEnd") if override.get("trimEnd") is not None else source_frame.get("trimEnd") or 0),
         "sourceFrameId": override.get("sourceFrameId") or source_frame.get("sourceFrameId") or source_frame.get("id"),
         "isExpanded": True,
         "direction": override.get("direction"),
@@ -677,13 +1385,17 @@ def _entity_path_candidates(entity_type: str, entity_id: str) -> list[str]:
         return [
             f"cast/composites/{entity_id}_ref.png",
             f"cast/composites/{entity_id}.png",
+            f"cast/composites/{entity_id}_ref.*",
+            f"cast/composites/{entity_id}.*",
         ]
     if entity_type == "location":
         return [
             f"locations/primary/{entity_id}.png",
+            f"locations/primary/{entity_id}.*",
         ]
     return [
         f"props/generated/{entity_id}.png",
+        f"props/generated/{entity_id}.*",
     ]
 
 
@@ -692,18 +1404,119 @@ def _resolve_existing_rel_path(project_dir: Path, candidates: list[str], declare
     for rel in paths:
         if not rel:
             continue
-        if (project_dir / rel).exists():
-            return rel
-    return declared or (candidates[0] if candidates else None)
+        resolved = _resolve_path_with_variants(project_dir, rel)
+        if resolved:
+            return resolved
+    return None
+
+
+def _graph_registry(graph: dict[str, Any], registry_name: str) -> dict[str, dict[str, Any]]:
+    registry = graph.get(registry_name) or {}
+    if not isinstance(registry, dict):
+        return {}
+    return {str(key): value for key, value in registry.items() if isinstance(value, dict)}
+
+
+def _graph_entity_records(graph: dict[str, Any], registry_name: str, id_field: str) -> list[dict[str, Any]]:
+    registry = _graph_registry(graph, registry_name)
+    return [
+        {id_field: entity_id, **item}
+        for entity_id, item in registry.items()
+    ]
+
+
+def _sentence_limited_summary(*parts: Any) -> str:
+    fragments: list[str] = []
+    for part in parts:
+        text = str(part or "").strip()
+        if text:
+            fragments.append(text)
+    if not fragments:
+        return ""
+    summary = " ".join(fragments)
+    sentences = [item.strip() for item in re.split(r"(?<=[.!?])\s+", summary) if item.strip()]
+    if not sentences:
+        sentences = [summary]
+    return " ".join(sentences[:2]).strip()
+
+
+def _entity_story_summary(entity_type: str, graph_item: dict[str, Any], manifest_item: dict[str, Any] | None = None) -> str:
+    summary = str(graph_item.get("story_summary") or "").strip()
+    if summary:
+        return _sentence_limited_summary(summary)
+
+    manifest_item = manifest_item or {}
+    if entity_type == "cast":
+        return _sentence_limited_summary(
+            graph_item.get("arc_summary"),
+            graph_item.get("role"),
+            graph_item.get("personality"),
+        )
+    if entity_type == "location":
+        return _sentence_limited_summary(
+            graph_item.get("narrative_purpose"),
+            graph_item.get("atmosphere"),
+            graph_item.get("description"),
+            manifest_item.get("name"),
+        )
+    return _sentence_limited_summary(
+        graph_item.get("story_summary"),
+        graph_item.get("narrative_significance"),
+        graph_item.get("description"),
+        manifest_item.get("name"),
+    )
+
+
+def _expected_reference_entity_count(project_dir: Path, manifest: dict[str, Any], graph: dict[str, Any]) -> int:
+    cast_items = list(manifest.get("cast") or []) or _graph_entity_records(graph, "cast", "castId")
+    location_items = list(manifest.get("locations") or []) or _graph_entity_records(graph, "locations", "locationId")
+    prop_items = list(manifest.get("props") or []) or _graph_entity_records(graph, "props", "propId")
+    return sum(
+        1
+        for item in [*cast_items, *location_items, *prop_items]
+        if isinstance(item, dict)
+    )
+
+
+def _completed_reference_entity_count(project_dir: Path, manifest: dict[str, Any], graph: dict[str, Any]) -> int:
+    def _count(items: list[dict[str, Any]], entity_type: str, id_key: str, path_key: str) -> int:
+        completed = 0
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            entity_id = str(item.get(id_key) or "").strip()
+            if not entity_id:
+                continue
+            rel_path = _resolve_existing_rel_path(
+                project_dir,
+                _entity_path_candidates(entity_type, entity_id),
+                item.get(path_key),
+            )
+            if rel_path and (project_dir / rel_path).exists():
+                completed += 1
+        return completed
+
+    cast_items = list(manifest.get("cast") or []) or _graph_entity_records(graph, "cast", "castId")
+    location_items = list(manifest.get("locations") or []) or _graph_entity_records(graph, "locations", "locationId")
+    prop_items = list(manifest.get("props") or []) or _graph_entity_records(graph, "props", "propId")
+    return (
+        _count(cast_items, "cast", "castId", "compositePath")
+        + _count(location_items, "location", "locationId", "primaryImagePath")
+        + _count(prop_items, "prop", "propId", "imagePath")
+    )
 
 
 def _build_entities(project_dir: Path, manifest: dict[str, Any]) -> list[dict[str, Any]]:
     graph = _graph_data(project_dir)
     entities: list[dict[str, Any]] = []
 
-    graph_cast = graph.get("cast") or {}
+    graph_cast = _graph_registry(graph, "cast")
+    seen_ids: set[tuple[str, str]] = set()
+
     for item in manifest.get("cast") or []:
         cast_id = item.get("castId")
+        if not cast_id:
+            continue
         graph_item = graph_cast.get(cast_id, {})
         rel_path = _resolve_existing_rel_path(
             project_dir,
@@ -716,15 +1529,41 @@ def _build_entities(project_dir: Path, manifest: dict[str, Any]) -> list[dict[st
                 "type": "cast",
                 "name": graph_item.get("display_name") or graph_item.get("name") or item.get("name") or cast_id,
                 "description": graph_item.get("description") or graph_item.get("personality") or item.get("description") or "",
-                "imageUrl": _project_file_url(rel_path),
-                "status": item.get("compositeStatus") or "pending",
+                "storySummary": _entity_story_summary("cast", graph_item, item),
+                "imageUrl": _project_file_url(project_dir, rel_path),
+                "status": item.get("compositeStatus") or ("complete" if rel_path else "pending"),
                 "metadata": graph_item,
             }
         )
+        seen_ids.add(("cast", cast_id))
 
-    graph_locations = graph.get("locations") or {}
+    for cast_id, graph_item in graph_cast.items():
+        if ("cast", cast_id) in seen_ids:
+            continue
+        rel_path = _resolve_existing_rel_path(
+            project_dir,
+            _entity_path_candidates("cast", cast_id),
+            graph_item.get("composite_path"),
+        )
+        entities.append(
+            {
+                "id": cast_id,
+                "type": "cast",
+                "name": graph_item.get("display_name") or graph_item.get("name") or cast_id,
+                "description": graph_item.get("description") or graph_item.get("personality") or "",
+                "storySummary": _entity_story_summary("cast", graph_item),
+                "imageUrl": _project_file_url(project_dir, rel_path),
+                "status": graph_item.get("composite_status") or ("complete" if rel_path and (project_dir / rel_path).exists() else "pending"),
+                "metadata": graph_item,
+            }
+        )
+        seen_ids.add(("cast", cast_id))
+
+    graph_locations = _graph_registry(graph, "locations")
     for item in manifest.get("locations") or []:
         location_id = item.get("locationId")
+        if not location_id:
+            continue
         graph_item = graph_locations.get(location_id, {})
         rel_path = _resolve_existing_rel_path(
             project_dir,
@@ -737,15 +1576,41 @@ def _build_entities(project_dir: Path, manifest: dict[str, Any]) -> list[dict[st
                 "type": "location",
                 "name": graph_item.get("name") or item.get("name") or location_id,
                 "description": graph_item.get("description") or graph_item.get("atmosphere") or item.get("description") or "",
-                "imageUrl": _project_file_url(rel_path),
-                "status": item.get("imageStatus") or "pending",
+                "storySummary": _entity_story_summary("location", graph_item, item),
+                "imageUrl": _project_file_url(project_dir, rel_path),
+                "status": item.get("imageStatus") or ("complete" if rel_path else "pending"),
                 "metadata": graph_item,
             }
         )
+        seen_ids.add(("location", location_id))
 
-    graph_props = graph.get("props") or {}
+    for location_id, graph_item in graph_locations.items():
+        if ("location", location_id) in seen_ids:
+            continue
+        rel_path = _resolve_existing_rel_path(
+            project_dir,
+            _entity_path_candidates("location", location_id),
+            graph_item.get("primary_image_path"),
+        )
+        entities.append(
+            {
+                "id": location_id,
+                "type": "location",
+                "name": graph_item.get("name") or location_id,
+                "description": graph_item.get("description") or graph_item.get("atmosphere") or "",
+                "storySummary": _entity_story_summary("location", graph_item),
+                "imageUrl": _project_file_url(project_dir, rel_path),
+                "status": graph_item.get("image_status") or ("complete" if rel_path and (project_dir / rel_path).exists() else "pending"),
+                "metadata": graph_item,
+            }
+        )
+        seen_ids.add(("location", location_id))
+
+    graph_props = _graph_registry(graph, "props")
     for item in manifest.get("props") or []:
         prop_id = item.get("propId")
+        if not prop_id:
+            continue
         graph_item = graph_props.get(prop_id, {})
         rel_path = _resolve_existing_rel_path(
             project_dir,
@@ -758,8 +1623,31 @@ def _build_entities(project_dir: Path, manifest: dict[str, Any]) -> list[dict[st
                 "type": "prop",
                 "name": graph_item.get("name") or item.get("name") or prop_id,
                 "description": graph_item.get("description") or graph_item.get("narrative_significance") or item.get("description") or "",
-                "imageUrl": _project_file_url(rel_path),
-                "status": item.get("imageStatus") or "pending",
+                "storySummary": _entity_story_summary("prop", graph_item, item),
+                "imageUrl": _project_file_url(project_dir, rel_path),
+                "status": item.get("imageStatus") or ("complete" if rel_path else "pending"),
+                "metadata": graph_item,
+            }
+        )
+        seen_ids.add(("prop", prop_id))
+
+    for prop_id, graph_item in graph_props.items():
+        if ("prop", prop_id) in seen_ids:
+            continue
+        rel_path = _resolve_existing_rel_path(
+            project_dir,
+            _entity_path_candidates("prop", prop_id),
+            graph_item.get("image_path"),
+        )
+        entities.append(
+            {
+                "id": prop_id,
+                "type": "prop",
+                "name": graph_item.get("name") or prop_id,
+                "description": graph_item.get("description") or graph_item.get("narrative_significance") or "",
+                "storySummary": _entity_story_summary("prop", graph_item),
+                "imageUrl": _project_file_url(project_dir, rel_path),
+                "status": graph_item.get("image_status") or ("complete" if rel_path and (project_dir / rel_path).exists() else "pending"),
                 "metadata": graph_item,
             }
         )
@@ -771,12 +1659,92 @@ def _prompt_path(project_dir: Path, frame_id: str, kind: str) -> Path:
     return project_dir / ("video" if kind == "video" else "frames") / "prompts" / f"{frame_id}_{kind}.json"
 
 
+def _visible_cast_ids_for_frame(graph: dict[str, Any], frame_id: str) -> list[str]:
+    cast_states = graph.get("cast_frame_states") or {}
+    if not isinstance(cast_states, dict):
+        return []
+    ids: list[str] = []
+    for state in cast_states.values():
+        if not isinstance(state, dict):
+            continue
+        if state.get("frame_id") != frame_id:
+            continue
+        cast_id = str(state.get("cast_id") or "").strip()
+        frame_role = str(state.get("frame_role") or "").strip().lower()
+        if cast_id and frame_role != "referenced":
+            ids.append(cast_id)
+    return sorted(dict.fromkeys(ids))
+
+
+def _prop_ids_for_frame(graph: dict[str, Any], frame_id: str) -> list[str]:
+    prop_states = graph.get("prop_frame_states") or {}
+    if not isinstance(prop_states, dict):
+        return []
+    ids: list[str] = []
+    for state in prop_states.values():
+        if not isinstance(state, dict):
+            continue
+        if state.get("frame_id") != frame_id:
+            continue
+        prop_id = str(state.get("prop_id") or "").strip()
+        if prop_id:
+            ids.append(prop_id)
+    return sorted(dict.fromkeys(ids))
+
+
+def _materialized_manifest_frames(manifest: dict[str, Any], graph: dict[str, Any]) -> list[dict[str, Any]]:
+    manifest_frames = [
+        frame
+        for frame in (manifest.get("frames") or [])
+        if isinstance(frame, dict) and frame.get("frameId")
+    ]
+    graph_frames = _graph_registry(graph, "frames")
+    scene_registry = _graph_registry(graph, "scenes")
+    order = list(graph.get("frame_order") or [])
+
+    existing_ids = {
+        str(frame.get("frameId") or "").strip()
+        for frame in manifest_frames
+        if str(frame.get("frameId") or "").strip()
+    }
+
+    for fallback_index, frame_id in enumerate(order or sorted(graph_frames.keys()), start=1):
+        frame = graph_frames.get(frame_id)
+        if not frame or frame_id in existing_ids:
+            continue
+        scene = scene_registry.get(str(frame.get("scene_id") or ""), {})
+        cast_ids = _visible_cast_ids_for_frame(graph, frame_id) or list(scene.get("cast_present") or [])
+        prop_ids = _prop_ids_for_frame(graph, frame_id)
+        manifest_frames.append(
+            {
+                "frameId": frame_id,
+                "sceneId": frame.get("scene_id"),
+                "sequenceIndex": frame.get("sequence_index") or fallback_index,
+                "castIds": cast_ids,
+                "locationId": frame.get("location_id"),
+                "propIds": prop_ids,
+                "narrativeBeat": frame.get("narrative_beat") or frame.get("source_text") or "",
+                "actionSummary": frame.get("action_summary") or "",
+                "suggestedDuration": frame.get("suggested_duration") or 5,
+                "dialogueIds": list(frame.get("dialogue_ids") or []),
+                "dialogueRef": (frame.get("dialogue_ids") or [None])[0],
+                "sourceText": frame.get("source_text") or "",
+                "composition": frame.get("composition") or {},
+                "background": frame.get("background") or {},
+                "generatedImagePath": frame.get("composed_image_path"),
+            }
+        )
+
+    return manifest_frames
+
+
 def _build_timeline_frames(project_dir: Path, manifest: dict[str, Any]) -> list[dict[str, Any]]:
+    graph = _graph_data(project_dir)
     overrides = load_timeline_overrides(project_dir)
     hidden_ids = set(str(item) for item in overrides.get("hiddenFrameIds") or [])
     frame_overrides = overrides.get("frameOverrides") or {}
     frames = sorted(
-        (manifest.get("frames") or []),
+        _materialized_manifest_frames(manifest, graph),
         key=lambda item: _sequence_for_frame(item, 10**9),
     )
 
@@ -789,9 +1757,17 @@ def _build_timeline_frames(project_dir: Path, manifest: dict[str, Any]) -> list[
         image_prompt = load_json(_prompt_path(project_dir, frame_id, "image"), {})
         video_prompt = load_json(_prompt_path(project_dir, frame_id, "video"), {})
 
-        image_rel = frame.get("generatedImagePath") or f"frames/composed/{frame_id}_gen.png"
-        if not (project_dir / image_rel).exists():
-            image_rel = None
+        image_rel = _resolve_frame_image_rel(project_dir, frame_id, frame.get("generatedImagePath"))
+        video_rel = _resolve_existing_rel_path(
+            project_dir,
+            [
+                f"video/clips/{frame_id}.mp4",
+                f"video/clips/{frame_id}.mov",
+                f"video/clips/{frame_id}.webm",
+                f"video/clips/{frame_id}.*",
+            ],
+            frame.get("videoPath"),
+        )
 
         frame_override = frame_overrides.get(frame_id) or {}
         dialogue_id = frame_override.get("dialogueId", frame.get("dialogueRef"))
@@ -800,14 +1776,15 @@ def _build_timeline_frames(project_dir: Path, manifest: dict[str, Any]) -> list[
             "id": frame_id,
             "storyboardId": frame_id,
             "sequence": _sequence_for_frame(frame, len(timeline) + 1),
-            "imageUrl": _project_file_url(image_rel),
+            "imageUrl": _project_file_url(project_dir, image_rel),
+            "videoUrl": _project_file_url(project_dir, video_rel),
             "prompt": image_prompt.get("prompt") or frame.get("narrativeBeat") or frame.get("sourceText") or "",
             "status": "complete" if image_rel else "pending",
             "duration": max(
-                1,
+                2,
                 min(
                     15,
-                    int(
+                    float(
                         video_prompt.get("duration")
                         or frame.get("suggestedDuration")
                         or 5
@@ -815,6 +1792,8 @@ def _build_timeline_frames(project_dir: Path, manifest: dict[str, Any]) -> list[
                 ),
             ),
             "dialogueId": dialogue_id,
+            "trimStart": max(0.0, float(frame_override.get("trimStart") or 0)),
+            "trimEnd": max(0.0, float(frame_override.get("trimEnd") or 0)),
             "sourceFrameId": frame_id,
             "isExpanded": False,
         }
@@ -828,7 +1807,7 @@ def _build_timeline_frames(project_dir: Path, manifest: dict[str, Any]) -> list[
         source_frame_id = override.get("sourceFrameId")
         if not source_frame_id or source_frame_id not in base_by_id:
             continue
-        expanded_frame = _build_expanded_frame(base_by_id[source_frame_id], override)
+        expanded_frame = _build_expanded_frame(project_dir, base_by_id[source_frame_id], override)
         bucket = expanded_before if override.get("direction") == "before" else expanded_after
         bucket.setdefault(source_frame_id, []).append(expanded_frame)
 
@@ -850,7 +1829,11 @@ def _build_timeline_frames(project_dir: Path, manifest: dict[str, Any]) -> list[
 def _build_storyboard_frames(project_dir: Path, manifest: dict[str, Any]) -> list[dict[str, Any]]:
     frames = _build_timeline_frames(project_dir, manifest)
     storyboard: list[dict[str, Any]] = []
-    manifest_frames = _manifest_frame_map(manifest)
+    manifest_frames = {
+        frame.get("frameId"): frame
+        for frame in _materialized_manifest_frames(manifest, _graph_data(project_dir))
+        if isinstance(frame, dict) and frame.get("frameId")
+    }
     for frame in frames:
         source_frame_id = frame.get("sourceFrameId") or frame["id"]
         manifest_frame = manifest_frames.get(source_frame_id, {})
@@ -870,10 +1853,26 @@ def _build_storyboard_frames(project_dir: Path, manifest: dict[str, Any]) -> lis
 
 def _build_dialogue_blocks(project_dir: Path, timeline_frames: list[dict[str, Any]]) -> list[dict[str, Any]]:
     dialogue_path = project_dir / "dialogue.json"
+    graph = _graph_data(project_dir)
     overrides = load_timeline_overrides(project_dir)
     dialogue_overrides = overrides.get("dialogueOverrides") or {}
     raw = load_json(dialogue_path, {"dialogue": []})
     lines = raw.get("dialogue", []) if isinstance(raw, dict) else raw
+    if not lines:
+        graph_dialogue = _graph_registry(graph, "dialogue")
+        lines = [
+            {
+                "dialogueId": dialogue_id,
+                "line": item.get("line") or item.get("raw_line") or "",
+                "rawLine": item.get("raw_line") or item.get("line") or "",
+                "speaker": item.get("speaker") or item.get("cast_id") or "UNKNOWN",
+                "castId": item.get("cast_id") or "",
+                "primaryVisualFrame": item.get("primary_visual_frame"),
+                "reactionFrameIds": item.get("reaction_frame_ids") or [],
+                "frameId": item.get("primary_visual_frame"),
+            }
+            for dialogue_id, item in graph_dialogue.items()
+        ]
     frame_index = {frame["id"]: frame["sequence"] for frame in timeline_frames}
     frame_duration = {frame["id"]: frame["duration"] for frame in timeline_frames}
     frames_by_dialogue: dict[str, list[str]] = {}
@@ -937,6 +1936,18 @@ def build_workspace_snapshot(project_id: str, project_dir: Path) -> dict[str, An
     creative_output = read_text(project_dir / "creative_output" / "creative_output.md")
     report_path = project_dir / "reports" / "project_report.md"
     video_projection = project_dir / "reports" / "video_prompt_projection.md"
+    final_export = _resolve_existing_rel_path(
+        project_dir,
+        [
+            "video/export/*_final.mp4",
+            "video/export/*_final.mov",
+            "video/export/*_final.webm",
+            "video/export/*.mp4",
+            "video/export/*.mov",
+            "video/export/*.webm",
+        ],
+        manifest.get("exportPath"),
+    )
     cover_summary = project_dir / "reports" / "project_cover_summary.md"
     cover_image = project_dir / "reports" / "project_cover.png"
     cover_meta = project_dir / "reports" / "project_cover_meta.json"
@@ -956,13 +1967,14 @@ def build_workspace_snapshot(project_id: str, project_dir: Path) -> dict[str, An
         "messages": _build_chat_history(project_dir),
         "workflow": workspace_state,
         "reports": {
-            "projectReport": _project_file_url(report_path.relative_to(project_dir)) if report_path.exists() else None,
-            "videoPromptProjection": _project_file_url(video_projection.relative_to(project_dir)) if video_projection.exists() else None,
-            "projectCover": _project_file_url(cover_image.relative_to(project_dir)) if cover_image.exists() else None,
-            "projectCoverSummary": _project_file_url(cover_summary.relative_to(project_dir)) if cover_summary.exists() else None,
-            "projectCoverMeta": _project_file_url(cover_meta.relative_to(project_dir)) if cover_meta.exists() else None,
-            "greenlightReport": _project_file_url(ui_phase_report.relative_to(project_dir)) if ui_phase_report.exists() else None,
-            "uiPhaseReport": _project_file_url(ui_phase_report.relative_to(project_dir)) if ui_phase_report.exists() else None,
+            "projectReport": _project_file_url(project_dir, report_path.relative_to(project_dir)) if report_path.exists() else None,
+            "videoPromptProjection": _project_file_url(project_dir, video_projection.relative_to(project_dir)) if video_projection.exists() else None,
+            "finalExport": _project_file_url(project_dir, final_export),
+            "projectCover": _project_file_url(project_dir, cover_image.relative_to(project_dir)) if cover_image.exists() else None,
+            "projectCoverSummary": _project_file_url(project_dir, cover_summary.relative_to(project_dir)) if cover_summary.exists() else None,
+            "projectCoverMeta": _project_file_url(project_dir, cover_meta.relative_to(project_dir)) if cover_meta.exists() else None,
+            "greenlightReport": _project_file_url(project_dir, ui_phase_report.relative_to(project_dir)) if ui_phase_report.exists() else None,
+            "uiPhaseReport": _project_file_url(project_dir, ui_phase_report.relative_to(project_dir)) if ui_phase_report.exists() else None,
         },
     }
 

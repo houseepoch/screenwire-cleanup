@@ -26,8 +26,6 @@ export function TimelinePanel() {
     removeFrame,
     expandFrame,
     updateFrameDuration,
-    approveTimeline,
-    currentProject,
   } = useMorpheusStore();
 
   const [showFrameMenu, setShowFrameMenu] = useState<string | null>(null);
@@ -111,10 +109,11 @@ export function TimelinePanel() {
         );
       case 'image':
       default:
-        return frame.imageUrl ? (
+        return frame.thumbnailUrl || frame.imageUrl ? (
           <img 
-            src={frame.imageUrl} 
+            src={frame.thumbnailUrl || frame.imageUrl} 
             alt={`Frame ${frame.sequence}`}
+            loading="lazy"
             style={{ width: '100%', height: '100%', objectFit: 'cover' }}
           />
         ) : (
@@ -253,12 +252,6 @@ export function TimelinePanel() {
               <Plus size={14} />
             </button>
           </div>
-
-          {currentProject?.status === 'timeline_review' && (
-            <button className="btn-accent" onClick={approveTimeline} style={{ padding: '8px 16px', fontSize: '13px' }}>
-              Approve & Generate Video
-            </button>
-          )}
         </div>
       </div>
 

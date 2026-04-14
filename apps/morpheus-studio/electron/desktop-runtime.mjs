@@ -72,6 +72,78 @@ export class DesktopRuntime {
     return { status: current, progress };
   }
 
+  countRegistryItems(graph, key) {
+    const registry = graph?.[key];
+    return registry && typeof registry === 'object' ? Object.keys(registry).length : 0;
+  }
+
+  countCompletedReferenceAssets(projectDir, manifest, graph) {
+    const castItems = manifest?.cast || [];
+    const locationItems = manifest?.locations || [];
+    const propItems = manifest?.props || [];
+
+    const castReady = castItems.filter((item) => item?.compositePath || item?.compositeStatus === 'complete').length
+      || this.countRegistryItems(graph, 'cast');
+    const locationReady = locationItems.filter((item) => item?.primaryImagePath || item?.imagePath || item?.imageStatus === 'complete').length
+      || this.countRegistryItems(graph, 'locations');
+    const propReady = propItems.filter((item) => item?.imagePath || item?.imageStatus === 'complete').length
+      || this.countRegistryItems(graph, 'props');
+
+    return castReady + locationReady + propReady;
+  }
+
+  expectedReferenceEntityCount(manifest, graph) {
+    const castExpected = Array.isArray(manifest?.cast) && manifest.cast.length ? manifest.cast.length : this.countRegistryItems(graph, 'cast');
+    const locationExpected = Array.isArray(manifest?.locations) && manifest.locations.length ? manifest.locations.length : this.countRegistryItems(graph, 'locations');
+    const propExpected = Array.isArray(manifest?.props) && manifest.props.length ? manifest.props.length : this.countRegistryItems(graph, 'props');
+    return castExpected + locationExpected + propExpected;
+  }
+
+  async deriveWorkflowStatus({ manifest, projectDir, graph, workspaceState }) {
+    const phases = manifest?.phases || {};
+    let completed = 0;
+    const total = 7;
+    for (let idx = 0; idx < total; idx += 1) {
+      if ((phases[`phase_${idx}`] || {}).status === 'complete') {
+        completed += 1;
+      }
+    }
+
+    const approvals = workspaceState?.approvals || {};
+    const creativeOutput = path.join(projectDir, 'creative_output', 'creative_output.md');
+    const skeleton = path.join(projectDir, 'creative_output', 'outline_skeleton.md');
+    const composedDir = path.join(projectDir, 'frames', 'composed');
+    const clipsDir = path.join(projectDir, 'video', 'clips');
+    const clipFiles = existsSync(clipsDir) ? await readdir(clipsDir).catch(() => []) : [];
+    const composedFiles = existsSync(composedDir) ? await readdir(composedDir).catch(() => []) : [];
+    const hasClips = clipFiles.some((name) => name.endsWith('.mp4'));
+    const hasComposedFrames = composedFiles.some((name) => /_gen\./.test(name));
+    const hasSkeleton = existsSync(skeleton) || existsSync(creativeOutput);
+    const referenceExpected = this.expectedReferenceEntityCount(manifest, graph);
+    const referenceReady = this.countCompletedReferenceAssets(projectDir, manifest, graph);
+    const hasReferenceAssets = referenceExpected > 0 && referenceReady >= referenceExpected;
+
+    if (hasClips) {
+      return { status: 'complete', progress: Math.max(92, Math.round((completed / total) * 100)) };
+    }
+    if (approvals.timelineApprovedAt) {
+      return { status: 'generating_video', progress: Math.max(82, Math.round((completed / total) * 100)) };
+    }
+    if (hasComposedFrames) {
+      return { status: 'timeline_review', progress: Math.max(70, Math.round((completed / total) * 100)) };
+    }
+    if (approvals.referencesApprovedAt) {
+      return { status: 'generating_frames', progress: Math.max(58, Math.round((completed / total) * 100)) };
+    }
+    if (hasReferenceAssets) {
+      return { status: 'reference_review', progress: Math.max(45, Math.round((completed / total) * 100)) };
+    }
+    if (approvals.skeletonApprovedAt || hasSkeleton) {
+      return { status: 'generating_assets', progress: Math.max(28, Math.round((completed / total) * 100)) };
+    }
+    return { status: 'onboarding', progress: Math.max(0, Math.round((completed / total) * 100)) };
+  }
+
   mapCreativeFreedom(onboarding) {
     const level = onboarding?.creativeFreedom;
     return level === 'strict' || level === 'balanced' || level === 'creative' || level === 'unbounded'
@@ -104,7 +176,9 @@ export class DesktopRuntime {
       const manifest = await this.readJsonIfExists(path.join(projectDir, 'project_manifest.json'), {});
       const onboarding = await this.readJsonIfExists(path.join(projectDir, 'source_files', 'onboarding_config.json'), {});
       const coverMeta = await this.readJsonIfExists(path.join(projectDir, 'reports', 'project_cover_meta.json'), {});
-      const phaseSummary = this.summarizePhaseState(manifest);
+      const graph = await this.readJsonIfExists(path.join(projectDir, 'graph', 'narrative_graph.json'), {});
+      const workspaceState = await this.readJsonIfExists(path.join(projectDir, 'logs', 'ui_workspace_state.json'), {});
+      const phaseSummary = await this.deriveWorkflowStatus({ manifest, projectDir, graph, workspaceState });
       const coverPath = path.join(projectDir, 'reports', 'project_cover.png');
 
       projects.push({
@@ -225,6 +299,16 @@ export class DesktopRuntime {
       projectId,
       projectDir,
       apiBaseUrl: this.backendBaseUrl,
+    };
+  }
+
+  async returnToProjects() {
+    this.currentProjectId = null;
+    await this.stopBackend();
+    return {
+      currentProjectId: null,
+      apiBaseUrl: this.backendBaseUrl,
+      running: false,
     };
   }
 

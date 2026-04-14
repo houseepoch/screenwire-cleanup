@@ -159,8 +159,8 @@ export function LeftPanel() {
             {cast.map((member) => (
               <div key={member.id} className="entity-card">
                 <div className="entity-card-image">
-                  {member.imageUrl ? (
-                    <img src={member.imageUrl} alt={member.name} />
+                  {member.thumbnailUrl || member.imageUrl ? (
+                    <img src={member.thumbnailUrl || member.imageUrl} alt={member.name} loading="lazy" />
                   ) : (
                     <div style={{ 
                       display: 'flex', 
@@ -210,8 +210,8 @@ export function LeftPanel() {
             {locations.map((location) => (
               <div key={location.id} className="entity-card">
                 <div className="entity-card-image" style={{ aspectRatio: '16/9' }}>
-                  {location.imageUrl ? (
-                    <img src={location.imageUrl} alt={location.name} />
+                  {location.thumbnailUrl || location.imageUrl ? (
+                    <img src={location.thumbnailUrl || location.imageUrl} alt={location.name} loading="lazy" />
                   ) : (
                     <div style={{ 
                       display: 'flex', 
@@ -246,8 +246,8 @@ export function LeftPanel() {
               props.map((prop) => (
                 <div key={prop.id} className="entity-card">
                   <div className="entity-card-image">
-                    {prop.imageUrl ? (
-                      <img src={prop.imageUrl} alt={prop.name} />
+                    {prop.thumbnailUrl || prop.imageUrl ? (
+                      <img src={prop.thumbnailUrl || prop.imageUrl} alt={prop.name} loading="lazy" />
                     ) : (
                       <div style={{ 
                         display: 'flex', 
@@ -292,8 +292,8 @@ export function LeftPanel() {
             <div className="storyboard-grid" style={{ gridTemplateColumns: 'repeat(2, 1fr)' }}>
               {storyboardFrames.map((frame) => (
                 <div key={frame.id} className="storyboard-panel">
-                  {frame.imageUrl ? (
-                    <img src={frame.imageUrl} alt={frame.description} />
+                  {frame.thumbnailUrl || frame.imageUrl ? (
+                    <img src={frame.thumbnailUrl || frame.imageUrl} alt={frame.description} loading="lazy" />
                   ) : (
                     <div style={{ 
                       display: 'flex', 

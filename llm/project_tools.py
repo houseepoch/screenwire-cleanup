@@ -14,7 +14,7 @@ import httpx
 
 from graph.api import get_frame_context, query_graph
 from graph.store import GraphStore
-from workspace_api import get_graph_node, patch_graph_node
+from workspace_api import create_graph_node, delete_graph_node, get_graph_node, mark_project_file_change, patch_graph_node
 
 
 _TEXT_EXTENSIONS = {
@@ -122,6 +122,22 @@ def build_project_tools() -> list[dict[str, Any]]:
         },
         {
             "type": "function",
+            "name": "create_graph_node",
+            "description": (
+                "Create a structured cast, location, or prop node in the project's narrative graph. "
+                "Use this when the user wants to add a new story entity."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "node_type": {"type": "string"},
+                    "data": {"type": "object"},
+                },
+                "required": ["node_type", "data"],
+            },
+        },
+        {
+            "type": "function",
             "name": "update_graph_node",
             "description": (
                 "Patch a structured graph node in the project's narrative graph. "
@@ -135,6 +151,22 @@ def build_project_tools() -> list[dict[str, Any]]:
                     "updates": {"type": "object"},
                 },
                 "required": ["node_type", "node_id", "updates"],
+            },
+        },
+        {
+            "type": "function",
+            "name": "delete_graph_node",
+            "description": (
+                "Delete a cast, location, or prop node from the project's narrative graph. "
+                "Use this when the user explicitly wants to remove an entity."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "node_type": {"type": "string"},
+                    "node_id": {"type": "string"},
+                },
+                "required": ["node_type", "node_id"],
             },
         },
         {
@@ -469,6 +501,11 @@ def make_project_tool_executor(
         target = _resolve_write_path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding="utf-8")
+        try:
+            rel_path = target.relative_to(project_root).as_posix()
+        except ValueError:
+            rel_path = path
+        mark_project_file_change(project_root, rel_path, source="morpheus_write_file")
         return f"WROTE {target} ({len(content)} chars)"
 
     def _append_file(path: str, content: str) -> str:
@@ -476,6 +513,11 @@ def make_project_tool_executor(
         target.parent.mkdir(parents=True, exist_ok=True)
         with target.open("a", encoding="utf-8") as handle:
             handle.write(content)
+        try:
+            rel_path = target.relative_to(project_root).as_posix()
+        except ValueError:
+            rel_path = path
+        mark_project_file_change(project_root, rel_path, source="morpheus_append_file")
         return f"APPENDED {target} ({len(content)} chars)"
 
     def _run_shell_command(command: str, cwd: str | None = None) -> str:
@@ -672,6 +714,14 @@ def make_project_tool_executor(
         patched = patch_graph_node(project_root, node_type, node_id, updates, modified_by="morpheus_apply_mode")
         return json.dumps(patched, ensure_ascii=False, indent=2)
 
+    def _create_graph_node(node_type: str, data: dict[str, Any]) -> str:
+        created = create_graph_node(project_root, node_type, data, modified_by="morpheus_apply_mode")
+        return json.dumps(created, ensure_ascii=False, indent=2)
+
+    def _delete_graph_node(node_type: str, node_id: str) -> str:
+        result = delete_graph_node(project_root, node_type, node_id, modified_by="morpheus_apply_mode")
+        return json.dumps(result, ensure_ascii=False, indent=2)
+
     tool_map = {
         "query_graph_database": lambda **kwargs: _query_graph_database(
             kwargs["node_type"],
@@ -680,10 +730,18 @@ def make_project_tool_executor(
         ),
         "get_frame_context": lambda **kwargs: _get_frame_context_tool(kwargs["frame_id"]),
         "get_graph_node": lambda **kwargs: _get_graph_node(kwargs["node_type"], kwargs["node_id"]),
+        "create_graph_node": lambda **kwargs: _create_graph_node(
+            kwargs["node_type"],
+            kwargs["data"],
+        ),
         "update_graph_node": lambda **kwargs: _update_graph_node(
             kwargs["node_type"],
             kwargs["node_id"],
             kwargs["updates"],
+        ),
+        "delete_graph_node": lambda **kwargs: _delete_graph_node(
+            kwargs["node_type"],
+            kwargs["node_id"],
         ),
         "list_directory": lambda **kwargs: _list_directory(kwargs.get("path", ".")),
         "read_file": lambda **kwargs: _read_text_file(

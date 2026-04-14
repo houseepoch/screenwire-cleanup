@@ -149,6 +149,7 @@ function registerIpc(runtime) {
   ipcMain.handle('screenwire:list-projects', async () => runtime.listProjects());
   ipcMain.handle('screenwire:create-project', async (_event, payload) => runtime.createProject(payload));
   ipcMain.handle('screenwire:select-project', async (_event, projectId) => runtime.startBackend(projectId));
+  ipcMain.handle('screenwire:return-to-projects', async () => runtime.returnToProjects());
   ipcMain.handle('screenwire:get-backend-state', async () => runtime.getBackendState());
   ipcMain.handle('screenwire:open-project-folder', async () => '');
   ipcMain.handle('screenwire:choose-file', async () => null);

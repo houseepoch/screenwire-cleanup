@@ -1,7 +1,5 @@
 import { useMorpheusStore } from '../store';
 import { 
-  Check, 
-  MessageSquare,
   Play,
   SkipBack,
   SkipForward,
@@ -13,10 +11,7 @@ export function MainStage() {
   const { 
     currentProject, 
     skeletonPlan, 
-    approveSkeleton, 
-    requestSkeletonEdit,
     storyboardFrames,
-    approveStoryboard,
     timelineFrames,
     selectedFrameId,
     dialogueBlocks,
@@ -46,7 +41,7 @@ export function MainStage() {
           Review Your Story Structure
         </h2>
         <p style={{ color: 'var(--text-secondary)' }}>
-          This is the blueprint for your production. Approve it or ask for changes.
+          This is the blueprint for your production while Morpheus builds the review pack.
         </p>
       </div>
 
@@ -103,21 +98,8 @@ export function MainStage() {
         )}
       </div>
 
-      <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }}>
-        <button 
-          className="btn-secondary"
-          onClick={() => {
-            const feedback = prompt('What would you like to change?');
-            if (feedback) requestSkeletonEdit(feedback);
-          }}
-        >
-          <MessageSquare size={16} style={{ marginRight: '8px' }} />
-          Request Changes
-        </button>
-        <button className="btn-accent" onClick={approveSkeleton}>
-          <Check size={16} style={{ marginRight: '8px' }} />
-          Approve & Continue
-        </button>
+      <div style={{ textAlign: 'center', color: 'var(--text-secondary)', fontSize: '13px' }}>
+        Continue is available from the top-right navigation once the next review gate is ready.
       </div>
     </div>
   );
@@ -151,7 +133,7 @@ export function MainStage() {
       <div className="storyboard-grid" style={{ marginBottom: '24px' }}>
         {storyboardFrames.map((frame) => (
           <div key={frame.id} className="storyboard-panel">
-            <img src={frame.imageUrl} alt={frame.description} />
+            <img src={frame.thumbnailUrl || frame.imageUrl} alt={frame.description} loading="lazy" />
             <div className="storyboard-panel-caption">
               <span style={{ fontWeight: 500 }}>{frame.shotType}:</span>
               <span style={{ color: 'var(--text-secondary)', marginLeft: '4px' }}>
@@ -162,15 +144,8 @@ export function MainStage() {
         ))}
       </div>
 
-      <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }}>
-        <button className="btn-secondary">
-          <MessageSquare size={16} style={{ marginRight: '8px' }} />
-          Request Changes
-        </button>
-        <button className="btn-accent" onClick={approveStoryboard}>
-          <Check size={16} style={{ marginRight: '8px' }} />
-          Approve & Generate Frames
-        </button>
+      <div style={{ textAlign: 'center', color: 'var(--text-secondary)', fontSize: '13px' }}>
+        Continue is available from the top-right navigation once the next review gate is ready.
       </div>
     </div>
   );
@@ -326,15 +301,8 @@ export function MainStage() {
         </div>
       </div>
       
-      <div style={{ display: 'flex', gap: '12px', marginTop: '24px', justifyContent: 'center' }}>
-        <button className="btn-secondary">
-          <MessageSquare size={16} style={{ marginRight: '8px' }} />
-          Make Changes
-        </button>
-        <button className="btn-accent">
-          <Check size={16} style={{ marginRight: '8px' }} />
-          Export Video
-        </button>
+      <div style={{ textAlign: 'center', color: 'var(--text-secondary)', fontSize: '13px', marginTop: '24px' }}>
+        Video review remains available in the workspace while export actions are wired.
       </div>
     </div>
   );

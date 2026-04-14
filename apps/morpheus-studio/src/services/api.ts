@@ -19,8 +19,33 @@ import type {
 } from '../types';
 
 // API Configuration
-let apiBaseUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-let wsBaseUrl = import.meta.env.VITE_WS_URL || 'ws://localhost:8000/ws';
+const runtimeHost =
+  typeof window !== 'undefined' && window.location.hostname
+    ? window.location.hostname
+    : 'localhost';
+let apiBaseUrl = import.meta.env.VITE_API_URL || `http://${runtimeHost}:8000`;
+let wsBaseUrl = import.meta.env.VITE_WS_URL || `ws://${runtimeHost}:8000/ws`;
+const preloadedImageUrls = new Set<string>();
+const preloadedVideoUrls = new Set<string>();
+
+function schedulePreload(task: () => void): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  const idleScheduler = (
+    window as Window & {
+      requestIdleCallback?: (callback: IdleRequestCallback) => number;
+    }
+  ).requestIdleCallback;
+
+  if (typeof idleScheduler === 'function') {
+    idleScheduler(() => task());
+    return;
+  }
+
+  window.setTimeout(task, 0);
+}
 
 export function setApiBaseUrl(url: string): void {
   if (!url) return;
@@ -80,7 +105,165 @@ function normalizeProject(project: Project): Project {
     ...project,
     createdAt: new Date(project.createdAt),
     updatedAt: new Date(project.updatedAt),
+    coverImageUrl: normalizeAssetUrl(project.coverImageUrl),
   };
+}
+
+function normalizeAssetUrl(url: string | null | undefined): string | undefined {
+  if (!url) {
+    return undefined;
+  }
+  if (/^(?:https?:)?\/\//i.test(url) || url.startsWith('data:') || url.startsWith('blob:')) {
+    return url;
+  }
+  if (url.startsWith('/')) {
+    return `${apiBaseUrl}${url}`;
+  }
+  return url;
+}
+
+function buildThumbnailUrl(
+  sourceUrl: string | null | undefined,
+  width: number,
+  height: number,
+  fit: 'cover' | 'contain' | 'inside' = 'cover',
+): string | undefined {
+  const normalized = normalizeAssetUrl(sourceUrl);
+  if (!normalized) {
+    return undefined;
+  }
+  if (normalized.startsWith('data:') || normalized.startsWith('blob:')) {
+    return normalized;
+  }
+
+  try {
+    const url = new URL(normalized, apiBaseUrl);
+    const projectScoped = url.pathname.match(/^\/api\/projects\/([^/]+)\/file\/(.+)$/);
+    const legacyScoped = url.pathname.match(/^\/api\/project\/file\/(.+)$/);
+
+    if (projectScoped) {
+      const [, projectId, requestedPath] = projectScoped;
+      const thumb = new URL(`${apiBaseUrl}/api/projects/${projectId}/thumbnail/${requestedPath}`);
+      const version = url.searchParams.get('v');
+      if (version) {
+        thumb.searchParams.set('v', version);
+      }
+      thumb.searchParams.set('w', String(width));
+      thumb.searchParams.set('h', String(height));
+      thumb.searchParams.set('fit', fit);
+      thumb.searchParams.set('format', 'webp');
+      return thumb.toString();
+    }
+
+    if (legacyScoped) {
+      const [, requestedPath] = legacyScoped;
+      const thumb = new URL(`${apiBaseUrl}/api/project/thumbnail/${requestedPath}`);
+      const version = url.searchParams.get('v');
+      if (version) {
+        thumb.searchParams.set('v', version);
+      }
+      thumb.searchParams.set('w', String(width));
+      thumb.searchParams.set('h', String(height));
+      thumb.searchParams.set('fit', fit);
+      thumb.searchParams.set('format', 'webp');
+      return thumb.toString();
+    }
+  } catch {
+    return normalized;
+  }
+
+  return normalized;
+}
+
+function normalizeEntity(entity: Entity): Entity {
+  const imageUrl = normalizeAssetUrl(entity.imageUrl);
+  const isLocation = entity.type === 'location';
+  const fit = entity.type === 'cast' ? 'contain' : 'cover';
+  return {
+    ...entity,
+    imageUrl,
+    thumbnailUrl: buildThumbnailUrl(
+      imageUrl,
+      isLocation ? 720 : 480,
+      isLocation ? 405 : 480,
+      fit,
+    ),
+  };
+}
+
+function normalizeStoryboardFrame(frame: StoryboardFrame): StoryboardFrame {
+  const imageUrl = normalizeAssetUrl(frame.imageUrl);
+  return {
+    ...frame,
+    imageUrl,
+    thumbnailUrl: buildThumbnailUrl(imageUrl, 640, 360),
+  };
+}
+
+function normalizeTimelineFrame(frame: TimelineFrame): TimelineFrame {
+  const imageUrl = normalizeAssetUrl(frame.imageUrl);
+  const videoUrl = normalizeAssetUrl(frame.videoUrl);
+  return {
+    ...frame,
+    imageUrl,
+    videoUrl,
+    thumbnailUrl: buildThumbnailUrl(imageUrl, 360, 208),
+  };
+}
+
+export function preloadImageAsset(url: string | null | undefined): void {
+  const normalized = normalizeAssetUrl(url);
+  if (!normalized || typeof window === 'undefined' || normalized.startsWith('data:') || normalized.startsWith('blob:')) {
+    return;
+  }
+  if (preloadedImageUrls.has(normalized)) {
+    return;
+  }
+  preloadedImageUrls.add(normalized);
+  schedulePreload(() => {
+    const img = new window.Image();
+    img.decoding = 'async';
+    img.src = normalized;
+  });
+}
+
+export function preloadVideoAsset(url: string | null | undefined, posterUrl?: string | null): void {
+  const normalized = normalizeAssetUrl(url);
+  if (!normalized || typeof window === 'undefined' || normalized.startsWith('data:') || normalized.startsWith('blob:')) {
+    return;
+  }
+  if (preloadedVideoUrls.has(normalized)) {
+    return;
+  }
+  preloadedVideoUrls.add(normalized);
+  schedulePreload(() => {
+    const video = document.createElement('video');
+    video.preload = 'metadata';
+    video.muted = true;
+    video.playsInline = true;
+    const poster = normalizeAssetUrl(posterUrl);
+    if (poster) {
+      video.poster = poster;
+      preloadImageAsset(poster);
+    }
+    video.src = normalized;
+    video.load();
+  });
+}
+
+export function preloadMediaWindow(
+  items: Array<{
+    imageUrl?: string | null;
+    videoUrl?: string | null;
+    posterUrl?: string | null;
+  }>,
+): void {
+  items.forEach((item) => {
+    preloadImageAsset(item.imageUrl || item.posterUrl);
+    if (item.videoUrl) {
+      preloadVideoAsset(item.videoUrl, item.posterUrl || item.imageUrl);
+    }
+  });
 }
 
 function normalizeAgentMessage(message: AgentMessage): AgentMessage {
@@ -94,7 +277,15 @@ function normalizeWorkspace(snapshot: WorkspaceSnapshot): WorkspaceSnapshot {
   return {
     ...snapshot,
     project: normalizeProject(snapshot.project),
+    entities: (snapshot.entities || []).map(normalizeEntity),
+    storyboardFrames: (snapshot.storyboardFrames || []).map(normalizeStoryboardFrame),
+    timelineFrames: (snapshot.timelineFrames || []).map(normalizeTimelineFrame),
     messages: (snapshot.messages || []).map(normalizeAgentMessage),
+    reports: snapshot.reports
+      ? Object.fromEntries(
+          Object.entries(snapshot.reports).map(([key, value]) => [key, normalizeAssetUrl(value)])
+        )
+      : snapshot.reports,
   };
 }
 
@@ -232,26 +423,26 @@ export const WorkflowAPI = {
 
 export const EntitiesAPI = {
   // GET /api/projects/:id/entities - List all entities
-  list: (projectId: string): Promise<Entity[]> =>
-    fetchApi(`/api/projects/${projectId}/entities`),
+  list: async (projectId: string): Promise<Entity[]> =>
+    (await fetchApi<Entity[]>(`/api/projects/${projectId}/entities`)).map(normalizeEntity),
 
   // GET /api/projects/:id/entities/:entityId - Get entity
-  get: (projectId: string, entityId: string): Promise<Entity> =>
-    fetchApi(`/api/projects/${projectId}/entities/${entityId}`),
+  get: async (projectId: string, entityId: string): Promise<Entity> =>
+    normalizeEntity(await fetchApi<Entity>(`/api/projects/${projectId}/entities/${entityId}`)),
 
   // POST /api/projects/:id/entities - Create entity
   create: (projectId: string, data: Omit<Entity, 'id' | 'status'>): Promise<Entity> =>
-    fetchApi(`/api/projects/${projectId}/entities`, {
+    fetchApi<Entity>(`/api/projects/${projectId}/entities`, {
       method: 'POST',
       body: JSON.stringify(data),
-    }),
+    }).then(normalizeEntity),
 
   // PUT /api/projects/:id/entities/:entityId - Update entity
   update: (projectId: string, entityId: string, data: Partial<Entity>): Promise<Entity> =>
-    fetchApi(`/api/projects/${projectId}/entities/${entityId}`, {
+    fetchApi<Entity>(`/api/projects/${projectId}/entities/${entityId}`, {
       method: 'PUT',
       body: JSON.stringify(data),
-    }),
+    }).then(normalizeEntity),
 
   // DELETE /api/projects/:id/entities/:entityId - Delete entity
   delete: (projectId: string, entityId: string): Promise<void> =>
@@ -261,11 +452,11 @@ export const EntitiesAPI = {
   uploadImage: (projectId: string, entityId: string, file: File): Promise<{ imageUrl: string }> => {
     const formData = new FormData();
     formData.append('image', file);
-    return fetchApi(`/api/projects/${projectId}/entities/${entityId}/upload`, {
+    return fetchApi<{ imageUrl: string }>(`/api/projects/${projectId}/entities/${entityId}/upload`, {
       method: 'POST',
       body: formData,
       headers: {},
-    });
+    }).then((result) => ({ imageUrl: normalizeAssetUrl(result.imageUrl) || result.imageUrl }));
   },
 
   // POST /api/projects/:id/entities/:entityId/generate - Generate AI image
@@ -297,12 +488,12 @@ export const GraphAPI = {
 
 export const StoryboardAPI = {
   // GET /api/projects/:id/storyboard - Get storyboard frames
-  get: (projectId: string): Promise<StoryboardFrame[]> =>
-    fetchApi(`/api/projects/${projectId}/storyboard`),
+  get: async (projectId: string): Promise<StoryboardFrame[]> =>
+    (await fetchApi<StoryboardFrame[]>(`/api/projects/${projectId}/storyboard`)).map(normalizeStoryboardFrame),
 
   // POST /api/projects/:id/storyboard/generate - Generate storyboard from skeleton
   generate: (projectId: string): Promise<StoryboardFrame[]> =>
-    fetchApi(`/api/projects/${projectId}/storyboard/generate`, { method: 'POST' }),
+    fetchApi<StoryboardFrame[]>(`/api/projects/${projectId}/storyboard/generate`, { method: 'POST' }).then((frames) => frames.map(normalizeStoryboardFrame)),
 
   // POST /api/projects/:id/storyboard/approve - Approve storyboard
   approve: (projectId: string): Promise<void> =>
@@ -313,24 +504,24 @@ export const StoryboardAPI = {
     description?: string;
     shotType?: string;
   }): Promise<StoryboardFrame> =>
-    fetchApi(`/api/projects/${projectId}/storyboard/${frameId}`, {
+    fetchApi<StoryboardFrame>(`/api/projects/${projectId}/storyboard/${frameId}`, {
       method: 'PUT',
       body: JSON.stringify(data),
-    }),
+    }).then(normalizeStoryboardFrame),
 
   // POST /api/projects/:id/storyboard/:frameId/regenerate - Regenerate frame
   regenerateFrame: (projectId: string, frameId: string): Promise<StoryboardFrame> =>
-    fetchApi(`/api/projects/${projectId}/storyboard/${frameId}/regenerate`, { method: 'POST' }),
+    fetchApi<StoryboardFrame>(`/api/projects/${projectId}/storyboard/${frameId}/regenerate`, { method: 'POST' }).then(normalizeStoryboardFrame),
 
   // POST /api/projects/:id/storyboard/:frameId/upload - Upload custom storyboard
   uploadFrame: (projectId: string, frameId: string, file: File): Promise<{ imageUrl: string }> => {
     const formData = new FormData();
     formData.append('image', file);
-    return fetchApi(`/api/projects/${projectId}/storyboard/${frameId}/upload`, {
+    return fetchApi<{ imageUrl: string }>(`/api/projects/${projectId}/storyboard/${frameId}/upload`, {
       method: 'POST',
       body: formData,
       headers: {},
-    });
+    }).then((result) => ({ imageUrl: normalizeAssetUrl(result.imageUrl) || result.imageUrl }));
   },
 };
 
@@ -340,8 +531,8 @@ export const StoryboardAPI = {
 
 export const TimelineAPI = {
   // GET /api/projects/:id/timeline - Get timeline frames
-  getFrames: (projectId: string): Promise<TimelineFrame[]> =>
-    fetchApi(`/api/projects/${projectId}/timeline`),
+  getFrames: async (projectId: string): Promise<TimelineFrame[]> =>
+    (await fetchApi<TimelineFrame[]>(`/api/projects/${projectId}/timeline`)).map(normalizeTimelineFrame),
 
   // GET /api/projects/:id/timeline/dialogue - Get dialogue blocks
   getDialogue: (projectId: string): Promise<DialogueBlock[]> =>
@@ -349,7 +540,7 @@ export const TimelineAPI = {
 
   // POST /api/projects/:id/timeline/generate - Generate frames from storyboard
   generate: (projectId: string): Promise<TimelineFrame[]> =>
-    fetchApi(`/api/projects/${projectId}/timeline/generate`, { method: 'POST' }),
+    fetchApi<TimelineFrame[]>(`/api/projects/${projectId}/timeline/generate`, { method: 'POST' }).then((frames) => frames.map(normalizeTimelineFrame)),
 
   // POST /api/projects/:id/timeline/approve - Approve timeline
   approve: (projectId: string): Promise<void> =>
@@ -360,32 +551,34 @@ export const TimelineAPI = {
     duration?: number;
     prompt?: string;
     dialogueId?: string;
+    trimStart?: number;
+    trimEnd?: number;
   }): Promise<TimelineFrame> =>
-    fetchApi(`/api/projects/${projectId}/timeline/${frameId}`, {
+    fetchApi<TimelineFrame>(`/api/projects/${projectId}/timeline/${frameId}`, {
       method: 'PUT',
       body: JSON.stringify(data),
-    }),
+    }).then(normalizeTimelineFrame),
 
   // POST /api/projects/:id/timeline/:frameId/upload - Upload custom frame image
   uploadFrame: (projectId: string, frameId: string, file: File): Promise<{ imageUrl: string }> => {
     const formData = new FormData();
     formData.append('image', file);
-    return fetchApi(`/api/projects/${projectId}/timeline/${frameId}/upload`, {
+    return fetchApi<{ imageUrl: string }>(`/api/projects/${projectId}/timeline/${frameId}/upload`, {
       method: 'POST',
       body: formData,
-    });
+    }).then((result) => ({ imageUrl: normalizeAssetUrl(result.imageUrl) || result.imageUrl }));
   },
 
   // POST /api/projects/:id/timeline/:frameId/regenerate - Regenerate frame
   regenerateFrame: (projectId: string, frameId: string): Promise<TimelineFrame> =>
-    fetchApi(`/api/projects/${projectId}/timeline/${frameId}/regenerate`, { method: 'POST' }),
+    fetchApi<TimelineFrame>(`/api/projects/${projectId}/timeline/${frameId}/regenerate`, { method: 'POST' }).then(normalizeTimelineFrame),
 
   // POST /api/projects/:id/timeline/:frameId/edit - Edit frame image via nano-banana
   editFrame: (projectId: string, frameId: string, prompt: string): Promise<TimelineFrame> =>
-    fetchApi(`/api/projects/${projectId}/timeline/${frameId}/edit`, {
+    fetchApi<TimelineFrame>(`/api/projects/${projectId}/timeline/${frameId}/edit`, {
       method: 'POST',
       body: JSON.stringify({ prompt }),
-    }),
+    }).then(normalizeTimelineFrame),
 
   // DELETE /api/projects/:id/timeline/:frameId - Remove frame
   removeFrame: (projectId: string, frameId: string): Promise<void> =>
@@ -393,10 +586,10 @@ export const TimelineAPI = {
 
   // POST /api/projects/:id/timeline/:frameId/expand - Expand frame
   expandFrame: (projectId: string, frameId: string, direction: 'before' | 'after'): Promise<TimelineFrame[]> =>
-    fetchApi(`/api/projects/${projectId}/timeline/${frameId}/expand`, {
+    fetchApi<TimelineFrame[]>(`/api/projects/${projectId}/timeline/${frameId}/expand`, {
       method: 'POST',
       body: JSON.stringify({ direction }),
-    }),
+    }).then((frames) => frames.map(normalizeTimelineFrame)),
 
   // PUT /api/projects/:id/timeline/dialogue/:dialogueId - Update dialogue
   updateDialogue: (projectId: string, dialogueId: string, data: {
@@ -560,6 +753,13 @@ export class WebSocketService {
         const message: WebSocketMessage = JSON.parse(event.data);
         if (message.type === 'workspace_update') {
           this.emit(message.type, normalizeWorkspace(message.data));
+          return;
+        }
+        if (message.type === 'frame_generated' || message.type === 'entity_image_generated' || message.type === 'storyboard_generated') {
+          this.emit(message.type, {
+            ...message.data,
+            imageUrl: normalizeAssetUrl(message.data.imageUrl) || message.data.imageUrl,
+          });
           return;
         }
         this.emit(message.type, message.data);

@@ -70,6 +70,14 @@ export const desktopService = {
     return state;
   },
 
+  async returnToProjects(): Promise<DesktopBackendState | null> {
+    if (!window.screenwire) {
+      return null;
+    }
+    const state = await window.screenwire.returnToProjects();
+    return state;
+  },
+
   async openProjectFolder(projectId: string): Promise<void> {
     if (!window.screenwire) {
       return;

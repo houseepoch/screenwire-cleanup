@@ -54,6 +54,10 @@ ipcMain.handle('screenwire:select-project', async (_event, projectId) => {
   return runtime.startBackend(projectId);
 });
 
+ipcMain.handle('screenwire:return-to-projects', async () => {
+  return runtime.returnToProjects();
+});
+
 ipcMain.handle('screenwire:get-backend-state', async () => {
   return runtime.getBackendState();
 });

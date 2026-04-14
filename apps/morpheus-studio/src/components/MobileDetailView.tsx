@@ -10,6 +10,8 @@ import {
   LayoutGrid, 
   Play,
   MessageSquare,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
 import type { TabType, Entity, Scene, StoryboardFrame } from '../types';
 
@@ -28,6 +30,15 @@ interface FocusTarget {
   id: string;
   name: string;
 }
+
+const MOBILE_PAGE_SIZES = {
+  cast: 4,
+  locations: 4,
+  props: 4,
+  storyboard: 6,
+} as const;
+
+type MobilePagedTab = keyof typeof MOBILE_PAGE_SIZES;
 
 function HoldToFocusOverlay({ isPressing }: { isPressing: boolean }) {
   if (!isPressing) {
@@ -133,8 +144,8 @@ function EntityFocusCard({
       }}
     >
       <div style={{ aspectRatio }}>
-        {entity.imageUrl ? (
-          <img src={entity.imageUrl} alt={entity.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+        {entity.thumbnailUrl || entity.imageUrl ? (
+          <img src={entity.thumbnailUrl || entity.imageUrl} alt={entity.name} loading="lazy" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
         ) : (
           <div style={{
             display: 'flex',
@@ -187,7 +198,7 @@ function StoryboardFocusCard({
       }}
     >
       <div style={{ aspectRatio: '16/10' }}>
-        <img src={frame.imageUrl} alt={frame.description} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+        <img src={frame.thumbnailUrl || frame.imageUrl} alt={frame.description} loading="lazy" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
       </div>
       <div style={{
         position: 'absolute',
@@ -216,6 +227,12 @@ export function MobileDetailView() {
   } = useMorpheusStore();
 
   const [activeTabState, setActiveTabState] = useState<TabType>('outline');
+  const [collectionPages, setCollectionPages] = useState<Record<MobilePagedTab, number>>({
+    cast: 0,
+    locations: 0,
+    props: 0,
+    storyboard: 0,
+  });
 
   const cast = entities.filter((e): e is Entity & { type: 'cast' } => e.type === 'cast');
   const locations = entities.filter((e): e is Entity & { type: 'location' } => e.type === 'location');
@@ -224,6 +241,66 @@ export function MobileDetailView() {
   const handleLongPress = (item: FocusTarget) => {
     injectFocusToChat(item);
     setMobileView('chat');
+  };
+
+  const getPagedItems = <T extends Entity | StoryboardFrame>(tabKey: MobilePagedTab, items: T[]) => {
+    const pageSize = MOBILE_PAGE_SIZES[tabKey];
+    const pageCount = Math.max(1, Math.ceil(items.length / pageSize));
+    const currentPage = Math.min(collectionPages[tabKey], pageCount - 1);
+    const start = currentPage * pageSize;
+    return {
+      currentPage,
+      pageCount,
+      start,
+      end: Math.min(items.length, start + pageSize),
+      items: items.slice(start, start + pageSize),
+    };
+  };
+
+  const castPage = getPagedItems('cast', cast);
+  const locationPage = getPagedItems('locations', locations);
+  const propPage = getPagedItems('props', props);
+  const storyboardPage = getPagedItems('storyboard', storyboardFrames);
+
+  const renderPagination = (
+    tabKey: MobilePagedTab,
+    label: string,
+    currentPage: number,
+    pageCount: number,
+    start: number,
+    end: number,
+    total: number,
+  ) => {
+    if (pageCount <= 1) {
+      return null;
+    }
+
+    return (
+      <div className="collection-pagination collection-pagination-compact" style={{ margin: '0 auto 12px auto' }}>
+        <button
+          type="button"
+          className="collection-pagination-btn"
+          onClick={() => setCollectionPages((pages) => ({ ...pages, [tabKey]: Math.max(0, pages[tabKey] - 1) }))}
+          disabled={currentPage === 0}
+          aria-label={`Show previous ${label.toLowerCase()} page`}
+        >
+          <ChevronLeft size={14} />
+        </button>
+        <div className="collection-pagination-copy">
+          <span className="collection-pagination-kicker">{label}</span>
+          <span className="collection-pagination-label">{start + 1}-{end} of {total}</span>
+        </div>
+        <button
+          type="button"
+          className="collection-pagination-btn"
+          onClick={() => setCollectionPages((pages) => ({ ...pages, [tabKey]: Math.min(pageCount - 1, pages[tabKey] + 1) }))}
+          disabled={currentPage >= pageCount - 1}
+          aria-label={`Show next ${label.toLowerCase()} page`}
+        >
+          <ChevronRight size={14} />
+        </button>
+      </div>
+    );
   };
 
   const renderContent = () => {
@@ -250,47 +327,56 @@ export function MobileDetailView() {
 
       case 'cast':
         return (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '12px' }}>
-            {cast.map((member) => (
-              <EntityFocusCard
-                key={member.id}
-                entity={member}
-                isHighlighted={highlightedItem?.id === member.id}
-                onFocus={handleLongPress}
-                icon={Users}
-                aspectRatio="3/4"
-              />
-            ))}
+          <div>
+            {renderPagination('cast', 'Cast page', castPage.currentPage, castPage.pageCount, castPage.start, castPage.end, cast.length)}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '12px' }}>
+              {castPage.items.map((member) => (
+                <EntityFocusCard
+                  key={member.id}
+                  entity={member}
+                  isHighlighted={highlightedItem?.id === member.id}
+                  onFocus={handleLongPress}
+                  icon={Users}
+                  aspectRatio="3/4"
+                />
+              ))}
+            </div>
           </div>
         );
 
       case 'locations':
         return (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '12px' }}>
-            {locations.map((location) => (
-              <EntityFocusCard
-                key={location.id}
-                entity={location}
-                isHighlighted={highlightedItem?.id === location.id}
-                onFocus={handleLongPress}
-                icon={MapPin}
-                aspectRatio="16/10"
-              />
-            ))}
+          <div>
+            {renderPagination('locations', 'Location page', locationPage.currentPage, locationPage.pageCount, locationPage.start, locationPage.end, locations.length)}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '12px' }}>
+              {locationPage.items.map((location) => (
+                <EntityFocusCard
+                  key={location.id}
+                  entity={location}
+                  isHighlighted={highlightedItem?.id === location.id}
+                  onFocus={handleLongPress}
+                  icon={MapPin}
+                  aspectRatio="16/10"
+                />
+              ))}
+            </div>
           </div>
         );
 
       case 'storyboard':
         return (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '12px' }}>
-            {storyboardFrames.map((frame) => (
-              <StoryboardFocusCard
-                key={frame.id}
-                frame={frame}
-                isHighlighted={highlightedItem?.id === frame.id}
-                onFocus={handleLongPress}
-              />
-            ))}
+          <div>
+            {renderPagination('storyboard', 'Storyboard page', storyboardPage.currentPage, storyboardPage.pageCount, storyboardPage.start, storyboardPage.end, storyboardFrames.length)}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '12px' }}>
+              {storyboardPage.items.map((frame) => (
+                <StoryboardFocusCard
+                  key={frame.id}
+                  frame={frame}
+                  isHighlighted={highlightedItem?.id === frame.id}
+                  onFocus={handleLongPress}
+                />
+              ))}
+            </div>
           </div>
         );
 
@@ -328,17 +414,20 @@ export function MobileDetailView() {
 
       case 'props':
         return (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '12px' }}>
-            {props.map((prop) => (
-              <EntityFocusCard
-                key={prop.id}
-                entity={prop}
-                isHighlighted={highlightedItem?.id === prop.id}
-                onFocus={handleLongPress}
-                icon={Package}
-                aspectRatio="1/1"
-              />
-            ))}
+          <div>
+            {renderPagination('props', 'Prop page', propPage.currentPage, propPage.pageCount, propPage.start, propPage.end, props.length)}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '12px' }}>
+              {propPage.items.map((prop) => (
+                <EntityFocusCard
+                  key={prop.id}
+                  entity={prop}
+                  isHighlighted={highlightedItem?.id === prop.id}
+                  onFocus={handleLongPress}
+                  icon={Package}
+                  aspectRatio="1/1"
+                />
+              ))}
+            </div>
           </div>
         );
 

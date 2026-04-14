@@ -1,47 +1,49 @@
 import { useEffect, useRef, useState } from 'react';
 import { useMorpheusStore } from '../store';
 import {
-  Image,
-  MapPin,
-  LayoutGrid,
-  Film,
+  AlertCircle,
   Check,
-  X,
-  FileText,
   Clock3,
+  FileText,
+  Film,
+  Image,
+  LayoutGrid,
+  MapPin,
+  X,
 } from 'lucide-react';
 import type { WorkerStatus } from '../types';
+import { getWorkerDisplayState } from './workerActivityState';
+import { WorkerStopButton } from './WorkerActivity';
 
-function fallbackWorkers(status: string | undefined, progress: number): WorkerStatus[] {
-  if (!status) {
-    return [];
+function getWorkerIcon(worker: WorkerStatus, size = 14) {
+  const id = worker.id.toLowerCase();
+  const name = worker.name.toLowerCase();
+
+  if (worker.status === 'complete') {
+    return <Check size={size - 4} />;
   }
-
-  const workerMap: Record<string, WorkerStatus> = {
-    generating_assets: {
-      id: 'phase-assets',
-      name: 'Preproduction Build',
-      status: 'running',
-      progress,
-      message: 'Generating script, graph, and review assets...',
-    },
-    generating_frames: {
-      id: 'phase-frames',
-      name: 'Frame Generation',
-      status: 'running',
-      progress,
-      message: 'Generating timeline frames...',
-    },
-    generating_video: {
-      id: 'phase-video',
-      name: 'Video Generation',
-      status: 'running',
-      progress,
-      message: 'Rendering video outputs...',
-    },
-  };
-
-  return workerMap[status] ? [workerMap[status]] : [];
+  if (worker.status === 'error') {
+    return <AlertCircle size={size} />;
+  }
+  if (id.includes('frame') || name.includes('frame')) {
+    return <Image size={size} />;
+  }
+  if (id.includes('location') || name.includes('location')) {
+    return <MapPin size={size} />;
+  }
+  if (id.includes('storyboard') || name.includes('storyboard')) {
+    return <LayoutGrid size={size} />;
+  }
+  if (id.includes('video') || name.includes('video')) {
+    return <Film size={size} />;
+  }
+  if (id.includes('cast') || name.includes('cast')) {
+    return <Image size={size} />;
+  }
+  if (id.includes('wait') || name.includes('waiting')) {
+    return <Clock3 size={size} />;
+  }
+  return <FileText size={size} />;
 }
 
 export function WorkerOverlay() {
@@ -52,67 +54,17 @@ export function WorkerOverlay() {
   const displayProgressRef = useRef(0);
   const projectKeyRef = useRef<string | null>(null);
 
-  const displayWorkers = workers.length
-    ? workers
-    : fallbackWorkers(currentProject?.status, currentProject?.progress ?? 0);
-
-  const getWorkerIcon = (worker: WorkerStatus) => {
-    const id = worker.id.toLowerCase();
-    const name = worker.name.toLowerCase();
-
-    if (worker.status === 'complete') {
-      return <Check size={10} />;
-    }
-    if (id.includes('frame') || name.includes('frame')) {
-      return <Image size={14} />;
-    }
-    if (id.includes('location') || name.includes('location')) {
-      return <MapPin size={14} />;
-    }
-    if (id.includes('storyboard') || name.includes('storyboard')) {
-      return <LayoutGrid size={14} />;
-    }
-    if (id.includes('video') || name.includes('video')) {
-      return <Film size={14} />;
-    }
-    if (id.includes('cast') || name.includes('cast')) {
-      return <Image size={14} />;
-    }
-    if (id.includes('wait') || name.includes('waiting')) {
-      return <Clock3 size={14} />;
-    }
-    return <FileText size={14} />;
-  };
-
-  const activeWorkers = displayWorkers.filter((worker) => worker.status === 'running' || worker.status === 'idle');
-  const completedWorkers = displayWorkers.filter((worker) => worker.status === 'complete');
-  const primaryWorker = activeWorkers.find((worker) => worker.status === 'running') ?? activeWorkers[0] ?? displayWorkers[0];
+  const {
+    displayWorkers,
+    activeWorkers,
+    completedWorkers,
+    primaryWorker,
+    targetProgress,
+    statusLabel,
+    headline,
+    supportingMessage,
+  } = getWorkerDisplayState(currentProject, workers);
   const projectKey = currentProject?.id ?? 'no-project';
-  const derivedProgress = displayWorkers.reduce((total, worker) => {
-    const workerProgress = worker.status === 'complete' ? 100 : Math.max(0, Math.min(100, worker.progress));
-    return total + workerProgress;
-  }, 0) / Math.max(displayWorkers.length, 1);
-  const targetProgress = Math.max(
-    0,
-    Math.min(100, Math.max(currentProject?.progress ?? 0, derivedProgress)),
-  );
-  const statusLabel =
-    completedWorkers.length === displayWorkers.length
-      ? 'Complete'
-      : primaryWorker?.status === 'running'
-        ? 'In progress'
-        : primaryWorker?.status === 'idle'
-          ? 'Queued'
-          : 'Standby';
-  const headline =
-    completedWorkers.length === displayWorkers.length
-      ? 'All workers complete'
-      : primaryWorker?.name || 'Worker queue';
-  const supportingMessage =
-    primaryWorker?.message ||
-    (completedWorkers.length === displayWorkers.length
-      ? 'Pipeline pass finished successfully.'
-      : `${activeWorkers.length} worker${activeWorkers.length === 1 ? '' : 's'} active`);
 
   useEffect(() => {
     displayProgressRef.current = displayProgress;
@@ -218,7 +170,7 @@ export function WorkerOverlay() {
                     : 'is-idle'
               }`}
             >
-              {primaryWorker ? getWorkerIcon(primaryWorker) : <FileText size={14} />}
+              {primaryWorker ? getWorkerIcon(primaryWorker, 14) : <FileText size={14} />}
             </div>
             <div className="worker-summary-copy">
               <span className="worker-summary-name">{headline}</span>
@@ -246,6 +198,10 @@ export function WorkerOverlay() {
           <span className="worker-summary-chip">{activeWorkers.length} active</span>
           <span className="worker-summary-chip">{completedWorkers.length} complete</span>
           <span className="worker-summary-chip">{displayWorkers.length} total</span>
+        </div>
+
+        <div className="worker-summary-actions">
+          <WorkerStopButton />
         </div>
       </div>
     </div>

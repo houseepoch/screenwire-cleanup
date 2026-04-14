@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties, type Dispatch, type SetStateAction } from 'react';
 import { useMorpheusStore } from '../store';
-import API from '../services/api';
+import API, { preloadMediaWindow } from '../services/api';
 import { 
   FileText, 
   Scroll, 
@@ -9,10 +9,15 @@ import {
   Package, 
   LayoutGrid, 
   Play,
+  Video,
+  ArrowRight,
+  Download,
   Check,
   Clock,
   AlertCircle,
-  Upload
+  Upload,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
 import type {
   TabType,
@@ -67,17 +72,27 @@ function parseJsonMap(value: string): Record<string, string> {
   return typeof parsed === 'object' && parsed !== null ? parsed as Record<string, string> : {};
 }
 
+const STORYBOARD_PAGE_SIZE = 9;
+const ENTITY_PAGE_SIZES = {
+  cast: 6,
+  locations: 6,
+  props: 8,
+} as const;
+
+type EntityTabKey = keyof typeof ENTITY_PAGE_SIZES;
+
 export function DetailPanel() {
   const { 
     activeTab, 
     setActiveTab, 
     entities, 
     storyboardFrames,
+    timelineFrames,
+    selectedFrameId,
+    setSelectedFrameId,
     skeletonPlan,
     scriptText,
     currentProject,
-    workflow,
-    setWorkflow,
     hydrateWorkspace,
     toggleItemSelection,
     isItemSelected,
@@ -85,14 +100,15 @@ export function DetailPanel() {
     uploadEntityImage,
     injectFocusToChat,
     clearSelection,
+    reports,
   } = useMorpheusStore();
 
   const [dragState, setDragState] = useState<DragState>({ isDragging: false, entityId: null });
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const videoPreviewRef = useRef<HTMLVideoElement>(null);
   const [uploadTargetEntity, setUploadTargetEntity] = useState<string | null>(null);
   const [editorTitle, setEditorTitle] = useState('');
   const [editorDescription, setEditorDescription] = useState('');
-  const [workflowActionError, setWorkflowActionError] = useState<string | null>(null);
   const [editorLocation, setEditorLocation] = useState('');
   const [editorCharacters, setEditorCharacters] = useState('');
   const [isSavingSelection, setIsSavingSelection] = useState(false);
@@ -108,6 +124,9 @@ export function DetailPanel() {
   const [frameCastStates, setFrameCastStates] = useState<GraphCastFrameState[]>([]);
   const [framePropStates, setFramePropStates] = useState<GraphPropFrameState[]>([]);
   const [frameLocationStates, setFrameLocationStates] = useState<GraphLocationFrameState[]>([]);
+  const [isVideoPreviewPlaying, setIsVideoPreviewPlaying] = useState(false);
+  const [videoPlaybackMode, setVideoPlaybackMode] = useState<'isolate' | 'playthrough'>('isolate');
+  const [shouldAutoplayQueuedVideo, setShouldAutoplayQueuedVideo] = useState(false);
   const [sceneStartPositions, setSceneStartPositions] = useState('{}');
   const [sceneStartLooking, setSceneStartLooking] = useState('{}');
   const [sceneStartFacing, setSceneStartFacing] = useState('{}');
@@ -117,6 +136,12 @@ export function DetailPanel() {
   const [sceneEndPositions, setSceneEndPositions] = useState('{}');
   const [sceneEndLooking, setSceneEndLooking] = useState('{}');
   const [sceneEndFacing, setSceneEndFacing] = useState('{}');
+  const [storyboardPage, setStoryboardPage] = useState(0);
+  const [entityPages, setEntityPages] = useState<Record<EntityTabKey, number>>({
+    cast: 0,
+    locations: 0,
+    props: 0,
+  });
 
   const cast = entities.filter((e): e is Entity & { type: 'cast' } => e.type === 'cast');
   const locations = entities.filter((e): e is Entity & { type: 'location' } => e.type === 'location');
@@ -131,6 +156,248 @@ export function DetailPanel() {
   const selectedEntity = selectedItem && ['cast', 'location', 'prop'].includes(selectedItem.type)
     ? entities.find((entity) => entity.id === selectedItem.id) ?? null
     : null;
+  const storyboardPageCount = Math.max(1, Math.ceil(storyboardFrames.length / STORYBOARD_PAGE_SIZE));
+  const selectedStoryboardPage = selectedFrame
+    ? storyboardFrames.findIndex((frame) => frame.id === selectedFrame.id)
+    : -1;
+  const currentStoryboardPage = selectedStoryboardPage >= 0
+    ? Math.floor(selectedStoryboardPage / STORYBOARD_PAGE_SIZE)
+    : Math.min(storyboardPage, storyboardPageCount - 1);
+  const storyboardPageStart = currentStoryboardPage * STORYBOARD_PAGE_SIZE;
+  const storyboardPageFrames = storyboardFrames.slice(storyboardPageStart, storyboardPageStart + STORYBOARD_PAGE_SIZE);
+
+  const getEntityPageData = (tabKey: EntityTabKey, items: Entity[]) => {
+    const pageSize = ENTITY_PAGE_SIZES[tabKey];
+    const pageCount = Math.max(1, Math.ceil(items.length / pageSize));
+    const selectedIndex =
+      selectedEntity && (
+        (tabKey === 'cast' && selectedEntity.type === 'cast') ||
+        (tabKey === 'locations' && selectedEntity.type === 'location') ||
+        (tabKey === 'props' && selectedEntity.type === 'prop')
+      )
+        ? items.findIndex((item) => item.id === selectedEntity.id)
+        : -1;
+    const currentPage = selectedIndex >= 0
+      ? Math.floor(selectedIndex / pageSize)
+      : Math.min(entityPages[tabKey], pageCount - 1);
+    const pageStart = currentPage * pageSize;
+
+    return {
+      pageCount,
+      currentPage,
+      pageStart,
+      pageEnd: Math.min(items.length, pageStart + pageSize),
+      items: items.slice(pageStart, pageStart + pageSize),
+    };
+  };
+
+  const castPage = getEntityPageData('cast', cast);
+  const locationPage = getEntityPageData('locations', locations);
+  const propPage = getEntityPageData('props', props);
+  const selectedTimelineFrame = selectedFrameId
+    ? timelineFrames.find((frame) => frame.id === selectedFrameId) ?? null
+    : null;
+  const previewVideoFrame =
+    (selectedTimelineFrame?.videoUrl ? selectedTimelineFrame : null) ??
+    timelineFrames.find((frame) => frame.videoUrl) ??
+    null;
+  const previewVideoUrl = reports.finalExport || previewVideoFrame?.videoUrl || null;
+  const previewPosterUrl = previewVideoFrame?.thumbnailUrl || previewVideoFrame?.imageUrl;
+  const previewVideoLabel = reports.finalExport ? 'Final Export' : previewVideoFrame ? 'Timeline Clip' : 'Video Preview';
+  const previewVideoTitle = reports.finalExport
+    ? currentProject?.name || 'Final export'
+    : previewVideoFrame
+      ? `Frame ${previewVideoFrame.sequence}`
+      : 'Render output pending';
+  const playableTimelineFrames = timelineFrames.filter((frame) => Boolean(frame.videoUrl));
+  const selectedFrameIds = new Set(
+    selectedItems
+      .filter((item) => item.type === 'frame' || item.type === 'storyboard')
+      .map((item) => item.id),
+  );
+  const isolatedPlayableFrames = playableTimelineFrames.filter((frame) => selectedFrameIds.has(frame.id));
+  const playbackQueue = videoPlaybackMode === 'playthrough'
+    ? playableTimelineFrames
+    : isolatedPlayableFrames.length > 0
+      ? isolatedPlayableFrames
+      : previewVideoFrame?.videoUrl
+        ? [previewVideoFrame]
+        : [];
+  const currentPlaybackQueueIndex = previewVideoFrame
+    ? playbackQueue.findIndex((frame) => frame.id === previewVideoFrame.id)
+    : -1;
+
+  useEffect(() => {
+    preloadMediaWindow([
+      ...cast.slice(0, ENTITY_PAGE_SIZES.cast).map((entity) => ({
+        imageUrl: entity.thumbnailUrl || entity.imageUrl,
+      })),
+      ...locations.slice(0, ENTITY_PAGE_SIZES.locations).map((entity) => ({
+        imageUrl: entity.thumbnailUrl || entity.imageUrl,
+      })),
+      ...props.slice(0, ENTITY_PAGE_SIZES.props).map((entity) => ({
+        imageUrl: entity.thumbnailUrl || entity.imageUrl,
+      })),
+      ...storyboardFrames.slice(0, STORYBOARD_PAGE_SIZE).map((frame) => ({
+        imageUrl: frame.thumbnailUrl || frame.imageUrl,
+      })),
+    ]);
+  }, [cast, locations, props, storyboardFrames]);
+
+  useEffect(() => {
+    setIsVideoPreviewPlaying(false);
+  }, [previewVideoUrl]);
+
+  useEffect(() => {
+    if (videoPlaybackMode !== 'isolate' || isolatedPlayableFrames.length === 0) {
+      return;
+    }
+    if (!previewVideoFrame || !isolatedPlayableFrames.some((frame) => frame.id === previewVideoFrame.id)) {
+      setSelectedFrameId(isolatedPlayableFrames[0].id);
+    }
+  }, [isolatedPlayableFrames, previewVideoFrame, setSelectedFrameId, videoPlaybackMode]);
+
+  useEffect(() => {
+    if (!shouldAutoplayQueuedVideo || !previewVideoUrl) {
+      return;
+    }
+    const timeoutId = window.setTimeout(() => {
+      const player = videoPreviewRef.current;
+      if (!player) {
+        return;
+      }
+      if (Number.isFinite(player.duration) && player.duration > 0 && player.currentTime >= player.duration - 0.05) {
+        player.currentTime = 0;
+      }
+      void player.play().catch((error) => {
+        console.error('Failed to autoplay queued video preview:', error);
+      });
+      setShouldAutoplayQueuedVideo(false);
+    }, 80);
+    return () => window.clearTimeout(timeoutId);
+  }, [previewVideoUrl, shouldAutoplayQueuedVideo]);
+
+  useEffect(() => {
+    if (activeTab === 'cast') {
+      preloadMediaWindow(
+        cast.slice(castPage.pageStart, castPage.pageStart + ENTITY_PAGE_SIZES.cast * 2).map((entity) => ({
+          imageUrl: entity.thumbnailUrl || entity.imageUrl,
+        })),
+      );
+      return;
+    }
+    if (activeTab === 'locations') {
+      preloadMediaWindow(
+        locations
+          .slice(locationPage.pageStart, locationPage.pageStart + ENTITY_PAGE_SIZES.locations * 2)
+          .map((entity) => ({
+            imageUrl: entity.thumbnailUrl || entity.imageUrl,
+          })),
+      );
+      return;
+    }
+    if (activeTab === 'props') {
+      preloadMediaWindow(
+        props.slice(propPage.pageStart, propPage.pageStart + ENTITY_PAGE_SIZES.props * 2).map((entity) => ({
+          imageUrl: entity.thumbnailUrl || entity.imageUrl,
+        })),
+      );
+      return;
+    }
+    if (activeTab === 'storyboard') {
+      preloadMediaWindow(
+        storyboardFrames
+          .slice(storyboardPageStart, storyboardPageStart + STORYBOARD_PAGE_SIZE * 2)
+          .map((frame) => ({
+            imageUrl: frame.thumbnailUrl || frame.imageUrl,
+          })),
+      );
+      return;
+    }
+    if (activeTab === 'video') {
+      const anchorIndex = previewVideoFrame
+        ? timelineFrames.findIndex((frame) => frame.id === previewVideoFrame.id)
+        : timelineFrames.findIndex((frame) => frame.videoUrl);
+      const windowStart = Math.max(0, anchorIndex >= 0 ? anchorIndex - 2 : 0);
+      const mediaWindow = timelineFrames
+        .slice(windowStart, windowStart + 8)
+        .map((frame) => ({
+          imageUrl: frame.thumbnailUrl || frame.imageUrl,
+          posterUrl: frame.thumbnailUrl || frame.imageUrl,
+          videoUrl: frame.videoUrl,
+        }));
+      if (reports.finalExport) {
+        mediaWindow.unshift({
+          posterUrl: previewPosterUrl,
+          videoUrl: reports.finalExport,
+        });
+      }
+      preloadMediaWindow(mediaWindow);
+    }
+  }, [
+    activeTab,
+    cast,
+    castPage.pageStart,
+    locationPage.pageStart,
+    locations,
+    propPage.pageStart,
+    props,
+    previewPosterUrl,
+    previewVideoFrame,
+    reports.finalExport,
+    storyboardFrames,
+    storyboardPageStart,
+    timelineFrames,
+  ]);
+
+  const renderCollectionPagination = (
+    kicker: string,
+    currentPage: number,
+    pageCount: number,
+    pageStart: number,
+    pageEnd: number,
+    totalCount: number,
+    onPageChange: Dispatch<SetStateAction<number>>,
+  ) => {
+    if (pageCount <= 1) {
+      return null;
+    }
+
+    return (
+      <div className="collection-pagination">
+        <button
+          type="button"
+          className="collection-pagination-btn"
+          onClick={() => {
+            clearSelection();
+            onPageChange((page) => Math.max(0, page - 1));
+          }}
+          disabled={currentPage === 0}
+          aria-label={`Show previous ${kicker.toLowerCase()} page`}
+        >
+          <ChevronLeft size={14} />
+        </button>
+        <div className="collection-pagination-copy">
+          <span className="collection-pagination-kicker">{kicker}</span>
+          <span className="collection-pagination-label">
+            {pageStart + 1}-{pageEnd} of {totalCount}
+          </span>
+        </div>
+        <button
+          type="button"
+          className="collection-pagination-btn"
+          onClick={() => {
+            clearSelection();
+            onPageChange((page) => Math.min(pageCount - 1, page + 1));
+          }}
+          disabled={currentPage >= pageCount - 1}
+          aria-label={`Show next ${kicker.toLowerCase()} page`}
+        >
+          <ChevronRight size={14} />
+        </button>
+      </div>
+    );
+  };
 
   const getStatusIcon = (status: string) => {
     switch (status) {
@@ -257,8 +524,15 @@ export function DetailPanel() {
     setDragState({ isDragging: true, entityId });
   };
 
-  const handleDragLeave = (e: React.DragEvent) => {
+  const handleDragLeave = (e: React.DragEvent, entityId: string) => {
     e.preventDefault();
+    const nextTarget = e.relatedTarget;
+    if (nextTarget instanceof Node && e.currentTarget.contains(nextTarget)) {
+      return;
+    }
+    if (dragState.entityId !== entityId) {
+      return;
+    }
     setDragState({ isDragging: false, entityId: null });
   };
 
@@ -292,14 +566,59 @@ export function DetailPanel() {
     fileInputRef.current?.click();
   };
 
+  const handlePlayVideoPreview = () => {
+    const player = videoPreviewRef.current;
+    if (!player) {
+      return;
+    }
+    if (player.readyState === 0) {
+      player.load();
+    }
+    if (Number.isFinite(player.duration) && player.duration > 0 && player.currentTime >= player.duration - 0.05) {
+      player.currentTime = 0;
+    }
+    void player.play().catch((error) => {
+      console.error('Failed to start video preview:', error);
+    });
+  };
+
+  const handleVideoPreviewEnded = () => {
+    setIsVideoPreviewPlaying(false);
+    if (currentPlaybackQueueIndex < 0 || currentPlaybackQueueIndex >= playbackQueue.length - 1) {
+      return;
+    }
+    const nextFrame = playbackQueue[currentPlaybackQueueIndex + 1];
+    setSelectedFrameId(nextFrame.id);
+    setShouldAutoplayQueuedVideo(true);
+  };
+
+  const handleExportVideoPreview = () => {
+    if (!previewVideoUrl) {
+      return;
+    }
+    const anchor = document.createElement('a');
+    anchor.href = previewVideoUrl;
+    anchor.download =
+      previewVideoUrl.split('/').pop()?.split('?')[0] ||
+      `${currentProject?.name || 'morpheus'}-${reports.finalExport ? 'final-export' : 'clip-preview'}.mp4`;
+    anchor.rel = 'noopener';
+    anchor.click();
+  };
+
   const renderEntityCard = (entity: Entity, typeLabel: string) => {
     const isSelected = isItemSelected(entity.id);
     const isDragOver = dragState.isDragging && dragState.entityId === entity.id;
+    const isCastEntity = entity.type === 'cast';
+    const isWideEntity = entity.type === 'location';
+    const entityImageUrl = entity.thumbnailUrl || entity.imageUrl;
+    const summaryText =
+      entity.storySummary || entity.description || 'Story placement summary will land here once the entity pack is enriched.';
 
     return (
       <div 
         key={entity.id} 
-        className="entity-card"
+        className={`entity-card ${isCastEntity ? 'entity-card-cast' : ''} ${isWideEntity ? 'entity-card-wide' : ''} ${isSelected ? 'is-selected' : ''} ${isDragOver ? 'is-drag-over' : ''}`}
+        data-testid={`entity-card-${entity.id}`}
         onClick={(e) => handleItemClick({ type: entity.type, id: entity.id, name: entity.name }, e)}
         style={{
           border: isSelected ? '2px solid var(--success)' : isDragOver ? '2px dashed var(--accent)' : '1px solid var(--border-subtle)',
@@ -308,14 +627,27 @@ export function DetailPanel() {
           position: 'relative',
         }}
         onDragOver={(e) => handleDragOver(e, entity.id)}
-        onDragLeave={handleDragLeave}
+        onDragLeave={(e) => handleDragLeave(e, entity.id)}
         onDrop={(e) => handleDrop(e, entity.id)}
       >
-        <div className="entity-card-image" style={{ position: 'relative' }}>
-          {entity.imageUrl ? (
-            <img src={entity.imageUrl} alt={entity.name} />
+        <div className={`entity-card-image ${isCastEntity ? 'cast' : ''} ${isWideEntity ? 'wide' : ''}`} style={{ position: 'relative' }}>
+          <button
+            type="button"
+            className="entity-card-upload-btn"
+            data-testid={`entity-dropzone-${entity.id}`}
+            aria-label={`Upload reference image for ${entity.name}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              handleFileSelect(entity.id);
+            }}
+          >
+            <Upload size={15} />
+          </button>
+          {entityImageUrl ? (
+            <img src={entityImageUrl} alt={entity.name} className={isCastEntity ? 'entity-card-img-cast' : undefined} />
           ) : (
             <div 
+              className={`entity-card-empty-state ${isDragOver ? 'is-active' : ''}`}
               style={{ 
                 display: 'flex', 
                 flexDirection: 'column',
@@ -330,26 +662,37 @@ export function DetailPanel() {
                 handleFileSelect(entity.id);
               }}
             >
-              {entity.type === 'cast' && <Users size={28} style={{ color: 'var(--text-muted)' }} />}
-              {entity.type === 'location' && <MapPin size={28} style={{ color: 'var(--text-muted)' }} />}
-              {entity.type === 'prop' && <Package size={28} style={{ color: 'var(--text-muted)' }} />}
-              <div 
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '4px',
-                  padding: '4px 8px',
-                  background: 'var(--bg-secondary)',
-                  borderRadius: '4px',
-                  fontSize: '10px',
-                  color: 'var(--text-muted)',
-                }}
-              >
-                <Upload size={10} />
-                Upload
-              </div>
+              {entity.type === 'cast' && <Users size={30} style={{ color: 'var(--text-muted)' }} />}
+              {entity.type === 'location' && <MapPin size={30} style={{ color: 'var(--text-muted)' }} />}
+              {entity.type === 'prop' && <Package size={30} style={{ color: 'var(--text-muted)' }} />}
+              <p className="entity-card-empty-copy">
+                Drag and drop reference image or let the system decide in the next step
+              </p>
             </div>
           )}
+
+          {isDragOver ? (
+            <div
+              data-testid={`entity-drop-overlay-${entity.id}`}
+              style={{
+                position: 'absolute',
+                inset: 0,
+                background: 'linear-gradient(180deg, rgba(59, 212, 160, 0.14), rgba(59, 212, 160, 0.28))',
+                border: '2px dashed var(--accent)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: '14px',
+                textAlign: 'center',
+                fontSize: '12px',
+                fontWeight: 600,
+                color: 'var(--text-primary)',
+                pointerEvents: 'none',
+              }}
+            >
+              Drop reference image
+            </div>
+          ) : null}
           
           {/* Selection indicator */}
           {isSelected && (
@@ -371,41 +714,27 @@ export function DetailPanel() {
             </div>
           )}
 
-          {/* Change image button (if image exists) */}
-          {entity.imageUrl && (
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                handleFileSelect(entity.id);
-              }}
-              style={{
-                position: 'absolute',
-                bottom: '8px',
-                right: '8px',
-                padding: '6px',
-                background: 'var(--bg-secondary)',
-                border: '1px solid var(--border-subtle)',
-                borderRadius: '4px',
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '4px',
-                fontSize: '10px',
-                color: 'var(--text-primary)',
-              }}
-            >
-              <Upload size={12} />
-              Change
-            </button>
-          )}
+          {entityImageUrl ? (
+            <div className="entity-card-overlay">
+              <div className="entity-card-overlay-header">
+                <span className="entity-card-name entity-card-name-overlay">{entity.name}</span>
+                {getStatusIcon(entity.status)}
+              </div>
+              <span className="entity-card-type entity-card-type-overlay">{typeLabel}</span>
+              <p className="entity-card-story-summary entity-card-story-summary-overlay">{summaryText}</p>
+            </div>
+          ) : null}
         </div>
-        <div className="entity-card-info">
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '2px' }}>
-            <span className="entity-card-name">{entity.name}</span>
-            {getStatusIcon(entity.status)}
+        {!entityImageUrl ? (
+          <div className="entity-card-info">
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '2px' }}>
+              <span className="entity-card-name">{entity.name}</span>
+              {getStatusIcon(entity.status)}
+            </div>
+            <span className="entity-card-type">{typeLabel}</span>
+            <p className="entity-card-story-summary">{summaryText}</p>
           </div>
-          <span className="entity-card-type">{typeLabel}</span>
-        </div>
+        ) : null}
       </div>
     );
   };
@@ -510,46 +839,114 @@ export function DetailPanel() {
 
       case 'cast':
         return (
-          <div className="entity-grid">
-            {cast.map((member) => renderEntityCard(member, 'Cast'))}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            {renderCollectionPagination(
+              'Cast page',
+              castPage.currentPage,
+              castPage.pageCount,
+              castPage.pageStart,
+              castPage.pageEnd,
+              cast.length,
+              (next) => setEntityPages((pages) => ({ ...pages, cast: typeof next === 'function' ? next(pages.cast) : next })),
+            )}
+            <div className="entity-grid entity-grid-cast">
+              {castPage.items.map((member) => renderEntityCard(member, 'Cast'))}
+            </div>
           </div>
         );
 
       case 'locations':
         return (
-          <div className="entity-grid">
-            {locations.map((location) => renderEntityCard(location, 'Location'))}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            {renderCollectionPagination(
+              'Location page',
+              locationPage.currentPage,
+              locationPage.pageCount,
+              locationPage.pageStart,
+              locationPage.pageEnd,
+              locations.length,
+              (next) => setEntityPages((pages) => ({ ...pages, locations: typeof next === 'function' ? next(pages.locations) : next })),
+            )}
+            <div className="entity-grid entity-grid-wide">
+              {locationPage.items.map((location) => renderEntityCard(location, 'Location'))}
+            </div>
           </div>
         );
 
       case 'props':
         return (
-          <div className="entity-grid">
-            {props.length > 0 ? (
-              props.map((prop) => renderEntityCard(prop, 'Prop'))
-            ) : (
-              <div style={{ 
-                gridColumn: '1 / -1',
-                textAlign: 'center', 
-                padding: '40px 20px', 
-                color: 'var(--text-secondary)',
-                background: 'var(--bg-secondary)',
-                borderRadius: '12px',
-                border: '1px dashed var(--border-subtle)'
-              }}>
-                <Package size={28} style={{ margin: '0 auto 12px', opacity: 0.5 }} />
-                <p>No props generated yet.</p>
-              </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            {renderCollectionPagination(
+              'Prop page',
+              propPage.currentPage,
+              propPage.pageCount,
+              propPage.pageStart,
+              propPage.pageEnd,
+              props.length,
+              (next) => setEntityPages((pages) => ({ ...pages, props: typeof next === 'function' ? next(pages.props) : next })),
             )}
+            <div className="entity-grid">
+              {props.length > 0 ? (
+                propPage.items.map((prop) => renderEntityCard(prop, 'Prop'))
+              ) : (
+                <div style={{ 
+                  gridColumn: '1 / -1',
+                  textAlign: 'center', 
+                  padding: '40px 20px', 
+                  color: 'var(--text-secondary)',
+                  background: 'var(--bg-secondary)',
+                  borderRadius: '12px',
+                  border: '1px dashed var(--border-subtle)'
+                }}>
+                  <Package size={28} style={{ margin: '0 auto 12px', opacity: 0.5 }} />
+                  <p>No props generated yet.</p>
+                </div>
+              )}
+            </div>
           </div>
         );
 
       case 'storyboard':
         return (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            {storyboardPageCount > 1 ? (
+              <div className="collection-pagination">
+                <button
+                  type="button"
+                  className="collection-pagination-btn"
+                  onClick={() => {
+                    clearSelection();
+                    setStoryboardPage(Math.max(0, currentStoryboardPage - 1));
+                  }}
+                  disabled={currentStoryboardPage === 0}
+                  aria-label="Show previous storyboard page"
+                >
+                  <ChevronLeft size={14} />
+                </button>
+                <div className="collection-pagination-copy">
+                  <span className="collection-pagination-kicker">Storyboard page</span>
+                  <span className="collection-pagination-label">
+                    {currentStoryboardPage + 1} / {storyboardPageCount}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  className="collection-pagination-btn"
+                  onClick={() => {
+                    clearSelection();
+                    setStoryboardPage(Math.min(storyboardPageCount - 1, currentStoryboardPage + 1));
+                  }}
+                  disabled={currentStoryboardPage >= storyboardPageCount - 1}
+                  aria-label="Show next storyboard page"
+                >
+                  <ChevronRight size={14} />
+                </button>
+              </div>
+            ) : null}
             <div className="storyboard-grid">
-              {storyboardFrames.map((frame) => {
+              {storyboardPageFrames.map((frame) => {
                 const isSelected = isItemSelected(frame.id);
+                const frameImageUrl = frame.thumbnailUrl || frame.imageUrl;
                 return (
                   <div 
                     key={frame.id} 
@@ -562,7 +959,17 @@ export function DetailPanel() {
                       position: 'relative',
                     }}
                   >
-                    <img src={frame.imageUrl} alt={frame.description} />
+                    {frameImageUrl ? (
+                      <img src={frameImageUrl} alt={frame.description} loading="lazy" />
+                    ) : (
+                      <div className="storyboard-panel-text">
+                        <div className="storyboard-panel-meta">
+                          <span className="storyboard-panel-sequence">#{frame.sequence}</span>
+                          <span className="storyboard-panel-shot">{frame.shotType.replace(/_/g, ' ')}</span>
+                        </div>
+                        <p className="storyboard-panel-copy">{frame.description}</p>
+                      </div>
+                    )}
                     {isSelected && (
                       <div
                         style={{
@@ -590,78 +997,104 @@ export function DetailPanel() {
 
       case 'video':
         return (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-            <div className="video-player">
-              <div style={{ 
-                display: 'flex', 
-                alignItems: 'center', 
-                justifyContent: 'center',
-                height: '100%',
-                flexDirection: 'column',
-                gap: '16px'
-              }}>
-                <Play size={48} style={{ color: 'var(--text-muted)' }} />
-                <p style={{ color: 'var(--text-secondary)', fontSize: '14px' }}>
-                  Video preview will appear here after generation
-                </p>
-              </div>
-            </div>
-            <div style={{ display: 'flex', gap: '12px' }}>
-              <button className="btn-accent" style={{ flex: 1 }}>
-                Play Preview
-              </button>
-              <button className="btn-accent">
-                Export
-              </button>
+          <div className="video-panel-shell">
+            <div className={`video-panel-stage ${previewVideoUrl ? 'has-video' : 'is-empty'}`.trim()}>
+              {previewVideoUrl ? (
+                <video
+                  key={previewVideoUrl}
+                  ref={videoPreviewRef}
+                  className="video-panel-player"
+                  src={previewVideoUrl}
+                  poster={previewPosterUrl}
+                  preload="auto"
+                  controls
+                  playsInline
+                  onPlay={() => setIsVideoPreviewPlaying(true)}
+                  onPause={() => setIsVideoPreviewPlaying(false)}
+                  onEnded={handleVideoPreviewEnded}
+                />
+              ) : (
+                <div className="video-panel-empty-state">
+                  <div className="video-panel-empty-icon">
+                    <Play size={30} />
+                  </div>
+                  <div className="video-panel-empty-copy">
+                    <h3>Waiting for generated clips</h3>
+                    <p>The panel will auto-populate as soon as clips are generated.</p>
+                  </div>
+                </div>
+              )}
+
+              {previewVideoUrl ? (
+                <>
+                  <div className="video-panel-overlay">
+                    <div className="video-panel-copy">
+                      <span className="video-panel-kicker">{previewVideoLabel}</span>
+                      <strong className="video-panel-title">{previewVideoTitle}</strong>
+                    </div>
+                  <div className="video-panel-actions">
+                    <button
+                      type="button"
+                      className={`video-panel-mode-toggle ${videoPlaybackMode === 'playthrough' ? 'is-playthrough' : 'is-isolate'}`.trim()}
+                      aria-label={
+                        videoPlaybackMode === 'playthrough'
+                          ? 'Switch video preview to isolate mode'
+                          : 'Switch video preview to play-through mode'
+                      }
+                      title={
+                        videoPlaybackMode === 'playthrough'
+                          ? 'Play through the full clip queue'
+                          : 'Isolate playback to the selected clips'
+                      }
+                      onClick={() => setVideoPlaybackMode((mode) => (mode === 'playthrough' ? 'isolate' : 'playthrough'))}
+                    >
+                      <span className="video-panel-mode-track" aria-hidden="true">
+                        <span className="video-panel-mode-slot video-panel-mode-slot-left">
+                          <Video size={14} />
+                        </span>
+                        <span className="video-panel-mode-slot video-panel-mode-slot-center">
+                          <span className="video-panel-mode-center-primary">
+                            <Video size={14} />
+                          </span>
+                          <span className="video-panel-mode-center-secondary">
+                            <ArrowRight size={14} />
+                          </span>
+                        </span>
+                        <span className="video-panel-mode-slot video-panel-mode-slot-right">
+                          <Video size={14} />
+                        </span>
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      className="video-panel-action is-secondary"
+                        onClick={handleExportVideoPreview}
+                      >
+                        <Download size={15} />
+                        Export
+                      </button>
+                    </div>
+                  </div>
+                  {!isVideoPreviewPlaying ? (
+                    <button
+                      type="button"
+                      className="video-panel-playhead"
+                      aria-label="Play video preview"
+                      title="Play video preview"
+                      onClick={handlePlayVideoPreview}
+                    >
+                      <Play size={24} />
+                    </button>
+                  ) : null}
+                </>
+              ) : null}
+
             </div>
           </div>
         );
 
       default:
         return null;
-    }
-  };
-
-  const approvalGate =
-    currentProject?.status === 'reference_review'
-      ? 'references'
-      : currentProject?.status === 'timeline_review'
-        ? 'timeline'
-        : null;
-
-  const handleApprove = async () => {
-    if (!currentProject || !approvalGate) {
-      return;
-    }
-    setWorkflowActionError(null);
-    try {
-      const snapshot = await API.workflow.approve(currentProject.id, approvalGate);
-      hydrateWorkspace(snapshot);
-    } catch (error) {
-      console.error(`Failed to approve ${approvalGate}:`, error);
-      setWorkflowActionError(error instanceof Error ? error.message : `Failed to approve ${approvalGate}.`);
-    }
-  };
-
-  const handleRequestChanges = async () => {
-    if (!currentProject || !approvalGate) {
-      return;
-    }
-    const feedback = window.prompt(`What should Morpheus change before approving ${approvalGate}?`);
-    if (!feedback?.trim()) {
-      return;
-    }
-    setWorkflowActionError(null);
-    try {
-      const response = await API.workflow.requestChanges(currentProject.id, approvalGate, feedback.trim());
-      setWorkflow({
-        approvals: workflow.approvals,
-        changeRequests: response.changeRequests,
-      });
-      injectFocusToChat({ type: 'scene', id: approvalGate, name: `${approvalGate} review` });
-    } catch (error) {
-      console.error(`Failed to request ${approvalGate} changes:`, error);
-      setWorkflowActionError(error instanceof Error ? error.message : `Failed to request ${approvalGate} changes.`);
     }
   };
 
@@ -1315,49 +1748,7 @@ export function DetailPanel() {
         })}
       </div>
 
-      {(approvalGate || workflow.changeRequests.length > 0) && (
-        <div className="detail-approval-bar" data-testid="workflow-approval-bar">
-          <div className="detail-approval-copy">
-            <span className="detail-approval-title" data-testid="workflow-approval-title">
-              {approvalGate ? `${approvalGate[0].toUpperCase()}${approvalGate.slice(1)} approval gate` : 'Pending change requests'}
-            </span>
-            <span className="detail-approval-subtitle" data-testid="workflow-approval-subtitle">
-              {approvalGate
-                ? workflow.changeRequests.length > 0
-                  ? `${workflow.changeRequests.length} change request(s) queued. Review the current materials, then approve or send Morpheus revisions.`
-                  : 'Review the current materials, then approve or send Morpheus revisions.'
-                : `${workflow.changeRequests.length} change request(s) logged for this project.`}
-            </span>
-          </div>
-          {approvalGate ? (
-            <div className="detail-approval-actions" data-testid="workflow-approval-actions">
-              <button
-                className="btn-secondary"
-                type="button"
-                data-testid="workflow-request-changes-button"
-                onClick={() => void handleRequestChanges()}
-              >
-                Request Changes
-              </button>
-              <button
-                className="btn-accent"
-                type="button"
-                data-testid="workflow-approve-button"
-                onClick={() => void handleApprove()}
-              >
-                Approve
-              </button>
-            </div>
-          ) : null}
-          {workflowActionError ? (
-            <div className="inline-alert" data-testid="workflow-approval-error">
-              {workflowActionError}
-            </div>
-          ) : null}
-        </div>
-      )}
-      
-      <div className="detail-content">
+      <div className={`detail-content ${activeTab === 'video' ? 'detail-content-video' : ''}`.trim()}>
         {renderContent()}
       </div>
     </div>

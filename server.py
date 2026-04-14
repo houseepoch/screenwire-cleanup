@@ -7,13 +7,16 @@ agent process management, and Layer 1 programmatic gateways.
 import asyncio
 import atexit
 import base64
+import hashlib
 import json
+import math
 import mimetypes
 import os
 import re
 import shutil
 import signal
 import sys
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,6 +27,7 @@ import httpx
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from PIL import Image, ImageOps, UnidentifiedImageError
 from pydantic import BaseModel, Field
 from tenacity import (
     retry,
@@ -35,7 +39,7 @@ from tenacity import (
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
-from llm.xai_client import DEFAULT_REASONING_MODEL
+from llm.xai_client import DEFAULT_REASONING_MODEL, XAIClient
 from llm.project_tools import build_project_tools, make_project_tool_executor
 from llm.xai_client import SyncXAIClient
 from telemetry import activate_run_context, current_phase, current_run_id, emit_event
@@ -44,14 +48,26 @@ from workspace_api import (
     build_frame_context,
     build_workspace_snapshot,
     classify_ui_gate,
+    clear_pipeline_invalidations,
+    clear_review_entity_changes,
+    create_graph_node,
+    delete_graph_node,
+    dirty_pipeline_phases,
     entity_upload_path,
     frame_upload_path,
     get_graph_node,
     graph_collection_name,
+    load_pipeline_invalidations,
+    load_review_entity_changes,
     load_json,
     load_timeline_overrides,
     load_ui_phase_report,
     load_workspace_state,
+    mark_pipeline_invalidation,
+    mark_project_file_change,
+    pipeline_artifact_progress,
+    rewind_manifest_phases,
+    attach_entity_image,
     patch_graph_node,
     save_timeline_overrides,
     save_workspace_state,
@@ -89,10 +105,58 @@ PROJECT_DIR = Path(_project_dir_env)
 REPLICATE_API_TOKEN = os.getenv("REPLICATE_API_TOKEN", "")
 XAI_API_KEY = os.getenv("XAI_API_KEY", "")
 ENABLE_MANIFEST_QUEUE = os.getenv("SCREENWIRE_ENABLE_MANIFEST_QUEUE", "").strip().lower() in {"1", "true", "yes", "on"}
+THUMBNAIL_CACHE_DIR = ".cache/thumbnails"
+THUMBNAIL_SUPPORTED_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
+THUMBNAIL_FORMAT_MAP = {
+    "webp": ("WEBP", ".webp"),
+    "jpg": ("JPEG", ".jpg"),
+    "jpeg": ("JPEG", ".jpg"),
+    "png": ("PNG", ".png"),
+}
 
 
 def log(module: str, message: str) -> None:
     print(f"[{datetime.now().isoformat()}] [{module}] {message}")
+
+
+def _parse_asset_event(path: Path) -> dict[str, Any] | None:
+    try:
+        rel_path = path.relative_to(PROJECT_DIR).as_posix()
+    except ValueError:
+        return None
+
+    suffix = path.suffix.lower()
+    if suffix not in {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".mp4", ".mov", ".webm"}:
+        return None
+
+    url = _project_file_url(rel_path)
+    if rel_path.startswith("frames/composed/"):
+        frame_id = path.stem.removesuffix("_gen")
+        return {"type": "frame_generated", "data": {"frameId": frame_id, "imageUrl": url}}
+    if rel_path.startswith("cast/composites/"):
+        entity_id = path.stem.removesuffix("_ref")
+        return {"type": "entity_image_generated", "data": {"entityId": entity_id, "imageUrl": url}}
+    if rel_path.startswith("locations/primary/") or rel_path.startswith("props/generated/"):
+        return {"type": "entity_image_generated", "data": {"entityId": path.stem, "imageUrl": url}}
+    if rel_path.startswith("video/clips/"):
+        frame_id = path.stem
+        return {"type": "storyboard_generated", "data": {"frameId": frame_id, "imageUrl": url}}
+    return None
+
+
+def _record_project_asset_event(path: Path) -> None:
+    global project_asset_revision, project_asset_event
+    project_asset_revision += 1
+    project_asset_event = _parse_asset_event(path)
+
+
+def _notify_project_asset_event(path: Path) -> None:
+    if server_loop is None:
+        return
+    try:
+        server_loop.call_soon_threadsafe(_record_project_asset_event, path)
+    except RuntimeError:
+        return
 
 
 # ---------------------------------------------------------------------------
@@ -319,10 +383,7 @@ class Sentinel:
 
 
 class _SentinelHandler(FileSystemEventHandler):
-    def on_created(self, event) -> None:  # type: ignore[override]
-        if event.is_directory:
-            return
-        path = Path(event.src_path)
+    def _handle_path(self, path: Path) -> None:
         if path.suffix == ".tmp":
             return
         try:
@@ -331,6 +392,17 @@ class _SentinelHandler(FileSystemEventHandler):
         except OSError:
             return
         log("Sentinel", f"New file: {path}")
+        _notify_project_asset_event(path)
+
+    def on_created(self, event) -> None:  # type: ignore[override]
+        if event.is_directory:
+            return
+        self._handle_path(Path(event.src_path))
+
+    def on_moved(self, event) -> None:  # type: ignore[override]
+        if event.is_directory:
+            return
+        self._handle_path(Path(event.dest_path))
 
 
 class _ImageTagHandler(FileSystemEventHandler):
@@ -340,10 +412,7 @@ class _ImageTagHandler(FileSystemEventHandler):
         self.entity_type = entity_type
         self.project_dir = project_dir
 
-    def on_created(self, event) -> None:  # type: ignore[override]
-        if event.is_directory:
-            return
-        path = Path(event.src_path)
+    def _handle_path(self, path: Path) -> None:
         if path.suffix.lower() not in (".png", ".jpg", ".jpeg"):
             return
         if path.suffix == ".tmp":
@@ -359,9 +428,20 @@ class _ImageTagHandler(FileSystemEventHandler):
         try:
             from image_tagger import resolve_label, tag_image
             label = resolve_label(path, self.entity_type, self.project_dir)
-            tag_image(path, label)
+            tag_image(path, label, self.project_dir)
         except Exception as exc:
             log("ImageTagger", f"Failed to tag {path.name}: {exc}")
+        _notify_project_asset_event(path)
+
+    def on_created(self, event) -> None:  # type: ignore[override]
+        if event.is_directory:
+            return
+        self._handle_path(Path(event.src_path))
+
+    def on_moved(self, event) -> None:  # type: ignore[override]
+        if event.is_directory:
+            return
+        self._handle_path(Path(event.dest_path))
 
 
 # ---------------------------------------------------------------------------
@@ -448,6 +528,9 @@ sentinel = Sentinel(PROJECT_DIR)
 agent_mgr = AgentProcessManager()
 http_client: httpx.AsyncClient  # initialized in lifespan
 ui_pipeline_jobs: dict[str, dict[str, Any]] = {}
+server_loop: asyncio.AbstractEventLoop | None = None
+project_asset_revision = 0
+project_asset_event: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -523,7 +606,7 @@ class FreshGenerationRequest(BaseModel):
 class GenerateVideoRequest(BaseModel):
     prompt: str
     image_path: Optional[str] = None
-    duration: int = 5
+    duration: float = 5
     resolution: str = "720p"
     output_path: str
     extra_params: dict[str, Any] = Field(default_factory=dict)
@@ -536,7 +619,7 @@ class GenerateVideoRequest(BaseModel):
 class ExtendVideoRequest(BaseModel):
     prompt: str = ""
     video_path: str
-    duration: int = 5
+    duration: float = 5
     output_path: str
     extra_params: dict[str, Any] = Field(default_factory=dict)
     run_id: Optional[str] = None
@@ -587,10 +670,25 @@ class UIGraphNodePatchRequest(BaseModel):
     updates: dict[str, Any] = Field(default_factory=dict)
 
 
+class UIEntityCreateRequest(BaseModel):
+    type: str
+    name: str
+    description: str = ""
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class UIEntityUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 class TimelineFrameUpdateRequest(BaseModel):
     duration: Optional[float] = None
     prompt: Optional[str] = None
     dialogueId: Optional[str] = None
+    trimStart: Optional[float] = None
+    trimEnd: Optional[float] = None
 
 
 class TimelineExpandRequest(BaseModel):
@@ -615,8 +713,9 @@ class TimelineFrameEditRequest(BaseModel):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global http_client
+    global http_client, server_loop
     http_client = httpx.AsyncClient(timeout=None)
+    server_loop = asyncio.get_running_loop()
 
     reconciler.load_manifest()
     if ENABLE_MANIFEST_QUEUE:
@@ -639,6 +738,7 @@ async def lifespan(app: FastAPI):
     sentinel.stop()
     await agent_mgr.kill_all()
     await http_client.aclose()
+    server_loop = None
     log("Engine", "Engine shut down cleanly")
 
 
@@ -731,12 +831,13 @@ def _resolve_output(output_path: str) -> Path:
     return p
 
 
-def _assert_project(project_id: str) -> None:
+def _assert_project(project_id: str) -> Path:
     if project_id != PROJECT_DIR.name:
         raise HTTPException(
             status_code=404,
             detail=f"Project '{project_id}' is not active in this backend session",
         )
+    return PROJECT_DIR
 
 
 def _workspace_snapshot(project_id: str) -> dict[str, Any]:
@@ -816,14 +917,169 @@ def _normalize_timeline_duration(value: float | int | None) -> float:
         numeric = float(value if value is not None else 5)
     except Exception:
         numeric = 5.0
-    return round(max(1.0, min(15.0, numeric)), 1)
+    return round(max(2.0, min(15.0, numeric)), 1)
+
+
+def _normalize_video_request_duration(value: float | int | None) -> int:
+    try:
+        numeric = float(value if value is not None else 5)
+    except Exception:
+        numeric = 5.0
+    return max(2, min(15, math.ceil(numeric)))
+
+
+def _normalize_timeline_trim(value: float | int | None) -> float:
+    try:
+        numeric = float(value if value is not None else 0)
+    except Exception:
+        numeric = 0.0
+    return round(max(0.0, min(15.0, numeric)), 1)
 
 
 def _timeline_image_rel_from_url(image_url: str | None) -> str | None:
     if not image_url:
         return None
-    prefix = "/api/project/file/"
-    return image_url[len(prefix):] if str(image_url).startswith(prefix) else str(image_url)
+    image_url = str(image_url).split("?", 1)[0]
+    project_prefix = "/api/projects/"
+    legacy_prefix = "/api/project/file/"
+    if str(image_url).startswith(project_prefix):
+        parts = str(image_url).split("/", 5)
+        if len(parts) >= 6 and parts[4] == "file":
+            return parts[5]
+    return image_url[len(legacy_prefix):] if str(image_url).startswith(legacy_prefix) else str(image_url)
+
+
+_VERSIONED_ASSET_SUFFIXES = {
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".webp",
+    ".gif",
+    ".bmp",
+    ".svg",
+    ".mp4",
+    ".mov",
+    ".webm",
+}
+
+
+def _project_file_url(rel_path: str | Path | None) -> str | None:
+    if not rel_path:
+        return None
+    rel = Path(rel_path).as_posix().lstrip("./")
+    if not rel:
+        return None
+    project_id = PROJECT_DIR.name
+    url = f"/api/projects/{project_id}/file/{rel}"
+    target = (PROJECT_DIR / rel).resolve()
+    if target.exists() and target.is_file() and target.suffix.lower() in _VERSIONED_ASSET_SUFFIXES:
+        stat = target.stat()
+        return f"{url}?v={stat.st_mtime_ns}"
+    return url
+
+
+def _sanitize_thumbnail_dimension(value: int | None, fallback: int) -> int:
+    if value is None:
+        return fallback
+    return max(64, min(2048, int(value)))
+
+
+def _thumbnail_media_type(fmt: str) -> str:
+    if fmt == "png":
+        return "image/png"
+    if fmt in {"jpg", "jpeg"}:
+        return "image/jpeg"
+    return "image/webp"
+
+
+def _thumbnail_cache_path(
+    project_dir: Path,
+    target: Path,
+    width: int,
+    height: int,
+    fit: str,
+    fmt: str,
+) -> Path:
+    rel = target.relative_to(project_dir).as_posix()
+    signature = f"{rel}|{target.stat().st_mtime_ns}|{width}|{height}|{fit}|{fmt}"
+    digest = hashlib.sha1(signature.encode("utf-8")).hexdigest()
+    _, suffix = THUMBNAIL_FORMAT_MAP[fmt]
+    return project_dir / THUMBNAIL_CACHE_DIR / digest[:2] / f"{digest}{suffix}"
+
+
+def _render_thumbnail(project_dir: Path, target: Path, width: int, height: int, fit: str, fmt: str) -> Path:
+    target_suffix = target.suffix.lower()
+    if target_suffix not in THUMBNAIL_SUPPORTED_SUFFIXES:
+        raise HTTPException(status_code=415, detail="Thumbnail proxy only supports image assets")
+
+    cache_path = _thumbnail_cache_path(project_dir, target, width, height, fit, fmt)
+    if cache_path.exists() and cache_path.stat().st_size > 0:
+        return cache_path
+
+    try:
+        source_image = Image.open(target)
+    except (UnidentifiedImageError, OSError) as exc:
+        raise HTTPException(status_code=415, detail=f"Unable to decode image asset: {exc}") from exc
+
+    resampling = getattr(getattr(Image, "Resampling", Image), "LANCZOS", Image.LANCZOS)
+    image = ImageOps.exif_transpose(source_image)
+    if fit == "contain":
+        thumb = ImageOps.contain(image, (width, height), method=resampling)
+    elif fit == "inside":
+        thumb = image.copy()
+        thumb.thumbnail((width, height), resampling)
+    else:
+        thumb = ImageOps.fit(image, (width, height), method=resampling)
+
+    pil_format, _ = THUMBNAIL_FORMAT_MAP[fmt]
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+
+    save_kwargs: dict[str, Any] = {"optimize": True}
+    if pil_format == "WEBP":
+        save_kwargs.update({"quality": 84, "method": 6})
+    elif pil_format == "JPEG":
+        thumb = thumb.convert("RGB")
+        save_kwargs.update({"quality": 86, "progressive": True})
+    elif thumb.mode not in {"RGB", "RGBA"}:
+        thumb = thumb.convert("RGBA")
+
+    thumb.save(cache_path, pil_format, **save_kwargs)
+    return cache_path
+
+
+def _thumbnail_response(
+    project_dir: Path,
+    requested_path: str,
+    *,
+    width: int | None,
+    height: int | None,
+    fit: str,
+    fmt: str,
+) -> FileResponse:
+    target = (project_dir / requested_path).resolve()
+    if not str(target).startswith(str(project_dir.resolve())):
+        raise HTTPException(status_code=403, detail="Requested path escapes project root")
+    if not target.exists() or not target.is_file():
+        raise HTTPException(status_code=404, detail="Project file not found")
+
+    normalized_fit = str(fit or "cover").strip().lower()
+    if normalized_fit not in {"cover", "contain", "inside"}:
+        raise HTTPException(status_code=400, detail="Unsupported thumbnail fit mode")
+
+    normalized_fmt = str(fmt or "webp").strip().lower()
+    if normalized_fmt not in THUMBNAIL_FORMAT_MAP:
+        raise HTTPException(status_code=400, detail="Unsupported thumbnail format")
+
+    thumb_width = _sanitize_thumbnail_dimension(width, 640)
+    thumb_height = _sanitize_thumbnail_dimension(height, 360)
+    thumb_path = _render_thumbnail(project_dir, target, thumb_width, thumb_height, normalized_fit, normalized_fmt)
+    return FileResponse(
+        thumb_path,
+        media_type=_thumbnail_media_type(normalized_fmt),
+        headers={
+            "Cache-Control": "public, max-age=31536000, immutable",
+        },
+    )
 
 
 def _set_timeline_frame_duration(frame_id: str, duration: float, overrides: dict[str, Any]) -> None:
@@ -852,6 +1108,33 @@ def _set_timeline_frame_dialogue(frame_id: str, dialogue_id: str | None, overrid
     frame_overrides = overrides.get("frameOverrides") or {}
     current = dict(frame_overrides.get(frame_id) or {})
     current["dialogueId"] = dialogue_id
+    frame_overrides[frame_id] = current
+    overrides["frameOverrides"] = frame_overrides
+
+
+def _set_timeline_frame_trim(
+    frame_id: str,
+    overrides: dict[str, Any],
+    *,
+    trim_start: float | None = None,
+    trim_end: float | None = None,
+) -> None:
+    expanded_frames = overrides.get("expandedFrames") or []
+    expanded = next((item for item in expanded_frames if item.get("id") == frame_id), None)
+    if expanded is not None:
+        if trim_start is not None:
+            expanded["trimStart"] = _normalize_timeline_trim(trim_start)
+        if trim_end is not None:
+            expanded["trimEnd"] = _normalize_timeline_trim(trim_end)
+        overrides["expandedFrames"] = expanded_frames
+        return
+
+    frame_overrides = overrides.get("frameOverrides") or {}
+    current = dict(frame_overrides.get(frame_id) or {})
+    if trim_start is not None:
+        current["trimStart"] = _normalize_timeline_trim(trim_start)
+    if trim_end is not None:
+        current["trimEnd"] = _normalize_timeline_trim(trim_end)
     frame_overrides[frame_id] = current
     overrides["frameOverrides"] = frame_overrides
 
@@ -904,7 +1187,7 @@ def _redistribute_dialogue_frames(
     if not linked_frame_ids:
         return
 
-    effective_total = max(float(dialogue.get("duration") or 0), float(len(linked_frame_ids)))
+    effective_total = max(float(dialogue.get("duration") or 0), float(len(linked_frame_ids) * 2))
     effective_total = round(effective_total, 1)
     if effective_total != float(dialogue.get("duration") or 0):
         _set_timeline_dialogue_override(dialogue_id, "duration", effective_total, overrides)
@@ -918,13 +1201,13 @@ def _redistribute_dialogue_frames(
 
     assignments: dict[str, float] = {}
     if pinned_frame_id and pinned_frame_id in linked_frame_ids and pinned_duration is not None:
-        max_pinned = max(1.0, effective_total - float(len(linked_frame_ids) - 1))
+        max_pinned = max(2.0, effective_total - float((len(linked_frame_ids) - 1) * 2))
         assignments[pinned_frame_id] = min(_normalize_timeline_duration(pinned_duration), round(max_pinned, 1))
 
     remaining_ids = [frame_id for frame_id in linked_frame_ids if frame_id not in assignments]
     remaining_total = effective_total - sum(assignments.values())
     if remaining_ids:
-        min_required = float(len(remaining_ids))
+        min_required = float(len(remaining_ids) * 2)
         if remaining_total < min_required:
             remaining_total = min_required
             effective_total = round(sum(assignments.values()) + remaining_total, 1)
@@ -953,6 +1236,10 @@ def _project_workers_payload() -> list[dict[str, Any]]:
                 "status": job["status"],
                 "progress": job["progress"],
                 "message": job["message"],
+                "targetPhase": int(job.get("targetPhase") or 0),
+                "cancellable": bool(
+                    int(job.get("targetPhase") or 0) >= 4 and job.get("status") == "running"
+                ),
             }
         )
     return workers
@@ -966,36 +1253,708 @@ def _pipeline_status_for_phase(phase_number: int) -> str:
     return "generating_video"
 
 
-def _default_job_name(job_name: str, phase_numbers: list[int]) -> str:
-    if phase_numbers == [1, 2, 3]:
+def _default_job_name(job_name: str, target_phase: int) -> str:
+    if job_name == "preproduction_build" or target_phase == 3:
         return "Preproduction Build"
-    if phase_numbers == [4]:
+    if job_name == "frame_generation" or target_phase == 4:
         return "Frame Generation"
-    if phase_numbers == [5]:
+    if job_name == "video_generation" or target_phase == 5:
         return "Video Generation"
     return job_name.replace("_", " ").title()
 
 
-def _default_job_running_message(phase_numbers: list[int], active_phase: int) -> str:
-    if phase_numbers == [1, 2, 3]:
-        return "Generating script, graph, and review assets..."
-    if phase_numbers == [4]:
+def _default_job_running_message(job_name: str, target_phase: int, active_phase: int) -> str:
+    if job_name == "preproduction_build" or target_phase == 3:
+        if active_phase <= 0:
+            return "Initializing project build..."
+        if active_phase == 1:
+            return "Writing outline and creative output..."
+        if active_phase == 2:
+            return "Constructing graph, enrichment, and shot tags..."
+        return "Generating entity references..."
+    if job_name == "frame_generation" or target_phase == 4:
         return "Generating approved frames..."
-    if phase_numbers == [5]:
+    if job_name == "video_generation" or target_phase == 5:
         return "Generating approved video clips..."
     return f"Running pipeline phase {active_phase}"
 
 
-def _default_job_complete_message(phase_numbers: list[int]) -> str:
-    if phase_numbers == [1, 2, 3]:
+def _default_job_complete_message(job_name: str, target_phase: int) -> str:
+    if job_name == "preproduction_build" or target_phase == 3:
         return "Preproduction build completed"
-    if phase_numbers == [4]:
+    if job_name == "frame_generation" or target_phase == 4:
         return "Frame generation completed"
-    if phase_numbers == [5]:
+    if job_name == "video_generation" or target_phase == 5:
         return "Video generation completed"
-    if len(phase_numbers) == 1:
-        return f"Phase {phase_numbers[0]} completed"
+    if target_phase >= 0:
+        return f"Phase {target_phase} completed"
     return "Pipeline phases completed"
+
+
+def _phase_complete(manifest: dict[str, Any], phase_number: int) -> bool:
+    phase = (manifest.get("phases") or {}).get(f"phase_{phase_number}", {})
+    return phase.get("status") == "complete"
+
+
+def _phases_complete_through(manifest: dict[str, Any], target_phase: int) -> bool:
+    return all(_phase_complete(manifest, phase_number) for phase_number in range(target_phase + 1))
+
+
+def _next_pipeline_target(
+    manifest: dict[str, Any],
+    approvals: dict[str, Any],
+    artifact_progress: dict[str, Any] | None = None,
+    invalidations: dict[str, Any] | None = None,
+) -> tuple[str, int] | None:
+    if not _phases_complete_through(manifest, 3):
+        return ("preproduction_build", 3)
+
+    dirty_phases = {
+        int(str(key).split("_", 1)[1])
+        for key in (invalidations or {})
+        if re.fullmatch(r"phase_\d+", str(key))
+    }
+    if 3 in dirty_phases:
+        return ("preproduction_build", 3)
+
+    expected_frames = int((artifact_progress or {}).get("expectedFrameCount") or 0)
+    composed_frames = int((artifact_progress or {}).get("composedFrameCount") or 0)
+    clip_count = int((artifact_progress or {}).get("clipCount") or 0)
+    frames_incomplete = expected_frames > 0 and composed_frames < expected_frames
+    clips_incomplete = expected_frames > 0 and clip_count < expected_frames
+
+    if approvals.get("referencesApprovedAt") and (
+        4 in dirty_phases or not _phases_complete_through(manifest, 4) or frames_incomplete
+    ):
+        return ("frame_generation", 4)
+    if approvals.get("timelineApprovedAt") and frames_incomplete:
+        return ("frame_generation", 4)
+    if approvals.get("timelineApprovedAt") and (
+        5 in dirty_phases or not _phases_complete_through(manifest, 5) or clips_incomplete
+    ):
+        return ("video_generation", 5)
+    return None
+
+
+def _build_pipeline_job_command(target_phase: int) -> list[str]:
+    cmd = [
+        sys.executable,
+        str(APP_DIR / "run_pipeline.py"),
+        "--project",
+        PROJECT_DIR.name,
+    ]
+    # Post-approval catch-up should resume from the approved gate itself rather
+    # than rewinding earlier "complete" phases based on reuse warnings.
+    if target_phase >= 4:
+        cmd.extend(["--phase", str(target_phase)])
+    else:
+        cmd.extend(["--resume", "--through-phase", str(target_phase)])
+    cmd.append("--live")
+    return cmd
+
+
+def _dirty_preproduction_start_phase(target_phase: int) -> int | None:
+    if target_phase > 3:
+        return None
+    dirty = [phase for phase in dirty_pipeline_phases(PROJECT_DIR) if 1 <= phase <= target_phase]
+    return min(dirty) if dirty else None
+
+
+def _job_checkpoint_progress(target_phase: int) -> tuple[int, int]:
+    manifest = load_json(PROJECT_DIR / "project_manifest.json", {})
+    dirty_phases = set(dirty_pipeline_phases(PROJECT_DIR))
+    active_phase = target_phase
+    for phase_number in range(target_phase + 1):
+        if phase_number in dirty_phases or not _phase_complete(manifest, phase_number):
+            active_phase = phase_number
+            break
+
+    total_phases = max(target_phase + 1, 1)
+    completed = sum(
+        1
+        for phase_number in range(target_phase + 1)
+        if phase_number not in dirty_phases and _phase_complete(manifest, phase_number)
+    )
+    progress = min(95, max(5, round((completed / total_phases) * 100)))
+    return active_phase, progress
+
+
+def _video_generation_preflight_error() -> str | None:
+    try:
+        from graph.api import build_shot_packet
+        from graph.store import GraphStore
+
+        graph = GraphStore(PROJECT_DIR).load()
+    except Exception as exc:
+        return f"Video generation preflight failed while loading graph state: {exc}"
+
+    frame_ids = list(getattr(graph, "frame_order", None) or list(getattr(graph, "frames", {}).keys()))
+    for frame_id in frame_ids:
+        try:
+            packet = build_shot_packet(graph, frame_id)
+        except Exception as exc:
+            return f"Video generation preflight failed for {frame_id}: {exc}"
+
+        shot_intent = getattr(packet, "shot_intent", None)
+        missing: list[str] = []
+        if not str(getattr(shot_intent, "shot", "") or "").strip():
+            missing.append("shot")
+        if not str(getattr(shot_intent, "angle", "") or "").strip():
+            missing.append("angle")
+        if not str(getattr(shot_intent, "movement", "") or "").strip():
+            missing.append("movement")
+        if missing:
+            return f"{frame_id}: incomplete shot packet for video prompt assembly; missing {', '.join(missing)}"
+    return None
+
+
+async def _clear_invalid_video_generation_state(
+    reason: str,
+    *,
+    source: str,
+    preserve_approval: bool = False,
+) -> None:
+    message = str(reason or "").strip() or "Video generation is blocked by invalid timeline data."
+    if preserve_approval:
+        mark_pipeline_invalidation(
+            PROJECT_DIR,
+            5,
+            "video_generation_preflight_failed",
+            source=source,
+            subject_type="timeline",
+            subject_id="",
+            clear_approvals=(),
+        )
+    else:
+        _mark_timeline_video_dirty("video_generation_preflight_failed", source=source)
+
+    job = ui_pipeline_jobs.get("video_generation")
+    if job is not None:
+        proc = job.get("process")
+        if proc is not None and proc.returncode is None:
+            proc.terminate()
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=5)
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.wait()
+        job["process"] = None
+        job["status"] = "error"
+        job["progress"] = 100
+        job["message"] = f"Video Generation blocked: {message}"
+    log("UIJob", f"Cleared invalid video generation approval: {message}")
+
+
+def _job_stop_phase_and_approvals(job: dict[str, Any]) -> tuple[int, tuple[str, ...]] | None:
+    target_phase = int(job.get("targetPhase") or 0)
+    if target_phase >= 5:
+        return 5, ("timelineApprovedAt", "videoApprovedAt")
+    if target_phase == 4:
+        return 4, ("referencesApprovedAt", "timelineApprovedAt", "videoApprovedAt")
+    return None
+
+
+async def _terminate_job_process(job: dict[str, Any]) -> None:
+    proc = job.get("process")
+    if proc is None or proc.returncode is not None:
+        return
+    proc.terminate()
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=5)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+    finally:
+        job["process"] = None
+
+
+async def _cancel_ui_pipeline_job(job: dict[str, Any], *, reason: str = "Stopped by user") -> None:
+    job["cancelRequested"] = True
+    await _terminate_job_process(job)
+
+    task = job.get("task")
+    if task is not None and task is not asyncio.current_task() and not task.done():
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        except Exception as exc:
+            log("UIJob", f"Cancellation cleanup for {job.get('id')} raised {type(exc).__name__}: {exc}")
+
+    stop_state = _job_stop_phase_and_approvals(job)
+    if stop_state is not None:
+        start_phase, clear_approvals = stop_state
+        mark_pipeline_invalidation(
+            PROJECT_DIR,
+            start_phase,
+            "stopped_by_user",
+            source=str(job.get("id") or "ui_stop"),
+            subject_type="workflow",
+            subject_id=str(job.get("id") or ""),
+            clear_approvals=clear_approvals,
+        )
+
+    job["status"] = "error"
+    job["message"] = reason
+    ui_pipeline_jobs.pop(str(job.get("id") or ""), None)
+
+
+def _running_cancellable_jobs() -> list[dict[str, Any]]:
+    return [
+        job
+        for job in ui_pipeline_jobs.values()
+        if job.get("status") == "running" and _job_stop_phase_and_approvals(job) is not None
+    ]
+
+
+async def _repair_video_preflight_blockers(job: dict[str, Any] | None = None) -> None:
+    from graph.store import GraphStore
+
+    store = GraphStore(PROJECT_DIR)
+    if not store.exists():
+        raise RuntimeError("Video generation preflight repair failed: graph is missing.")
+
+    graph = store.load()
+    frame_ids = list(getattr(graph, "frame_order", []) or list(getattr(graph, "frames", {}).keys()))
+    missing_direction = [
+        frame_id
+        for frame_id in frame_ids
+        if (
+            (frame := graph.frames.get(frame_id)) is not None
+            and (
+                getattr(frame, "composition", None) is None
+                or not str(getattr(frame.composition, "shot", "") or "").strip()
+                or not str(getattr(frame.composition, "angle", "") or "").strip()
+                or not str(getattr(frame.composition, "movement", "") or "").strip()
+            )
+        )
+    ]
+    missing_tags = [
+        frame_id
+        for frame_id in frame_ids
+        if not str(getattr(getattr(graph.frames.get(frame_id), "cinematic_tag", None), "tag", "") or "").strip()
+    ]
+
+    if job is not None:
+        job["progress"] = max(int(job.get("progress") or 0), 12)
+        job["message"] = (
+            f"Repairing video direction on {len(missing_direction) or len(frame_ids)} frame(s)..."
+        )
+
+    await _run_project_script(
+        "-m",
+        "graph.frame_enricher",
+        "--project-dir",
+        str(PROJECT_DIR),
+        label="video_preflight_frame_enricher",
+        job=job,
+    )
+
+    if job is not None:
+        job["progress"] = max(int(job.get("progress") or 0), 42)
+        job["message"] = "Refreshing cinematic tags and motion guidance..."
+
+    if missing_tags:
+        await _run_project_script(
+            "-m",
+            "graph.grok_tagger",
+            "--project-dir",
+            str(PROJECT_DIR),
+            label="video_preflight_grok_tagger",
+            job=job,
+        )
+
+    await _run_project_script(
+        str(APP_DIR / "skills" / "graph_validate_video_direction"),
+        "--project-dir",
+        str(PROJECT_DIR),
+        "--fix",
+        label="video_preflight_graph_validate_video_direction",
+        job=job,
+    )
+
+    if job is not None:
+        job["progress"] = max(int(job.get("progress") or 0), 68)
+        job["message"] = "Rebuilding prompts and materialized timeline output..."
+
+    await _run_project_script(
+        str(APP_DIR / "skills" / "graph_assemble_prompts"),
+        "--project-dir",
+        str(PROJECT_DIR),
+        label="video_preflight_graph_assemble_prompts",
+        job=job,
+    )
+    await _run_project_script(
+        str(APP_DIR / "skills" / "graph_validate_dialogue"),
+        "--project-dir",
+        str(PROJECT_DIR),
+        label="video_preflight_graph_validate_dialogue",
+        job=job,
+    )
+    await _run_project_script(
+        str(APP_DIR / "graph" / "prompt_pair_validator.py"),
+        "--project-dir",
+        str(PROJECT_DIR),
+        label="video_preflight_prompt_pair_validator",
+        job=job,
+    )
+    await _run_project_script(
+        str(APP_DIR / "skills" / "graph_materialize"),
+        "--project-dir",
+        str(PROJECT_DIR),
+        label="video_preflight_graph_materialize",
+        job=job,
+    )
+
+    final_error = _video_generation_preflight_error()
+    if final_error:
+        raise RuntimeError(final_error)
+
+
+async def _spawn_video_preflight_repair_job() -> dict[str, Any]:
+    job_name = "video_preflight_repair"
+    existing = ui_pipeline_jobs.get(job_name)
+    if existing and existing.get("status") == "running":
+        return existing
+
+    job = {
+        "id": job_name,
+        "name": "Video Prep Repair",
+        "status": "running",
+        "progress": 8,
+        "message": "Repairing timeline direction before video generation...",
+        "process": None,
+        "task": None,
+        "cancelRequested": False,
+        "phaseNumbers": [5],
+        "activePhase": 5,
+        "targetPhase": 5,
+        "startedAt": datetime.now(timezone.utc).isoformat(),
+    }
+    ui_pipeline_jobs[job_name] = job
+
+    async def _watch() -> None:
+        try:
+            await _repair_video_preflight_blockers(job)
+            if job.get("cancelRequested"):
+                return
+            job["status"] = "complete"
+            job["progress"] = 100
+            job["activePhase"] = 5
+            job["message"] = "Video prep repaired. Resuming clip generation..."
+            await _ensure_pipeline_catchup(PROJECT_DIR.name)
+        except asyncio.CancelledError:
+            return
+        except Exception as exc:
+            await _clear_invalid_video_generation_state(
+                str(exc),
+                source="video_preflight_repair",
+                preserve_approval=True,
+            )
+            job["status"] = "error"
+            job["progress"] = 100
+            job["message"] = f"Video Prep Repair failed: {exc}"
+
+    job["task"] = asyncio.create_task(_watch())
+    return job
+
+
+async def _ensure_pipeline_catchup(project_id: str) -> None:
+    _assert_project(project_id)
+    manifest = load_json(PROJECT_DIR / "project_manifest.json", {})
+    workspace_state = _workspace_state()
+    approvals = dict((workspace_state.get("approvals") or {}))
+    invalidations = load_pipeline_invalidations(PROJECT_DIR)
+    artifact_progress = pipeline_artifact_progress(PROJECT_DIR, manifest)
+    dirty_phases = {
+        int(str(key).split("_", 1)[1])
+        for key in invalidations
+        if re.fullmatch(r"phase_\d+", str(key))
+    }
+    expected_frames = int(artifact_progress.get("expectedFrameCount") or 0)
+    composed_frames = int(artifact_progress.get("composedFrameCount") or 0)
+    frames_incomplete = expected_frames > 0 and composed_frames < expected_frames
+    if approvals.get("timelineApprovedAt") and not frames_incomplete and 4 not in dirty_phases:
+        preflight_error = _video_generation_preflight_error()
+        if preflight_error:
+            await _spawn_video_preflight_repair_job()
+            return
+
+    active_jobs = [
+        job
+        for job in ui_pipeline_jobs.values()
+        if job.get("status") == "running"
+        and (job.get("process") is None or job["process"].returncode is None)
+    ]
+    if active_jobs:
+        return
+
+    next_target = _next_pipeline_target(manifest, approvals, artifact_progress, invalidations)
+    if next_target is None:
+        return
+
+    job_name, target_phase = next_target
+    spawn_kwargs: dict[str, Any] = {}
+    if job_name == "frame_generation":
+        spawn_kwargs = {
+            "prelaunch": _finalize_review_and_resume_phase4,
+            "prelaunch_message": "Applying review updates before frame generation...",
+        }
+    await _spawn_pipeline_phase_job(job_name, target_phase, **spawn_kwargs)
+
+
+def _mark_timeline_video_dirty(reason: str, *, source: str, subject_id: str | None = None) -> None:
+    mark_pipeline_invalidation(
+        PROJECT_DIR,
+        5,
+        reason,
+        source=source,
+        subject_type="timeline",
+        subject_id=subject_id,
+        clear_approvals=("timelineApprovedAt", "videoApprovedAt"),
+    )
+
+
+def _mark_frame_regeneration_dirty(reason: str, *, source: str, subject_id: str | None = None) -> None:
+    mark_pipeline_invalidation(
+        PROJECT_DIR,
+        4,
+        reason,
+        source=source,
+        subject_type="frame",
+        subject_id=subject_id,
+        clear_approvals=("timelineApprovedAt", "videoApprovedAt"),
+    )
+
+
+def _project_entity_by_id(project_id: str, entity_id: str) -> dict[str, Any]:
+    entity = next(
+        (item for item in _workspace_snapshot(project_id)["entities"] if item["id"] == entity_id),
+        None,
+    )
+    if entity is None:
+        raise HTTPException(status_code=404, detail=f"Entity '{entity_id}' not found")
+    return entity
+
+
+async def _run_project_script(*args: str, label: str, job: dict[str, Any] | None = None) -> None:
+    cmd = [sys.executable, *args]
+    env = dict(os.environ)
+    existing_pythonpath = env.get("PYTHONPATH", "")
+    repo_root = str(APP_DIR)
+    env["PYTHONPATH"] = repo_root if not existing_pythonpath else f"{repo_root}{os.pathsep}{existing_pythonpath}"
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        cwd=str(APP_DIR),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=env,
+    )
+    if job is not None:
+        job["process"] = proc
+    stdout_data, stderr_data = await proc.communicate()
+    if job is not None and job.get("process") is proc:
+        job["process"] = None
+    if stdout_data:
+        log(label, stdout_data.decode(errors="ignore"))
+    if stderr_data:
+        log(label, stderr_data.decode(errors="ignore"))
+    if proc.returncode != 0:
+        raise RuntimeError(f"{label} failed with exit {proc.returncode}")
+
+
+def _review_alignment_schema(node_type: str) -> dict[str, Any]:
+    if node_type == "cast":
+        return {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "physical_description": {"type": "string"},
+                "wardrobe_description": {"type": "string"},
+                "personality": {"type": "string"},
+            },
+            "required": ["physical_description", "wardrobe_description", "personality"],
+        }
+    if node_type == "location":
+        return {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "description": {"type": "string"},
+                "atmosphere": {"type": "string"},
+            },
+            "required": ["description", "atmosphere"],
+        }
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "description": {"type": "string"},
+            "narrative_significance": {"type": "string"},
+        },
+        "required": ["description", "narrative_significance"],
+    }
+
+
+def _review_alignment_instruction(node_type: str, node: Any) -> str:
+    base_summary = json.dumps(node.model_dump(mode="json"), indent=2, ensure_ascii=False)
+    if node_type == "cast":
+        return (
+            "Review this cast node against the uploaded reference image. Return concise corrections "
+            "that make the identity and wardrobe description match the reference image while preserving "
+            "the story role. Do not invent weapons, locations, or scene actions.\n\n"
+            f"Current node:\n{base_summary}"
+        )
+    if node_type == "location":
+        return (
+            "Review this location node against the uploaded reference image. Return concise corrections "
+            "to the location description and atmosphere so downstream prompts match the actual place.\n\n"
+            f"Current node:\n{base_summary}"
+        )
+    return (
+        "Review this prop node against the uploaded reference image. Return concise corrections "
+        "to the prop description and narrative significance so downstream prompts match the actual object.\n\n"
+        f"Current node:\n{base_summary}"
+    )
+
+
+def _apply_review_alignment_patch(node_type: str, node: Any, patch: dict[str, Any]) -> None:
+    if node_type == "cast":
+        node.identity.physical_description = str(patch.get("physical_description") or node.identity.physical_description or "")
+        node.identity.wardrobe_description = str(patch.get("wardrobe_description") or node.identity.wardrobe_description or "")
+        node.personality = str(patch.get("personality") or node.personality or "")
+        return
+    if node_type == "location":
+        node.description = str(patch.get("description") or node.description or "")
+        node.atmosphere = str(patch.get("atmosphere") or node.atmosphere or "")
+        return
+    node.description = str(patch.get("description") or node.description or "")
+    node.narrative_significance = str(patch.get("narrative_significance") or node.narrative_significance or "")
+
+
+def _review_change_impacted_frames(graph: Any, changes: list[dict[str, Any]]) -> list[str]:
+    frame_ids: set[str] = set()
+    for change in changes:
+        node_type = str(change.get("nodeType") or "").strip().lower()
+        node_id = str(change.get("nodeId") or "").strip()
+        if not node_type or not node_id:
+            continue
+        if node_type == "cast":
+            for state in graph.cast_frame_states.values():
+                if state.cast_id == node_id:
+                    frame_ids.add(state.frame_id)
+        elif node_type == "location":
+            for frame in graph.frames.values():
+                if frame.location_id == node_id:
+                    frame_ids.add(frame.frame_id)
+        elif node_type == "prop":
+            for state in graph.prop_frame_states.values():
+                if state.prop_id == node_id:
+                    frame_ids.add(state.frame_id)
+    return sorted(frame_ids)
+
+
+async def _finalize_review_and_resume_phase4(job: dict[str, Any] | None = None) -> None:
+    changes = load_review_entity_changes(PROJECT_DIR)
+    invalidations = load_pipeline_invalidations(PROJECT_DIR)
+    phase4_reason = str((invalidations.get("phase_4") or {}).get("reason") or "").strip()
+    needs_prompt_refresh = phase4_reason in {
+        "entity_graph_updated",
+        "graph_downstream_updated",
+        "entity_created",
+        "entity_deleted",
+        "entity_image_attached",
+        "reference_asset_updated",
+        "graph_artifact_updated",
+    }
+    if not changes and not needs_prompt_refresh:
+        return
+
+    from graph.frame_enricher import apply_frame_enrichment, re_enrich_frames
+    from graph.reference_collector import ReferenceImageCollector
+    from graph.runtime_state import save_graph_projection
+    from graph.store import GraphStore
+
+    store = GraphStore(PROJECT_DIR)
+    graph = store.load()
+    xai_key = os.getenv("XAI_API_KEY", "")
+
+    if job is not None and changes:
+        job["progress"] = max(int(job.get("progress") or 0), 12)
+        job["message"] = "Applying reviewed entity updates..."
+
+    if changes and xai_key:
+        client = XAIClient(api_key=xai_key)
+        for change in changes:
+            image_rel = str(change.get("imagePath") or "").strip()
+            node_type = str(change.get("nodeType") or "").strip().lower()
+            node_id = str(change.get("nodeId") or "").strip()
+            if not image_rel or not node_type or not node_id:
+                continue
+            registry_name = graph_collection_name(node_type)
+            registry = getattr(graph, registry_name, None)
+            node = registry.get(node_id) if registry is not None else None
+            image_path = PROJECT_DIR / image_rel
+            if node is None or not image_path.exists():
+                continue
+            patch = await client.generate_json_with_image(
+                image_path=image_path,
+                prompt=_review_alignment_instruction(node_type, node),
+                schema=_review_alignment_schema(node_type),
+                system_prompt="You align ScreenWire graph entity descriptions to uploaded reference images. Return only compact factual corrections.",
+                model="grok-4-1-fast-reasoning",
+                task_hint="entity_review_alignment",
+                temperature=0.0,
+                max_tokens=1200,
+            )
+            _apply_review_alignment_patch(node_type, node, patch)
+
+    if job is not None:
+        job["progress"] = max(int(job.get("progress") or 0), 20)
+        job["message"] = "Refreshing cast bible and prompt context..."
+
+    ReferenceImageCollector(graph, PROJECT_DIR).sync_cast_bible(
+        store=store,
+        run_id=current_run_id(),
+        sequence_id=getattr(graph.project, "project_id", "") or PROJECT_DIR.name,
+    )
+
+    impacted_frames = _review_change_impacted_frames(graph, changes)
+    if impacted_frames and xai_key:
+        if job is not None:
+            job["progress"] = max(int(job.get("progress") or 0), 28)
+            job["message"] = "Re-enriching affected timeline nodes..."
+        correction_issues = [
+            {
+                "frame_id": frame_id,
+                "what": (
+                    "User review updated entity details or uploaded new reference images. "
+                    "Refresh this frame so blocking, appearance, props, and environment match "
+                    "the latest approved graph state."
+                ),
+            }
+            for frame_id in impacted_frames
+        ]
+        for result in await re_enrich_frames(graph, correction_issues, api_key=xai_key, max_concurrent=10):
+            if "error" in result:
+                log("ReviewFinalize", f"Re-enrichment warning for {result.get('frame_id')}: {result['error']}")
+                continue
+            apply_frame_enrichment(graph, result)
+
+    save_graph_projection(graph, PROJECT_DIR, store=store)
+
+    if job is not None:
+        job["progress"] = max(int(job.get("progress") or 0), 36)
+        job["message"] = "Rebuilding prompts and materialized review data..."
+
+    await _run_project_script(str(APP_DIR / "skills" / "graph_assemble_prompts"), "--project-dir", str(PROJECT_DIR), label="review_graph_assemble_prompts", job=job)
+    await _run_project_script(str(APP_DIR / "skills" / "graph_validate_dialogue"), "--project-dir", str(PROJECT_DIR), label="review_graph_validate_dialogue", job=job)
+    await _run_project_script(str(APP_DIR / "graph" / "prompt_pair_validator.py"), "--project-dir", str(PROJECT_DIR), label="review_prompt_pair_validator", job=job)
+    await _run_project_script(str(APP_DIR / "skills" / "graph_materialize"), "--project-dir", str(PROJECT_DIR), label="review_graph_materialize", job=job)
+    await _run_project_script(str(APP_DIR / "skills" / "graph_validate_video_direction"), "--project-dir", str(PROJECT_DIR), "--fix", label="review_graph_validate_video_direction", job=job)
+    if changes:
+        clear_review_entity_changes(PROJECT_DIR)
 
 
 def _focus_summary(focus_target: dict[str, Any] | None, focus_targets: list[dict[str, Any]] | None = None) -> str:
@@ -1090,42 +2049,53 @@ async def _spawn_pipeline_phase_job(
     display_name: str | None = None,
     running_message: str | None = None,
     completion_message: str | None = None,
+    prelaunch: Any = None,
+    prelaunch_message: str | None = None,
 ) -> dict[str, Any]:
     phases = [int(phase_numbers)] if isinstance(phase_numbers, int) else [int(phase) for phase in phase_numbers]
+    target_phase = max(phases)
+    started_at = datetime.now(timezone.utc)
     existing = ui_pipeline_jobs.get(job_name)
     if existing and existing.get("status") == "running" and (
         existing.get("process") is None or existing["process"].returncode is None
     ):
         return existing
 
+    dirty_preproduction_phase = _dirty_preproduction_start_phase(target_phase)
+    if dirty_preproduction_phase is not None:
+        rewind_manifest_phases(
+            PROJECT_DIR,
+            dirty_preproduction_phase,
+            "preproduction_resume_requested",
+            source=job_name,
+        )
+
+    active_phase, progress = _job_checkpoint_progress(target_phase)
+
     job = {
         "id": job_name,
-        "name": display_name or _default_job_name(job_name, phases),
+        "name": display_name or _default_job_name(job_name, target_phase),
         "status": "running",
-        "progress": 5,
-        "message": running_message or _default_job_running_message(phases, phases[0]),
+        "progress": progress,
+        "message": running_message or _default_job_running_message(job_name, target_phase, active_phase),
         "process": None,
+        "task": None,
+        "cancelRequested": False,
         "phaseNumbers": phases,
-        "activePhase": phases[0],
+        "activePhase": active_phase,
+        "targetPhase": target_phase,
+        "startedAt": started_at.isoformat(),
     }
     ui_pipeline_jobs[job_name] = job
 
     async def _watch() -> None:
-        total_phases = max(len(phases), 1)
-        for index, phase_number in enumerate(phases):
-            job["activePhase"] = phase_number
-            job["progress"] = max(5, round((index / total_phases) * 100))
-            job["message"] = running_message or _default_job_running_message(phases, phase_number)
+        try:
+            if prelaunch is not None:
+                job["progress"] = max(int(job.get("progress") or 0), 10)
+                job["message"] = prelaunch_message or f"Preparing {job['name'].lower()}..."
+                await prelaunch(job)
 
-            cmd = [
-                sys.executable,
-                str(APP_DIR / "run_pipeline.py"),
-                "--project",
-                PROJECT_DIR.name,
-                "--phase",
-                str(phase_number),
-                "--live",
-            ]
+            cmd = _build_pipeline_job_command(target_phase)
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 cwd=str(APP_DIR),
@@ -1135,24 +2105,48 @@ async def _spawn_pipeline_phase_job(
             )
             job["process"] = proc
 
-            stdout_data, stderr_data = await proc.communicate()
+            communicate_task = asyncio.create_task(proc.communicate())
+            while not communicate_task.done():
+                active_phase_now, progress_now = _job_checkpoint_progress(target_phase)
+                job["activePhase"] = active_phase_now
+                job["progress"] = progress_now
+                job["message"] = running_message or _default_job_running_message(job_name, target_phase, active_phase_now)
+                await asyncio.sleep(0.5)
+
+            stdout_data, stderr_data = await communicate_task
             if stdout_data:
                 log("UIJob", stdout_data.decode(errors="ignore"))
             if stderr_data:
                 log("UIJob", stderr_data.decode(errors="ignore"))
 
+            if job.get("cancelRequested"):
+                return
             if proc.returncode != 0:
                 job["status"] = "error"
                 job["progress"] = 100
-                job["message"] = f"{job['name']} failed during phase {phase_number}"
+                job["message"] = f"{job['name']} failed before phase {target_phase} completed"
                 return
 
-        job["process"] = None
-        job["status"] = "complete"
-        job["progress"] = 100
-        job["message"] = completion_message or _default_job_complete_message(phases)
+            job["process"] = None
+            if target_phase <= 3:
+                clear_pipeline_invalidations(PROJECT_DIR, 1, 2, 3, not_after=started_at)
+            else:
+                clear_pipeline_invalidations(PROJECT_DIR, target_phase, not_after=started_at)
+            job["status"] = "complete"
+            job["progress"] = 100
+            job["activePhase"] = target_phase
+            job["message"] = completion_message or _default_job_complete_message(job_name, target_phase)
+            await _ensure_pipeline_catchup(PROJECT_DIR.name)
+        except asyncio.CancelledError:
+            return
+        except Exception as exc:
+            job["process"] = None
+            job["status"] = "error"
+            job["progress"] = 100
+            job["message"] = f"{job['name']} failed: {exc}"
+            log("UIJob", f"{job['name']} failed: {type(exc).__name__}: {exc}")
 
-    asyncio.create_task(_watch())
+    job["task"] = asyncio.create_task(_watch())
     return job
 
 
@@ -1181,11 +2175,77 @@ async def get_project_file(requested_path: str):
         raise HTTPException(status_code=403, detail="Requested path escapes project root")
     if not target.exists() or not target.is_file():
         raise HTTPException(status_code=404, detail="Project file not found")
-    return FileResponse(target, media_type=mimetypes.guess_type(str(target))[0] or "application/octet-stream")
+    return FileResponse(
+        target,
+        media_type=mimetypes.guess_type(str(target))[0] or "application/octet-stream",
+        headers={
+            "Cache-Control": "no-store, no-cache, max-age=0, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
+    )
+
+
+@app.get("/api/project/thumbnail/{requested_path:path}")
+async def get_project_thumbnail(
+    requested_path: str,
+    w: int | None = Query(default=None),
+    h: int | None = Query(default=None),
+    fit: str = Query(default="cover"),
+    format: str = Query(default="webp"),
+):
+    return _thumbnail_response(
+        PROJECT_DIR,
+        requested_path,
+        width=w,
+        height=h,
+        fit=fit,
+        fmt=format,
+    )
+
+
+@app.get("/api/projects/{project_id}/file/{requested_path:path}")
+async def get_project_scoped_file(project_id: str, requested_path: str):
+    project_dir = _assert_project(project_id)
+    target = (project_dir / requested_path).resolve()
+    if not str(target).startswith(str(project_dir.resolve())):
+        raise HTTPException(status_code=403, detail="Requested path escapes project root")
+    if not target.exists() or not target.is_file():
+        raise HTTPException(status_code=404, detail="Project file not found")
+    return FileResponse(
+        target,
+        media_type=mimetypes.guess_type(str(target))[0] or "application/octet-stream",
+        headers={
+            "Cache-Control": "no-store, no-cache, max-age=0, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
+    )
+
+
+@app.get("/api/projects/{project_id}/thumbnail/{requested_path:path}")
+async def get_project_scoped_thumbnail(
+    project_id: str,
+    requested_path: str,
+    w: int | None = Query(default=None),
+    h: int | None = Query(default=None),
+    fit: str = Query(default="cover"),
+    format: str = Query(default="webp"),
+):
+    project_dir = _assert_project(project_id)
+    return _thumbnail_response(
+        project_dir,
+        requested_path,
+        width=w,
+        height=h,
+        fit=fit,
+        fmt=format,
+    )
 
 
 @app.get("/api/projects/{project_id}/workspace")
 async def get_workspace(project_id: str):
+    await _ensure_pipeline_catchup(project_id)
     return _workspace_snapshot(project_id)
 
 
@@ -1193,9 +2253,7 @@ async def get_workspace(project_id: str):
 async def get_workspace_diagnostics(project_id: str):
     _assert_project(project_id)
     path = write_ui_phase_report(project_id, PROJECT_DIR)
-    return load_ui_phase_report(PROJECT_DIR) | {
-        "path": f"/api/project/file/{path.relative_to(PROJECT_DIR).as_posix()}",
-    }
+    return load_ui_phase_report(PROJECT_DIR) | {"path": _project_file_url(path.relative_to(PROJECT_DIR))}
 
 
 @app.get("/api/projects/{project_id}/greenlight")
@@ -1203,7 +2261,7 @@ async def get_greenlight_report(project_id: str):
     _assert_project(project_id)
     path = write_ui_phase_report(project_id, PROJECT_DIR)
     return load_ui_phase_report(PROJECT_DIR) | {
-        "path": f"/api/project/file/{path.relative_to(PROJECT_DIR).as_posix()}",
+        "path": _project_file_url(path.relative_to(PROJECT_DIR)),
         "agent": "greenlight",
     }
 
@@ -1237,12 +2295,15 @@ async def set_project_concept(project_id: str, payload: dict[str, Any]):
     if payload.get("creativityLevel"):
         onboarding["creativeFreedom"] = str(payload["creativityLevel"]).strip()
     onboarding_path.write_text(json.dumps(onboarding, indent=2) + "\n", encoding="utf-8")
+    mark_project_file_change(PROJECT_DIR, onboarding_path.relative_to(PROJECT_DIR), source="ui_concept_update")
 
     pitch_path = PROJECT_DIR / "source_files" / "pitch.md"
     source_text = payload.get("sourceText") or payload.get("synopsis") or ""
     if source_text:
         pitch_path.write_text(str(source_text).strip() + "\n", encoding="utf-8")
+        mark_project_file_change(PROJECT_DIR, pitch_path.relative_to(PROJECT_DIR), source="ui_concept_update")
 
+    await _ensure_pipeline_catchup(project_id)
     return _workspace_snapshot(project_id)["creativeConcept"]
 
 
@@ -1272,10 +2333,8 @@ async def generate_project_skeleton(project_id: str):
     _assert_project(project_id)
     job = await _spawn_pipeline_phase_job(
         "preproduction_build",
-        [1, 2, 3],
+        3,
         display_name="Preproduction Build",
-        running_message="Generating script, graph, and review assets...",
-        completion_message="Preproduction build completed",
     )
     return {
         "jobId": job["id"],
@@ -1294,10 +2353,8 @@ async def approve_project_skeleton(project_id: str):
     _save_workspace_state_file(state)
     await _spawn_pipeline_phase_job(
         "preproduction_build",
-        [2, 3],
+        3,
         display_name="Preproduction Build",
-        running_message="Generating graph and review assets...",
-        completion_message="Preproduction build completed",
     )
     return _workspace_snapshot(project_id)
 
@@ -1312,29 +2369,31 @@ async def approve_project_gate(project_id: str, req: UIApprovalRequest):
     state["approvals"] = approvals
     _save_workspace_state_file(state)
 
+    if gate == "timeline":
+        preflight_error = _video_generation_preflight_error()
+        if preflight_error:
+            await _spawn_video_preflight_repair_job()
+            return _workspace_snapshot(project_id)
+
     if gate == "skeleton":
         await _spawn_pipeline_phase_job(
             "preproduction_build",
-            [2, 3],
+            3,
             display_name="Preproduction Build",
-            running_message="Generating graph and review assets...",
-            completion_message="Preproduction build completed",
         )
     elif gate in {"reference", "references"}:
         await _spawn_pipeline_phase_job(
             "frame_generation",
-            [4],
+            4,
             display_name="Frame Generation",
-            running_message="Generating approved frames...",
-            completion_message="Frame generation completed",
+            prelaunch=_finalize_review_and_resume_phase4,
+            prelaunch_message="Applying review updates before frame generation...",
         )
     elif gate == "timeline":
         await _spawn_pipeline_phase_job(
             "video_generation",
-            [5],
+            5,
             display_name="Video Generation",
-            running_message="Generating approved video clips...",
-            completion_message="Video generation completed",
         )
 
     return _workspace_snapshot(project_id)
@@ -1384,6 +2443,109 @@ async def get_project_entities(project_id: str):
     return _workspace_snapshot(project_id)["entities"]
 
 
+@app.get("/api/projects/{project_id}/entities/{entity_id}")
+async def get_project_entity(project_id: str, entity_id: str):
+    _assert_project(project_id)
+    return _project_entity_by_id(project_id, entity_id)
+
+
+@app.post("/api/projects/{project_id}/entities")
+async def create_project_entity(project_id: str, req: UIEntityCreateRequest):
+    _assert_project(project_id)
+    try:
+        created = create_graph_node(
+            PROJECT_DIR,
+            req.type,
+            {
+                "name": req.name,
+                "description": req.description,
+                "metadata": req.metadata,
+            },
+            modified_by="ui_create",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    node_type = str(req.type or "").strip().lower().rstrip("s")
+    entity_id = str(
+        created.get("cast_id")
+        or created.get("location_id")
+        or created.get("prop_id")
+        or ""
+    )
+    await _ensure_pipeline_catchup(project_id)
+    return _project_entity_by_id(project_id, entity_id)
+
+
+@app.put("/api/projects/{project_id}/entities/{entity_id}")
+async def update_project_entity(project_id: str, entity_id: str, req: UIEntityUpdateRequest):
+    _assert_project(project_id)
+    entity = _project_entity_by_id(project_id, entity_id)
+    node_type = entity["type"]
+    metadata = req.metadata if isinstance(req.metadata, dict) else {}
+    updates: dict[str, Any] = {}
+    if req.name is not None:
+        if node_type == "cast":
+            updates["name"] = req.name
+            updates["display_name"] = req.name
+            updates["source_name"] = req.name
+        else:
+            updates["name"] = req.name
+    if req.description is not None:
+        if node_type == "cast":
+            updates["personality"] = req.description
+        elif node_type == "location":
+            updates["description"] = req.description
+        else:
+            updates["description"] = req.description
+
+    if metadata:
+        if node_type == "cast":
+            identity_updates = {}
+            if "physical_description" in metadata:
+                identity_updates["physical_description"] = metadata.get("physical_description")
+            if "wardrobe_description" in metadata:
+                identity_updates["wardrobe_description"] = metadata.get("wardrobe_description")
+            if identity_updates:
+                updates["identity"] = identity_updates
+            if "story_summary" in metadata:
+                updates["story_summary"] = metadata.get("story_summary")
+        elif node_type == "location":
+            if "atmosphere" in metadata:
+                updates["atmosphere"] = metadata.get("atmosphere")
+            if "location_type" in metadata:
+                updates["location_type"] = metadata.get("location_type")
+            if "story_summary" in metadata:
+                updates["story_summary"] = metadata.get("story_summary")
+        elif node_type == "prop":
+            if "narrative_significance" in metadata:
+                updates["narrative_significance"] = metadata.get("narrative_significance")
+            if "story_summary" in metadata:
+                updates["story_summary"] = metadata.get("story_summary")
+
+    try:
+        patch_graph_node(PROJECT_DIR, node_type, entity_id, updates, modified_by="ui_entity_update")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"{node_type}:{entity_id} not found") from exc
+    await _ensure_pipeline_catchup(project_id)
+    return _project_entity_by_id(project_id, entity_id)
+
+
+@app.delete("/api/projects/{project_id}/entities/{entity_id}")
+async def delete_project_entity(project_id: str, entity_id: str):
+    _assert_project(project_id)
+    entity = _project_entity_by_id(project_id, entity_id)
+    try:
+        delete_graph_node(PROJECT_DIR, entity["type"], entity_id, modified_by="ui_delete")
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"{entity['type']}:{entity_id} not found") from exc
+    await _ensure_pipeline_catchup(project_id)
+    return {"ok": True}
+
+
 @app.get("/api/projects/{project_id}/graph/{node_type}/{node_id}")
 async def get_project_graph_node(project_id: str, node_type: str, node_id: str):
     _assert_project(project_id)
@@ -1415,21 +2577,21 @@ async def patch_project_graph_node(project_id: str, node_type: str, node_id: str
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=f"{node_type}:{node_id} not found") from exc
+    await _ensure_pipeline_catchup(project_id)
     return _workspace_snapshot(project_id)
 
 
 @app.post("/api/projects/{project_id}/entities/{entity_id}/upload")
 async def upload_entity_image(project_id: str, entity_id: str, image: UploadFile = File(...)):
     _assert_project(project_id)
-    snapshot = _workspace_snapshot(project_id)
-    entity = next((item for item in snapshot["entities"] if item["id"] == entity_id), None)
-    if not entity:
-        raise HTTPException(status_code=404, detail=f"Entity '{entity_id}' not found")
+    entity = _project_entity_by_id(project_id, entity_id)
 
     target = entity_upload_path(PROJECT_DIR, entity_id, entity["type"], image.filename or ".png")
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_bytes(await image.read())
-    return {"imageUrl": f"/api/project/file/{target.relative_to(PROJECT_DIR).as_posix()}"}
+    attach_entity_image(PROJECT_DIR, entity["type"], entity_id, target, modified_by="ui_upload")
+    await _ensure_pipeline_catchup(project_id)
+    return {"imageUrl": _project_file_url(target.relative_to(PROJECT_DIR))}
 
 
 @app.get("/api/projects/{project_id}/storyboard")
@@ -1443,7 +2605,9 @@ async def upload_storyboard_frame(project_id: str, frame_id: str, image: UploadF
     target = frame_upload_path(PROJECT_DIR, frame_id, image.filename or ".png")
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_bytes(await image.read())
-    return {"imageUrl": f"/api/project/file/{target.relative_to(PROJECT_DIR).as_posix()}"}
+    _mark_frame_regeneration_dirty("storyboard_reference_uploaded", source="ui_storyboard_upload", subject_id=frame_id)
+    await _ensure_pipeline_catchup(project_id)
+    return {"imageUrl": _project_file_url(target.relative_to(PROJECT_DIR))}
 
 
 @app.get("/api/projects/{project_id}/timeline")
@@ -1505,7 +2669,16 @@ async def update_project_timeline_frame(project_id: str, frame_id: str, req: Tim
         else:
             _set_timeline_frame_duration(frame_id, req.duration, overrides)
 
+    if req.trimStart is not None or req.trimEnd is not None:
+        _set_timeline_frame_trim(
+            frame_id,
+            overrides,
+            trim_start=req.trimStart,
+            trim_end=req.trimEnd,
+        )
+
     _save_timeline_overrides(overrides)
+    await _ensure_pipeline_catchup(project_id)
 
     timeline = _workspace_snapshot(project_id)["timelineFrames"]
     frame = next((item for item in timeline if item["id"] == frame_id), None)
@@ -1544,6 +2717,9 @@ async def regenerate_project_timeline_frame(project_id: str, frame_id: str):
         expanded["imageRel"] = output_rel
         _save_timeline_overrides(overrides)
 
+    _mark_timeline_video_dirty("timeline_frame_regenerated", source="ui_timeline_regenerate", subject_id=frame_id)
+    await _ensure_pipeline_catchup(project_id)
+
     timeline = _workspace_snapshot(project_id)["timelineFrames"]
     frame = next((item for item in timeline if item["id"] == frame_id), None)
     return frame or result
@@ -1573,6 +2749,7 @@ async def remove_project_timeline_frame(project_id: str, frame_id: str):
     if dialogue_id:
         _redistribute_dialogue_frames(project_id, dialogue_id, overrides)
     _save_timeline_overrides(overrides)
+    await _ensure_pipeline_catchup(project_id)
     return {"ok": True}
 
 
@@ -1589,11 +2766,7 @@ async def expand_project_timeline_frame(project_id: str, frame_id: str, req: Tim
     expanded_frames = overrides.get("expandedFrames") or []
     suffix = len(expanded_frames) + 1
     new_id = f"{frame_id}_{direction}_{suffix:02d}"
-    image_rel = None
-    if source_frame.get("imageUrl"):
-        prefix = "/api/project/file/"
-        image_url = str(source_frame["imageUrl"])
-        image_rel = image_url[len(prefix):] if image_url.startswith(prefix) else image_url
+    image_rel = _timeline_image_rel_from_url(source_frame.get("imageUrl"))
 
     expanded_frames.append(
         {
@@ -1609,6 +2782,7 @@ async def expand_project_timeline_frame(project_id: str, frame_id: str, req: Tim
     )
     overrides["expandedFrames"] = expanded_frames
     _save_timeline_overrides(overrides)
+    await _ensure_pipeline_catchup(project_id)
 
     refreshed = _workspace_snapshot(project_id)["timelineFrames"]
     return [item for item in refreshed if item["id"] == new_id]
@@ -1630,6 +2804,7 @@ async def update_project_timeline_dialogue(project_id: str, dialogue_id: str, re
         _set_timeline_dialogue_override(dialogue_id, "duration", max(0.5, float(req.duration)), overrides)
         _redistribute_dialogue_frames(project_id, dialogue_id, overrides)
     _save_timeline_overrides(overrides)
+    await _ensure_pipeline_catchup(project_id)
     dialogue = _workspace_snapshot(project_id)["dialogueBlocks"]
     block = next((item for item in dialogue if item["id"] == dialogue_id), None)
     if not block:
@@ -1675,6 +2850,7 @@ async def edit_project_timeline_frame(project_id: str, frame_id: str, req: Timel
     overrides = _timeline_overrides()
     _set_timeline_frame_image(frame_id, output_rel, overrides)
     _save_timeline_overrides(overrides)
+    await _ensure_pipeline_catchup(project_id)
 
     refreshed = _workspace_snapshot(project_id)["timelineFrames"]
     updated = next((item for item in refreshed if item["id"] == frame_id), None)
@@ -1693,13 +2869,37 @@ async def upload_timeline_frame(project_id: str, frame_id: str, image: UploadFil
             item["imageRel"] = target.relative_to(PROJECT_DIR).as_posix()
             _save_timeline_overrides(overrides)
             break
-    return {"imageUrl": f"/api/project/file/{target.relative_to(PROJECT_DIR).as_posix()}"}
+    _mark_timeline_video_dirty("timeline_frame_uploaded", source="ui_timeline_upload", subject_id=frame_id)
+    await _ensure_pipeline_catchup(project_id)
+    return {"imageUrl": _project_file_url(target.relative_to(PROJECT_DIR))}
 
 
 @app.get("/api/projects/{project_id}/workers")
 async def get_project_workers(project_id: str):
     _assert_project(project_id)
+    await _ensure_pipeline_catchup(project_id)
     return _project_workers_payload()
+
+
+@app.post("/api/projects/{project_id}/workers/cancel")
+async def cancel_project_workers(project_id: str):
+    _assert_project(project_id)
+    cancelled_ids: list[str] = []
+    for job in list(_running_cancellable_jobs()):
+        await _cancel_ui_pipeline_job(job)
+        cancelled_ids.append(str(job.get("id") or ""))
+    return {"cancelled": cancelled_ids}
+
+
+@app.post("/api/workers/{worker_id}/cancel")
+async def cancel_worker(worker_id: str):
+    job = ui_pipeline_jobs.get(worker_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"Worker '{worker_id}' not found")
+    if job.get("status") != "running" or _job_stop_phase_and_approvals(job) is None:
+        raise HTTPException(status_code=409, detail=f"Worker '{worker_id}' cannot be stopped")
+    await _cancel_ui_pipeline_job(job)
+    return {"cancelled": worker_id}
 
 
 @app.get("/api/projects/{project_id}/chat")
@@ -1756,16 +2956,35 @@ async def project_events_socket(websocket: WebSocket, project_id: str):
     await websocket.accept()
     try:
         await websocket.send_json({"type": "connected", "data": {"projectId": project_id}})
+        snapshot = _workspace_snapshot(project_id)
+        await websocket.send_json({"type": "workspace_update", "data": snapshot})
+        await websocket.send_json({"type": "worker_snapshot", "data": _project_workers_payload()})
+        await websocket.send_json({"type": "project_update", "data": snapshot["project"]})
+        last_asset_revision = project_asset_revision
+        last_full_push = time.monotonic()
         while True:
             try:
-                await asyncio.wait_for(websocket.receive_text(), timeout=5.0)
+                await asyncio.wait_for(websocket.receive_text(), timeout=1.0)
             except asyncio.TimeoutError:
+                if project_asset_revision != last_asset_revision:
+                    last_asset_revision = project_asset_revision
+                    snapshot = _workspace_snapshot(project_id)
+                    await websocket.send_json({"type": "workspace_update", "data": snapshot})
+                    await websocket.send_json({"type": "worker_snapshot", "data": _project_workers_payload()})
+                    await websocket.send_json({"type": "project_update", "data": snapshot["project"]})
+                    if project_asset_event is not None:
+                        await websocket.send_json(project_asset_event)
+                    last_full_push = time.monotonic()
+                    continue
+                if time.monotonic() - last_full_push < 5.0:
+                    continue
                 snapshot = _workspace_snapshot(project_id)
                 await websocket.send_json({"type": "workspace_update", "data": snapshot})
                 await websocket.send_json({"type": "worker_snapshot", "data": _project_workers_payload()})
                 await websocket.send_json({"type": "project_update", "data": snapshot["project"]})
                 for worker in _project_workers_payload():
                     await websocket.send_json({"type": "worker_update", "data": worker})
+                last_full_push = time.monotonic()
     except WebSocketDisconnect:
         return
 
@@ -2335,6 +3554,8 @@ async def generate_video(req: GenerateVideoRequest):
             detail="image_path is required and must exist for video generation",
         )
 
+    duration = _normalize_video_request_duration(req.duration)
+
     handler = get_handler(
         "video_clip",
         replicate_token=REPLICATE_API_TOKEN,
@@ -2348,7 +3569,7 @@ async def generate_video(req: GenerateVideoRequest):
                 dialogue_text=req.dialogue_text or "",
                 motion_prompt=req.prompt,
                 frame_image_path=frame_image,
-                suggested_duration=req.duration,
+                suggested_duration=duration,
                 output_dir=PROJECT_DIR,
                 run_id=req.run_id,
                 phase=req.phase,
@@ -2395,7 +3616,7 @@ async def generate_video(req: GenerateVideoRequest):
         "path": str(output),
         "prediction_id": "",
         "model": result.model_used,
-        "duration": result.duration,
+        "duration": result.duration or duration,
     }
 
 
@@ -2416,7 +3637,7 @@ async def extend_video(req: ExtendVideoRequest):
             detail="video_path is required and must exist for video extension",
         )
 
-    duration = min(max(int(req.duration or 5), 2), 15)
+    duration = _normalize_video_request_duration(req.duration)
 
     try:
         video_uri = await _upload_to_replicate(input_video)
@@ -2827,12 +4048,13 @@ async def batch_generate_video(req: BatchGenerateVideoRequest):
                 frame_image = Path(item.image_path)
                 if not frame_image.is_absolute():
                     frame_image = PROJECT_DIR / frame_image
+            duration = _normalize_video_request_duration(item.duration)
             inputs.append(VideoClipInput(
                 frame_id=frame_id,
                 dialogue_text=item.dialogue_text or "",
                 motion_prompt=item.prompt,
                 frame_image_path=frame_image,
-                suggested_duration=item.duration,
+                suggested_duration=duration,
                 output_dir=PROJECT_DIR,
                 run_id=item.run_id,
                 phase=item.phase,

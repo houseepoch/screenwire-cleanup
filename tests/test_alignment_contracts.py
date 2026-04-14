@@ -98,6 +98,81 @@ def test_materialize_manifest_preserves_runtime_frame_fields(tmp_path: Path) -> 
     assert "stickinessLevel" not in manifest
 
 
+def test_rehydrate_phase_2_from_manifest_assigns_provenance_to_new_cast_states(tmp_path: Path) -> None:
+    graph = build_live_smoke_graph(tmp_path)
+    graph.cast["cast_ally"] = CastNode(
+        cast_id="cast_ally",
+        name="Ally",
+        display_name="Ally",
+        role=NarrativeRole.SUPPORTING,
+        identity=CastIdentity(physical_description="Short dark hair."),
+        voice=CastVoice(voice_description="Measured"),
+        provenance=Provenance(source_prose_chunk="Ally waits in the dark."),
+    )
+    graph.cast_frame_states = {
+        key: state
+        for key, state in graph.cast_frame_states.items()
+        if state.frame_id != "f_002"
+    }
+
+    manifest_path = tmp_path / "project_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["frames"] = [
+        {
+            "frameId": "f_002",
+            "castIds": ["cast_ally"],
+            "actionSummary": "Ally steps into the alley light.",
+            "castBibleSnapshot": {
+                "frame_id": "f_002",
+                "characters": [
+                    {
+                        "character_id": "cast_ally",
+                        "pose": {"pose": "standing", "modifiers": ["emotion:focused"]},
+                    }
+                ],
+            },
+        }
+    ]
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+    restored = run_pipeline._rehydrate_phase_2_from_manifest(tmp_path, graph)
+
+    assert restored >= 1
+    state = graph.cast_frame_states["cast_ally@f_002"]
+    assert state.emotion == "focused"
+    assert state.provenance.source_prose_chunk == graph.frames["f_002"].source_text
+    assert state.provenance.generated_by == "phase_2_manifest_rehydrate"
+
+
+def test_verify_prerequisites_allows_phase_four_with_completed_manifest_despite_reuse_warnings(
+    tmp_path: Path, monkeypatch
+) -> None:
+    manifest_path = tmp_path / "project_manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "phases": {
+                    "phase_0": {"status": "complete"},
+                    "phase_1": {"status": "complete"},
+                    "phase_2": {"status": "complete"},
+                    "phase_3": {"status": "complete"},
+                }
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(run_pipeline, "MANIFEST_PATH", manifest_path)
+    monkeypatch.setattr(run_pipeline, "PROJECT_DIR", tmp_path)
+    monkeypatch.setattr(
+        run_pipeline,
+        "_phase_reuse_status",
+        lambda phase_num, _project_dir: (False, [f"phase_{phase_num} artifacts incomplete"]),
+    )
+
+    run_pipeline.verify_prerequisites(4)
+
+
 def test_build_context_seed_surfaces_creative_freedom_and_dialogue_workflow(tmp_path: Path) -> None:
     _write_json(
         tmp_path / "project_manifest.json",
@@ -866,6 +941,20 @@ def test_parse_args_accepts_live_flag(monkeypatch) -> None:
     assert args.live is True
 
 
+def test_parse_args_accepts_resume_through_phase(monkeypatch) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["run_pipeline.py", "--project", "demo_project", "--resume", "--through-phase", "3"],
+    )
+
+    args = run_pipeline.parse_args()
+
+    assert args.project == "demo_project"
+    assert args.resume is True
+    assert args.through_phase == 3
+
+
 def test_frame_enricher_cli_worker_uses_unlimited_agent_timeout(tmp_path: Path, monkeypatch) -> None:
     timeout_seen: list[object] = []
     stream_output_seen: list[object] = []
@@ -1082,12 +1171,12 @@ def test_phase_5_video_skips_refinement_without_xai_key(tmp_path: Path, monkeypa
         {
             "frame_id": "f_001",
             "prompt": "graph prompt",
-            "duration": 5,
+            "duration": 2.2,
             "input_image_path": "frames/composed/f_001_gen.png",
         },
     )
 
-    recorded: list[str] = []
+    recorded: list[tuple[str, int]] = []
 
     monkeypatch.setattr(run_pipeline, "PROJECT_DIR", tmp_path)
     monkeypatch.setattr(run_pipeline, "MANIFEST_PATH", tmp_path / "project_manifest.json")
@@ -1099,15 +1188,16 @@ def test_phase_5_video_skips_refinement_without_xai_key(tmp_path: Path, monkeypa
     monkeypatch.setattr(
         run_pipeline,
         "_generate_video_clip",
-        lambda _fid, _img, prompt, _dur, _out, _dry: recorded.append(prompt) or SimpleNamespace(returncode=0),
+        lambda _fid, _img, prompt, duration, _out, _dialogue, _dry: recorded.append((prompt, duration)) or SimpleNamespace(returncode=0),
     )
     monkeypatch.delenv("XAI_API_KEY", raising=False)
 
     phase_5_video(False, {})
 
-    assert recorded == ["graph prompt"]
+    assert recorded == [("graph prompt", 3)]
     prompt_data = json.loads(prompt_path.read_text(encoding="utf-8"))
     assert prompt_data["prompt"] == "graph prompt"
+    assert prompt_data["duration"] == 3
 
 
 def test_generate_video_clip_retries_retryable_upstream_failures(tmp_path: Path, monkeypatch) -> None:
@@ -1136,6 +1226,7 @@ def test_generate_video_clip_retries_retryable_upstream_failures(tmp_path: Path,
         "prompt",
         5,
         out_path,
+        dialogue_text="",
         dry_run=False,
     )
 
@@ -1389,6 +1480,49 @@ def test_verify_prerequisites_rejects_incomplete_phase_artifacts_even_if_manifes
 
     with pytest.raises(SystemExit):
         run_pipeline.verify_prerequisites(2)
+
+
+def test_main_resume_stops_after_requested_through_phase(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "demo_project"
+    project_dir.mkdir()
+    _write_json(project_dir / "project_manifest.json", {"phases": {}})
+
+    called: list[int] = []
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["run_pipeline.py", "--project", "demo_project", "--resume", "--through-phase", "3"],
+    )
+    monkeypatch.setattr(run_pipeline, "PROJECTS_DIR", tmp_path)
+    monkeypatch.setattr(run_pipeline, "detect_resume_phase", lambda: 2)
+    monkeypatch.setattr(run_pipeline, "_deploy_shared_conventions", lambda _project_dir: None)
+    monkeypatch.setattr(run_pipeline, "_deploy_project_reporting_assets", lambda _project_dir: None)
+    monkeypatch.setattr(run_pipeline, "emit_event", lambda *args, **kwargs: None)
+    monkeypatch.setattr(run_pipeline, "start_server", lambda _dry_run: None)
+    monkeypatch.setattr(run_pipeline, "wait_for_server", lambda _dry_run: None)
+    monkeypatch.setattr(run_pipeline, "stop_server", lambda: None)
+    monkeypatch.setattr(run_pipeline, "phase_2_morpheus", lambda _dry_run, _timers: called.append(2))
+    monkeypatch.setattr(run_pipeline, "phase_3_assets", lambda _dry_run, _timers: called.append(3))
+    monkeypatch.setattr(
+        run_pipeline,
+        "phase_4_production",
+        lambda _dry_run, _timers: (_ for _ in ()).throw(AssertionError("phase 4 should not run")),
+    )
+    monkeypatch.setattr(
+        run_pipeline,
+        "phase_5_video",
+        lambda _dry_run, _timers: (_ for _ in ()).throw(AssertionError("phase 5 should not run")),
+    )
+    monkeypatch.setattr(
+        run_pipeline,
+        "phase_6_export",
+        lambda _dry_run, _timers: (_ for _ in ()).throw(AssertionError("phase 6 should not run")),
+    )
+
+    run_pipeline.main()
+
+    assert called == [2, 3]
 
 
 def test_prompt_pair_validator_rejects_subject_count_contradiction(tmp_path: Path) -> None:
@@ -1812,6 +1946,32 @@ def test_frame_handler_retries_long_prompt_with_prompt_sheet_overflow(
     assert len(seen_inputs) == 2
     assert len(seen_inputs[1]["prompt"]) < len(inp.prompt)
     assert any("prompt_sheet.png" in uri for uri in seen_inputs[1].get("image_input", []))
+
+
+def test_run_model_chain_advances_to_pro_before_xai_on_model_error() -> None:
+    handler = FrameHandler(replicate_token="test-token")
+    attempted_models: list[str] = []
+
+    async def _fake_predict(model: str, pred_input: dict, *, extra_headers=None):
+        attempted_models.append(model)
+        return {"id": model, "status": "starting"}
+
+    async def _fake_resolve(prediction: dict, *, extra_headers=None):
+        model = prediction["id"]
+        if model == "google/nano-banana-2":
+            return {"status": "failed", "error": "completely opaque failure", "logs": ""}
+        return {"status": "succeeded", "output": "https://example.test/frame.png"}
+
+    handler._replicate_predict = _fake_predict  # type: ignore[method-assign]
+    handler._resolve_prediction = _fake_resolve  # type: ignore[method-assign]
+
+    prediction, model_used = asyncio.run(
+        handler._run_model_chain("frame", {"prompt": "Generate a frame."})
+    )
+
+    assert attempted_models == ["google/nano-banana-2", "google/nano-banana-pro"]
+    assert prediction["status"] == "succeeded"
+    assert model_used == "google/nano-banana-pro"
 
 
 def test_server_project_api_reads_manifest_from_disk(tmp_path: Path, monkeypatch) -> None:

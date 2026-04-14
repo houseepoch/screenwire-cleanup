@@ -2,7 +2,6 @@
 import { createPortal } from 'react-dom';
 import { useMorpheusStore } from '../store';
 import { useLongPress } from '../hooks/useLongPress';
-import API from '../services/api';
 import { X, Image, FileText, Play } from 'lucide-react';
 import type { DialogueBlock, MediaView, TimelineFrame } from '../types';
 
@@ -55,10 +54,11 @@ function TimelineFrameCard({
         );
       case 'image':
       default:
-        return frame.imageUrl ? (
+        return frame.thumbnailUrl || frame.imageUrl ? (
           <img
-            src={frame.imageUrl}
+            src={frame.thumbnailUrl || frame.imageUrl}
             alt={`Frame ${frame.sequence}`}
+            loading="lazy"
             style={{ width: '100%', height: '100%', objectFit: 'cover' }}
           />
         ) : (
@@ -164,8 +164,6 @@ export function MobileTimelineTray() {
     isTimelineTrayOpen,
     setIsTimelineTrayOpen,
     injectFocusToChat,
-    currentProject,
-    hydrateWorkspace,
   } = useMorpheusStore();
 
   const getDialogueForFrame = (frameSequence: number) => {
@@ -185,18 +183,6 @@ export function MobileTimelineTray() {
 
   const handleFrameClick = (frameId: string) => {
     setSelectedFrameId(frameId);
-  };
-
-  const handleApproveTimeline = async () => {
-    if (!currentProject) {
-      return;
-    }
-    try {
-      const snapshot = await API.workflow.approve(currentProject.id, 'timeline');
-      hydrateWorkspace(snapshot);
-    } catch (error) {
-      console.error('Failed to approve timeline:', error);
-    }
   };
 
   if (!isTimelineTrayOpen) return null;
@@ -325,15 +311,8 @@ export function MobileTimelineTray() {
           alignItems: 'center',
         }}>
           <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-            {timelineFrames.length} frames
+            {timelineFrames.length} frames. Use Continue in the top bar when review is ready.
           </span>
-          <button 
-            className="btn-accent"
-            onClick={() => void handleApproveTimeline()}
-            style={{ padding: '8px 16px', fontSize: '12px' }}
-          >
-            Approve
-          </button>
         </div>
       </div>
 

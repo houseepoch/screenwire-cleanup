@@ -11,6 +11,7 @@ import './App.css';
 function App() {
   const { currentView, setCurrentView, currentProject, selectProject, setProjects } = useMorpheusStore();
   const reconciledDesktopRef = useRef(false);
+  const showNavigation = currentView !== 'onboarding';
 
   useEffect(() => {
     if (!desktopService.isAvailable() || reconciledDesktopRef.current) {
@@ -81,9 +82,9 @@ function App() {
   return (
     <div className="app">
       <GrainOverlay />
-      <Navigation />
+      {showNavigation ? <Navigation /> : null}
       
-      <main className="main-content">
+      <main className={`main-content ${showNavigation ? '' : 'without-navigation'}`.trim()}>
         {currentView === 'home' && <HomeScreen />}
         {currentView === 'onboarding' && <OnboardingWizard />}
         {currentView === 'project' && <ProjectWorkspace />}

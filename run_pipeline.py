@@ -7,7 +7,7 @@ local Grok-backed agent runners for each phase sequentially, then runs Phase 6 e
 programmatically via ffmpeg.
 
 Usage:
-    python3 run_pipeline.py [--dry-run] [--phase N]
+    python3 run_pipeline.py [--dry-run] [--phase N] [--through-phase N] [--resume]
 """
 
 import argparse
@@ -1589,7 +1589,16 @@ def _rehydrate_phase_2_from_manifest(project_dir: Path, graph) -> int:
         return 0
 
     from graph.api import get_frame_cast_state_models
-    from graph.schema import CastFrameState, CastFrameRole, CinematicTag, EmotionalArc, LightingDirection, LightingQuality, Posture
+    from graph.schema import (
+        CastFrameRole,
+        CastFrameState,
+        CinematicTag,
+        EmotionalArc,
+        LightingDirection,
+        LightingQuality,
+        Posture,
+        Provenance,
+    )
 
     restored = 0
 
@@ -1708,6 +1717,20 @@ def _rehydrate_phase_2_from_manifest(project_dir: Path, graph) -> int:
             if not raw_cast_id:
                 continue
 
+            provenance_source = next(
+                (
+                    str(candidate).strip()
+                    for candidate in (
+                        getattr(frame, "source_text", ""),
+                        manifest_frame.get("actionSummary"),
+                        manifest_frame.get("videoOptimizedPromptBlock"),
+                        manifest_frame.get("visualFlowElement"),
+                    )
+                    if str(candidate or "").strip()
+                ),
+                f"(rehydrated manifest cast state for {raw_cast_id} in {frame_id})",
+            )
+
             resolved_cast_id = raw_cast_id
             if resolved_cast_id not in frame_states:
                 target_token = _compact_identifier_token(resolved_cast_id.removeprefix("cast_"))
@@ -1728,9 +1751,23 @@ def _rehydrate_phase_2_from_manifest(project_dir: Path, graph) -> int:
                     cast_id=resolved_cast_id,
                     frame_id=frame_id,
                     frame_role=default_role,
+                    provenance=Provenance(
+                        source_prose_chunk=provenance_source,
+                        generated_by="phase_2_manifest_rehydrate",
+                    ),
                 )
                 graph.cast_frame_states[f"{resolved_cast_id}@{frame_id}"] = state
                 frame_states[resolved_cast_id] = state
+            else:
+                if not getattr(state, "provenance", None):
+                    state.provenance = Provenance(
+                        source_prose_chunk=provenance_source,
+                        generated_by="phase_2_manifest_rehydrate",
+                    )
+                elif not state.provenance.source_prose_chunk.strip():
+                    state.provenance.source_prose_chunk = provenance_source
+                    if not state.provenance.generated_by:
+                        state.provenance.generated_by = "phase_2_manifest_rehydrate"
 
             if getattr(getattr(state, "frame_role", None), "value", getattr(state, "frame_role", None)) == "referenced":
                 continue
@@ -2512,6 +2549,8 @@ def verify_prerequisites(target_phase: int) -> None:
             fail(f"Prerequisite not met: phase_{i} status is '{status}' "
                  f"(expected 'complete'). Run earlier phases first or use "
                  f"full pipeline mode.")
+        if target_phase >= 4:
+            continue
         reusable, issues = _phase_reuse_status(i, PROJECT_DIR)
         if not reusable:
             fail(
@@ -4622,16 +4661,16 @@ def phase_5_video(dry_run: bool, phase_timers: dict) -> None:
                 reason = refined_by.split(":", 1)[1] if ":" in refined_by else refined_by or "unknown"
                 log_warn(f"  [{idx}/{total}] {fid}: vision refinement failed ({reason}) — using graph prompt")
 
+        projected_payload = build_video_request_projection(prompt_state)
+        video_prompt = projected_payload.get("motion_prompt", "") or prompt_state.get("prompt", "")
+        dialogue_text = projected_payload.get("dialogue_text", "")
+        dur = max(2, min(15, math.ceil(float(prompt_state.get("duration", 5)))))
+        prompt_state["duration"] = dur
         if not dry_run:
             video_prompt_file.write_text(
                 json.dumps(prompt_state, indent=2, ensure_ascii=False),
                 encoding="utf-8",
             )
-
-        projected_payload = build_video_request_projection(prompt_state)
-        video_prompt = projected_payload.get("motion_prompt", "") or prompt_state.get("prompt", "")
-        dialogue_text = projected_payload.get("dialogue_text", "")
-        dur = max(2, min(15, int(prompt_state.get("duration", 5))))
         if prompt_state.get("dialogue_fit_status") == "capped_to_model_max":
             log_warn(f"  [{idx}/{total}] {fid}: dialogue wants "
                      f"{prompt_state.get('recommended_duration', dur)}s, capped to 15s")
@@ -5117,6 +5156,13 @@ def parse_args() -> argparse.Namespace:
         help="Run only a specific phase (0-6) for debugging.",
     )
     parser.add_argument(
+        "--through-phase",
+        type=int,
+        choices=[0, 1, 2, 3, 4, 5, 6],
+        default=None,
+        help="Run from the start or resume point through the specified phase, then stop.",
+    )
+    parser.add_argument(
         "--project",
         type=str,
         required=True,
@@ -5159,9 +5205,13 @@ def main() -> None:
     args = parse_args()
     dry_run   = args.dry_run
     only_phase = args.phase
+    through_phase = args.through_phase
     parallel_p4 = args.parallel_phase4
     AUDIT_PHASE2 = args.audit
     LIVE_MODE = bool(args.live)
+
+    if only_phase is not None and through_phase is not None:
+        fail("Use either --phase or --through-phase, not both.")
 
     # Override model if specified
     if args.model:
@@ -5213,15 +5263,20 @@ def main() -> None:
     export_path: str | None = None
     pipeline_failed = False
 
-    # Determine starting phase
+    # Determine starting/ending phases
     start_phase = 0
     if args.resume:
         start_phase = detect_resume_phase()
+        if through_phase is not None and start_phase > through_phase:
+            log_ok(f"Phases through {through_phase} are already complete — nothing to resume.")
+            stop_server()
+            return
         if start_phase >= 7:
             log_ok("All phases already complete — nothing to resume.")
             stop_server()
             return
         log(f"Resuming from phase {start_phase} ({PHASE_NAMES.get(start_phase, '?')})")
+    end_phase = 6 if through_phase is None else through_phase
 
     def _run_phase(n: int) -> str | None:
         """Run phase n. Returns export path for phase 6, else None."""
@@ -5304,8 +5359,8 @@ def main() -> None:
                 verify_prerequisites(only_phase)
             export_path = _run_phase(only_phase)
         else:
-            # Full or resumed pipeline — run from start_phase through 6
-            for phase_num in range(start_phase, 7):
+            # Full or resumed pipeline — run from start_phase through end_phase
+            for phase_num in range(start_phase, end_phase + 1):
                 export_path = _run_phase(phase_num)
     except Exception:
         pipeline_failed = True

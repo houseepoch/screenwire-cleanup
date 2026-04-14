@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""image_tagger.py — Stamp entity names onto generated images.
+"""image_tagger.py — Stamp entity names onto generated reference images.
 
-Overlays bold yellow text with black outline in the upper-right corner.
+Overlays a centered top glass label that matches the Morpheus UI aesthetic.
 Used by the Sentinel watcher to auto-tag cast composites, location primaries,
 and prop images as they are generated.
 
@@ -16,22 +16,26 @@ import sys
 import time
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 
 FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-FONT_SIZE_RATIO = 0.04  # Font size as ratio of image height (4%)
-MIN_FONT_SIZE = 18
+FONT_SIZE_RATIO = 0.038
+MIN_FONT_SIZE = 20
 MAX_FONT_SIZE = 48
-PADDING = 12
-CORNER_MARGIN = 16
-OUTLINE_WIDTH = 3
-TEXT_COLOR = (255, 255, 0)  # Yellow fill
-OUTLINE_COLOR = (0, 0, 0)  # Black outline
-BG_COLOR = (0, 0, 0, 140)  # Semi-transparent black background
+PADDING_X = 18
+PADDING_Y = 10
+TOP_MARGIN = 18
+PANEL_RADIUS = 18
+LABEL_MAX_WIDTH_RATIO = 0.72
+TEXT_COLOR = (248, 251, 255, 255)
+TEXT_STROKE = (10, 16, 24, 220)
+PANEL_FILL = (15, 24, 36, 132)
+PANEL_GLOSS = (255, 255, 255, 26)
+PANEL_BORDER = (255, 255, 255, 72)
 
 # Directories to watch — ONLY reference images get tagged
 TAGGED_DIRS = {
@@ -79,8 +83,22 @@ def is_tagged(image_path: Path, project_dir: Path) -> bool:
     return str(image_path) in manifest
 
 
+def _fit_font(draw: ImageDraw.ImageDraw, label: str, image_height: int, max_label_width: int) -> ImageFont.ImageFont:
+    font_size = max(MIN_FONT_SIZE, min(MAX_FONT_SIZE, int(image_height * FONT_SIZE_RATIO)))
+    while True:
+        try:
+            font = ImageFont.truetype(FONT_PATH, font_size)
+        except Exception:
+            return ImageFont.load_default()
+        bbox = draw.textbbox((0, 0), label, font=font, stroke_width=2)
+        text_w = bbox[2] - bbox[0]
+        if text_w <= max_label_width or font_size <= MIN_FONT_SIZE:
+            return font
+        font_size -= 2
+
+
 def tag_image(image_path: Path, label: str, project_dir: Path | None = None) -> bool:
-    """Overlay label text on image in upper-right corner. Overwrites in place.
+    """Overlay label text in a centered top glass panel. Overwrites in place.
 
     Returns True on success, False on failure.
     If project_dir is provided, records the tag in the manifest to prevent
@@ -99,59 +117,57 @@ def tag_image(image_path: Path, label: str, project_dir: Path | None = None) -> 
         return False
 
     w, h = img.size
-    font_size = max(MIN_FONT_SIZE, min(MAX_FONT_SIZE, int(h * FONT_SIZE_RATIO)))
-
-    try:
-        font = ImageFont.truetype(FONT_PATH, font_size)
-    except Exception:
-        font = ImageFont.load_default()
-
-    # Create overlay for semi-transparent background
     overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
-
-    # Measure text
-    bbox = draw.textbbox((0, 0), label, font=font)
+    font = _fit_font(draw, label, h, int(w * LABEL_MAX_WIDTH_RATIO) - PADDING_X * 2)
+    bbox = draw.textbbox((0, 0), label, font=font, stroke_width=2)
     text_w = bbox[2] - bbox[0]
     text_h = bbox[3] - bbox[1]
 
-    # Position: upper-right corner with margin
-    box_w = text_w + PADDING * 2
-    box_h = text_h + PADDING * 2
-    box_x = w - box_w - CORNER_MARGIN
-    box_y = CORNER_MARGIN
+    box_w = max(text_w + PADDING_X * 2, min(int(w * 0.26), int(w * LABEL_MAX_WIDTH_RATIO)))
+    box_w = min(box_w, int(w * LABEL_MAX_WIDTH_RATIO))
+    box_h = text_h + PADDING_Y * 2
+    box_x = max(12, int((w - box_w) / 2))
+    box_y = TOP_MARGIN
+    box_rect = (box_x, box_y, box_x + box_w, box_y + box_h)
 
-    # Draw background box
-    draw.rounded_rectangle(
-        [box_x, box_y, box_x + box_w, box_y + box_h],
-        radius=6,
-        fill=BG_COLOR,
+    blurred_region = img.crop(box_rect).filter(ImageFilter.GaussianBlur(radius=12))
+    panel = Image.new("RGBA", (box_w, box_h), (0, 0, 0, 0))
+    panel_draw = ImageDraw.Draw(panel)
+    panel_draw.rounded_rectangle(
+        [0, 0, box_w - 1, box_h - 1],
+        radius=PANEL_RADIUS,
+        fill=PANEL_FILL,
+        outline=PANEL_BORDER,
+        width=1,
     )
+    panel_draw.rounded_rectangle(
+        [2, 2, box_w - 3, max(8, int(box_h * 0.52))],
+        radius=max(10, PANEL_RADIUS - 4),
+        fill=PANEL_GLOSS,
+    )
+    blurred_region.alpha_composite(panel)
+    img.alpha_composite(blurred_region, dest=(box_x, box_y))
 
-    # Draw text with outline
-    text_x = box_x + PADDING
-    text_y = box_y + PADDING
-
-    # Black outline (draw text offset in all directions)
-    for dx in range(-OUTLINE_WIDTH, OUTLINE_WIDTH + 1):
-        for dy in range(-OUTLINE_WIDTH, OUTLINE_WIDTH + 1):
-            if dx == 0 and dy == 0:
-                continue
-            draw.text((text_x + dx, text_y + dy), label, font=font, fill=OUTLINE_COLOR)
-
-    # Yellow fill
-    draw.text((text_x, text_y), label, font=font, fill=TEXT_COLOR)
-
-    # Composite and save
-    tagged = Image.alpha_composite(img, overlay)
+    text_x = box_x + (box_w - text_w) / 2
+    text_y = box_y + (box_h - text_h) / 2 - bbox[1]
+    draw = ImageDraw.Draw(img)
+    draw.text(
+        (text_x, text_y),
+        label,
+        font=font,
+        fill=TEXT_COLOR,
+        stroke_width=2,
+        stroke_fill=TEXT_STROKE,
+    )
 
     # Save back — convert to RGB if original was JPEG/PNG without alpha
     original_format = image_path.suffix.lower()
     if original_format in (".jpg", ".jpeg"):
-        tagged = tagged.convert("RGB")
-        tagged.save(image_path, "JPEG", quality=95)
+        img = img.convert("RGB")
+        img.save(image_path, "JPEG", quality=95)
     else:
-        tagged.save(image_path, "PNG")
+        img.save(image_path, "PNG")
 
     print(f"[ImageTagger] Tagged: {image_path.name} → \"{label}\"")
 

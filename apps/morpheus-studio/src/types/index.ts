@@ -86,7 +86,9 @@ export interface Entity {
   type: EntityType;
   name: string;
   description: string;
+  storySummary?: string;
   imageUrl?: string;
+  thumbnailUrl?: string;
   status: 'pending' | 'generating' | 'complete' | 'error';
   metadata?: Record<string, unknown>;
 }
@@ -116,6 +118,7 @@ export interface StoryboardFrame {
   description: string;
   shotType: string;
   imageUrl?: string;
+  thumbnailUrl?: string;
   status: 'pending' | 'generating' | 'complete' | 'approved';
 }
 
@@ -124,10 +127,16 @@ export interface TimelineFrame {
   storyboardId: string;
   sequence: number;
   imageUrl?: string;
+  thumbnailUrl?: string;
+  videoUrl?: string;
   prompt: string;
   status: 'pending' | 'generating' | 'complete' | 'approved';
-  duration: number; // 1-15 seconds
+  duration: number; // 2-15 seconds
   dialogueId?: string; // Linked dialogue block
+  trimStart?: number;
+  trimEnd?: number;
+  sourceFrameId?: string;
+  isExpanded?: boolean;
 }
 
 export interface GraphCastFrameState {
@@ -245,6 +254,8 @@ export interface WorkerStatus {
   status: 'idle' | 'running' | 'complete' | 'error';
   progress: number;
   message: string;
+  targetPhase?: number;
+  cancellable?: boolean;
 }
 
 export interface CreativityLevelDefinition {
@@ -267,6 +278,7 @@ export interface VideoExport {
 export interface WorkspaceReports {
   projectReport?: string | null;
   videoPromptProjection?: string | null;
+  finalExport?: string | null;
   projectCover?: string | null;
   projectCoverSummary?: string | null;
   projectCoverMeta?: string | null;
@@ -280,6 +292,14 @@ export interface WorkflowState {
     gate: string;
     feedback: string;
     timestamp: string;
+  }>;
+  pipelineInvalidations?: Record<string, {
+    phase: number;
+    dirtyAt: string;
+    reason: string;
+    source: string;
+    subjectType: string;
+    subjectId: string;
   }>;
 }
 

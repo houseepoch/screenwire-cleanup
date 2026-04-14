@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
+import mimetypes
 import os
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -130,6 +132,13 @@ def _extract_response_text(response: Any) -> str:
     return str(text or "").strip()
 
 
+def _image_to_data_url(image_path: str | Path) -> str:
+    path = Path(image_path)
+    mime_type = mimetypes.guess_type(str(path))[0] or "application/octet-stream"
+    encoded = base64.b64encode(path.read_bytes()).decode("utf-8")
+    return f"data:{mime_type};base64,{encoded}"
+
+
 class _BaseXAIClient:
     def __init__(self, api_key: str | None = None):
         self.api_key = api_key or os.getenv("XAI_API_KEY", "")
@@ -220,6 +229,51 @@ class XAIClient(_BaseXAIClient):
             request["extra_headers"] = {"x-grok-conv-id": cache_key}
         response = await self.client.chat.completions.create(**request)
         return json.loads(_extract_chat_text(response))
+
+    async def generate_json_with_image(
+        self,
+        *,
+        image_path: str | Path,
+        schema: dict[str, Any],
+        prompt: str,
+        system_prompt: str = "",
+        model: str = DEFAULT_REASONING_MODEL,
+        task_hint: str = "",
+        temperature: float = 0.0,
+        max_tokens: int | None = 4096,
+        cache_key: str = "",
+        schema_name: str = "screenwire_image_output",
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append(
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": _image_to_data_url(image_path)},
+                    },
+                    {
+                        "type": "text",
+                        "text": prompt,
+                    },
+                ],
+            }
+        )
+        return await self.generate_json(
+            schema=schema,
+            messages=messages,
+            model=model,
+            task_hint=task_hint,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            cache_key=cache_key,
+            schema_name=schema_name,
+            **kwargs,
+        )
 
     async def generate_multi_agent(
         self,

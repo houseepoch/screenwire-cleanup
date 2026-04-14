@@ -102,6 +102,9 @@ test('existing project selection hydrates the workspace, shows worker state, and
 
   await page.getByTestId('nav-back-to-projects').click();
   await expect(page.getByText('Recent productions')).toBeVisible();
+
+  const calls = await readDesktopCallLog(page);
+  expect(calls.returnToProjects).toBe(1);
 });
 
 test('project selection surfaces backend start failures on the home screen', async ({ page }) => {

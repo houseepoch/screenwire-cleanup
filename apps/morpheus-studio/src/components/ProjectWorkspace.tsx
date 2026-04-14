@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useCallback, useEffect } from 'react';
 import { useMorpheusStore } from '../store';
 import { useWindowSize } from '../hooks/useWindowSize';
 import { DetailPanel } from './DetailPanel';
@@ -14,36 +14,44 @@ import type { WorkspaceSnapshot, WorkerStatus } from '../types';
 export function ProjectWorkspace() {
   const { currentProject, mobileView, isTimelineTrayOpen, workers, hydrateWorkspace, setWorkers } = useMorpheusStore();
   const { isMobile } = useWindowSize();
+  const projectId = currentProject?.id ?? null;
+  const projectStatus = currentProject?.status ?? null;
+  const isActiveGeneration =
+    workers.some((worker) => worker.status === 'running' || worker.status === 'idle') ||
+    ['generating_assets', 'generating_frames', 'generating_video'].includes(projectStatus ?? '');
+  const refreshIntervalMs = isActiveGeneration ? 2000 : 15000;
+
+  const refreshWorkspace = useCallback(async () => {
+    if (!projectId) {
+      return;
+    }
+    try {
+      const [snapshot, workerState] = await Promise.all([
+        API.workspace.get(projectId),
+        API.workers.getStatus(projectId).catch(() => []),
+      ]);
+      hydrateWorkspace({ ...snapshot, workers: workerState });
+    } catch (error) {
+      console.error('Failed to hydrate workspace:', error);
+    }
+  }, [projectId, hydrateWorkspace]);
 
   useEffect(() => {
-    if (!currentProject) return;
+    if (!projectId) return;
     let cancelled = false;
     API.ws.disconnect();
 
-    async function refreshWorkspace() {
-      if (!currentProject) {
-        return;
-      }
-      try {
-        const [snapshot, workerState] = await Promise.all([
-          API.workspace.get(currentProject.id),
-          API.workers.getStatus(currentProject.id).catch(() => []),
-        ]);
-        if (!cancelled) {
-          hydrateWorkspace({ ...snapshot, workers: workerState });
-        }
-      } catch (error) {
-        console.error('Failed to hydrate workspace:', error);
-      }
-    }
-
-    refreshWorkspace();
-    API.ws.connect(currentProject.id);
+    void refreshWorkspace();
+    API.ws.connect(projectId);
     const offWorkspaceUpdate = API.ws.on<WorkspaceSnapshot>('workspace_update', (snapshot) => {
-      hydrateWorkspace(snapshot);
+      if (!cancelled) {
+        hydrateWorkspace(snapshot);
+      }
     });
     const offWorkerSnapshot = API.ws.on<WorkerStatus[]>('worker_snapshot', (workerState) => {
-      setWorkers(workerState);
+      if (!cancelled) {
+        setWorkers(workerState);
+      }
     });
     const offProjectUpdate = API.ws.on('project_update', () => {
       void refreshWorkspace();
@@ -51,17 +59,40 @@ export function ProjectWorkspace() {
     const offWorkerUpdate = API.ws.on('worker_update', () => {
       void refreshWorkspace();
     });
-    const interval = window.setInterval(refreshWorkspace, 15000);
+    const offFrameGenerated = API.ws.on('frame_generated', () => {
+      void refreshWorkspace();
+    });
+    const offStoryboardGenerated = API.ws.on('storyboard_generated', () => {
+      void refreshWorkspace();
+    });
+    const offEntityImageGenerated = API.ws.on('entity_image_generated', () => {
+      void refreshWorkspace();
+    });
     return () => {
       cancelled = true;
       offWorkspaceUpdate();
       offWorkerSnapshot();
       offProjectUpdate();
       offWorkerUpdate();
+      offFrameGenerated();
+      offStoryboardGenerated();
+      offEntityImageGenerated();
       API.ws.disconnect();
+    };
+  }, [projectId, refreshWorkspace, hydrateWorkspace, setWorkers]);
+
+  useEffect(() => {
+    if (!projectId) {
+      return;
+    }
+    const interval = window.setInterval(() => {
+      void refreshWorkspace();
+    }, refreshIntervalMs);
+
+    return () => {
       window.clearInterval(interval);
     };
-  }, [currentProject, hydrateWorkspace, setWorkers]);
+  }, [projectId, refreshIntervalMs, refreshWorkspace]);
 
   if (!currentProject) {
     return (
@@ -100,7 +131,6 @@ export function ProjectWorkspace() {
         </div>
         <TimelineBar />
       </div>
-      {showWorkers && <WorkerOverlay />}
     </div>
   );
 }

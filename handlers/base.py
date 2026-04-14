@@ -458,9 +458,16 @@ class BaseHandler(ABC):
                     last_error = prediction
                     continue
 
-                # Non-transient → stop chain, return the error
+                # Keep walking the configured Banana-family chain on any
+                # terminal model failure. xAI rescue should only happen after
+                # nano-banana-2 and nano-banana-pro have both had a chance.
+                logger.warning(
+                    "Model %s failed with %s, trying next in chain",
+                    model,
+                    detail["failure_type"],
+                )
                 last_error = prediction
-                break
+                continue
 
             except RetryError:
                 logger.warning(
