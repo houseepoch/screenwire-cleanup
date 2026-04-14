@@ -10,6 +10,7 @@ Usage:
 
 import argparse
 import json
+import os
 import shutil
 import sys
 from datetime import datetime, timezone
@@ -22,9 +23,9 @@ from screenwire_contracts import (
     normalize_frame_budget,
 )
 
-APP_DIR = Path(__file__).resolve().parent
-PROJECTS_DIR = APP_DIR / "projects"
-TEMPLATE_DIR = PROJECTS_DIR / "_template"
+APP_DIR = Path(os.getenv("SCREENWIRE_APP_ROOT", Path(__file__).resolve().parent)).resolve()
+PROJECTS_DIR = Path(os.getenv("SCREENWIRE_PROJECTS_ROOT", APP_DIR / "projects")).resolve()
+TEMPLATE_DIR = Path(os.getenv("SCREENWIRE_TEMPLATE_ROOT", PROJECTS_DIR / "_template")).resolve()
 
 # ---------------------------------------------------------------------------
 # Creative freedom tiers

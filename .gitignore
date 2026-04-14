@@ -11,6 +11,9 @@ dist/
 apps/*/output/
 apps/*/smoke/artifacts/
 apps/*/smoke/last-run.json
+apps/morpheus-studio/build/
+apps/morpheus-studio/release/
+.playwright-cli/
 
 # Project data (all generated content lives inside projects/)
 projects/*/

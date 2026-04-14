@@ -5,15 +5,54 @@ import net from 'node:net';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
+const REQUIRED_PYTHON_MODULES = ['fastapi', 'uvicorn', 'watchdog', 'tenacity', 'dotenv', 'httpx', 'aiofiles', 'pydantic', 'openai', 'PIL', 'multipart'];
+
+function prependToPath(prefix, currentValue = '') {
+  return currentValue ? `${prefix}${path.delimiter}${currentValue}` : prefix;
+}
+
+function runCommand(bin, args, options = {}) {
+  return new Promise((resolve) => {
+    let stdout = '';
+    let stderr = '';
+    const child = spawn(bin, args, {
+      ...options,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: options.windowsHide ?? true,
+    });
+
+    child.stdout?.on('data', (chunk) => {
+      stdout += chunk.toString();
+    });
+    child.stderr?.on('data', (chunk) => {
+      stderr += chunk.toString();
+    });
+    child.once('error', (error) => {
+      resolve({ ok: false, stdout, stderr, error });
+    });
+    child.once('close', (code) => {
+      resolve({ ok: code === 0, code, stdout, stderr });
+    });
+  });
+}
+
 export class DesktopRuntime {
-  constructor({ repoRoot, appRoot, pythonBin = process.env.SW_PYTHON_BIN || 'python3', preferredBackendPort = Number(process.env.SW_ELECTRON_PORT || '8000') }) {
-    this.repoRoot = repoRoot;
+  constructor({ backendRoot, appRoot, projectsRoot, pythonBin = process.env.SW_PYTHON_BIN || '', pythonArgs = process.env.SW_PYTHON_ARGS || '', preferredBackendPort = Number(process.env.SW_ELECTRON_PORT || '8000') }) {
+    this.backendRoot = backendRoot;
     this.appRoot = appRoot;
-    this.projectsRoot = path.join(repoRoot, 'projects');
-    this.createProjectScript = path.join(repoRoot, 'create_project.py');
-    this.projectCoverScript = path.join(repoRoot, 'generate_project_cover.py');
-    this.serverScript = path.join(repoRoot, 'server.py');
-    this.pythonBin = pythonBin;
+    this.projectsRoot = projectsRoot;
+    this.templateRoot = path.join(backendRoot, 'projects', '_template');
+    this.createProjectScript = path.join(backendRoot, 'create_project.py');
+    this.projectCoverScript = path.join(backendRoot, 'generate_project_cover.py');
+    this.serverScript = path.join(backendRoot, 'server.py');
+    this.requirementsFile = path.join(backendRoot, 'requirements.txt');
+    this.configuredPythonCommand = pythonBin
+      ? {
+          bin: pythonBin,
+          args: pythonArgs.split(/\s+/).filter(Boolean),
+        }
+      : null;
+    this.pythonCommand = null;
     this.backendPort = preferredBackendPort;
     this.backendBaseUrl = `http://127.0.0.1:${this.backendPort}`;
     this.backendProc = null;
@@ -21,6 +60,84 @@ export class DesktopRuntime {
     this.pendingProjectCoverJobs = new Map();
     this.projectCoverRetryAt = new Map();
     this.projectCoverCooldownMs = 15 * 60 * 1000;
+  }
+
+  buildPythonEnv(extraEnv = {}) {
+    return {
+      ...process.env,
+      PYTHONUNBUFFERED: '1',
+      SCREENWIRE_APP_ROOT: this.backendRoot,
+      SCREENWIRE_PROJECTS_ROOT: this.projectsRoot,
+      SCREENWIRE_TEMPLATE_ROOT: this.templateRoot,
+      PYTHONPATH: prependToPath(this.backendRoot, process.env.PYTHONPATH || ''),
+      ...extraEnv,
+    };
+  }
+
+  getPythonCandidates() {
+    if (this.configuredPythonCommand) {
+      return [this.configuredPythonCommand];
+    }
+    if (process.platform === 'win32') {
+      return [
+        { bin: 'py', args: ['-3'] },
+        { bin: 'python', args: [] },
+        { bin: 'python3', args: [] },
+      ];
+    }
+    return [
+      { bin: 'python3', args: [] },
+      { bin: 'python', args: [] },
+    ];
+  }
+
+  formatPythonInstallHint() {
+    if (!existsSync(this.requirementsFile)) {
+      return 'Install Python 3.11+ and ensure the ScreenWire backend requirements are available.';
+    }
+    return `Install Python 3.11+ and install backend dependencies with: python -m pip install -r "${this.requirementsFile}"`;
+  }
+
+  async resolvePythonCommand() {
+    if (this.pythonCommand) {
+      return this.pythonCommand;
+    }
+
+    const checkScript = `${REQUIRED_PYTHON_MODULES.map((name) => `import ${name}`).join('; ')}; print("screenwire-python-ok")`;
+    let lastFailure = '';
+    for (const candidate of this.getPythonCandidates()) {
+      const result = await runCommand(candidate.bin, [...candidate.args, '-c', checkScript], {
+        cwd: this.backendRoot,
+        env: this.buildPythonEnv(),
+      });
+      if (result.ok) {
+        this.pythonCommand = candidate;
+        return candidate;
+      }
+      lastFailure = result.stderr?.trim() || result.error?.message || result.stdout?.trim() || `Unable to launch ${candidate.bin}`;
+    }
+
+    throw new Error(`Python runtime unavailable. ${this.formatPythonInstallHint()}${lastFailure ? `\n\nLast failure: ${lastFailure}` : ''}`);
+  }
+
+  async collectRuntimeIssues() {
+    const issues = [];
+    if (!existsSync(this.serverScript) || !existsSync(this.createProjectScript) || !existsSync(this.templateRoot)) {
+      issues.push(`Packaged backend resources are incomplete under ${this.backendRoot}. Reinstall the app.`);
+    }
+    try {
+      await this.resolvePythonCommand();
+    } catch (error) {
+      issues.push(error instanceof Error ? error.message : String(error));
+    }
+    const ffmpegCheck = await runCommand('ffmpeg', ['-version'], {
+      cwd: this.backendRoot,
+      env: process.env,
+    });
+    if (!ffmpegCheck.ok) {
+      issues.push('ffmpeg is not available on PATH. Install ffmpeg before generating exports.');
+    }
+    return issues;
   }
 
   setBackendPort(port) {
@@ -191,21 +308,24 @@ export class DesktopRuntime {
 
     try {
       this.projectCoverRetryAt.set(projectId, now + this.projectCoverCooldownMs);
-      const job = spawn(this.pythonBin, [this.projectCoverScript, '--project', projectId], {
-        cwd: this.repoRoot,
-        env: {
-          ...process.env,
-          PYTHONUNBUFFERED: '1',
-        },
-        stdio: 'ignore',
-        windowsHide: true,
-      });
-      this.pendingProjectCoverJobs.set(projectId, job);
-      const cleanup = () => {
-        this.pendingProjectCoverJobs.delete(projectId);
-      };
-      job.once('close', cleanup);
-      job.once('error', cleanup);
+      void this.resolvePythonCommand()
+        .then((pythonCommand) => {
+          const job = spawn(pythonCommand.bin, [...pythonCommand.args, this.projectCoverScript, '--project', projectId], {
+            cwd: this.backendRoot,
+            env: this.buildPythonEnv(),
+            stdio: 'ignore',
+            windowsHide: true,
+          });
+          this.pendingProjectCoverJobs.set(projectId, job);
+          const cleanup = () => {
+            this.pendingProjectCoverJobs.delete(projectId);
+          };
+          job.once('close', cleanup);
+          job.once('error', cleanup);
+        })
+        .catch((error) => {
+          console.error(`Failed to queue project cover generation for ${projectId}:`, error);
+        });
     } catch (error) {
       console.error(`Failed to queue project cover generation for ${projectId}:`, error);
     }
@@ -319,15 +439,15 @@ export class DesktopRuntime {
       throw new Error(`Project not found: ${projectId}`);
     }
 
+    const pythonCommand = await this.resolvePythonCommand();
     this.setBackendPort(await this.findAvailablePort(Number(process.env.SW_ELECTRON_PORT || '8000')));
 
-    this.backendProc = spawn(this.pythonBin, [this.serverScript], {
-      cwd: this.repoRoot,
-      env: {
-        ...process.env,
+    this.backendProc = spawn(pythonCommand.bin, [...pythonCommand.args, this.serverScript], {
+      cwd: this.backendRoot,
+      env: this.buildPythonEnv({
         PROJECT_DIR: projectDir,
         SW_PORT: String(this.backendPort),
-      },
+      }),
       stdio: 'pipe',
     });
 
@@ -368,8 +488,10 @@ export class DesktopRuntime {
   async createProject(payload) {
     const projectId = this.slugifyProjectId(payload.name);
     await mkdir(this.projectsRoot, { recursive: true });
+    const pythonCommand = await this.resolvePythonCommand();
 
     const args = [
+      ...pythonCommand.args,
       this.createProjectScript,
       '--name',
       payload.name,
@@ -387,10 +509,10 @@ export class DesktopRuntime {
     }
 
     await new Promise((resolve, reject) => {
-      const proc = spawn(this.pythonBin, args, {
-        cwd: this.repoRoot,
+      const proc = spawn(pythonCommand.bin, args, {
+        cwd: this.backendRoot,
         stdio: 'pipe',
-        env: process.env,
+        env: this.buildPythonEnv(),
       });
       let stderr = '';
       proc.stderr.on('data', (chunk) => {

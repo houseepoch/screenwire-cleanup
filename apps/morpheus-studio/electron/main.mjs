@@ -11,7 +11,33 @@ const repoRoot = path.resolve(appRoot, '..', '..');
 const devServerUrl = process.env.VITE_DEV_SERVER_URL || 'http://127.0.0.1:5173';
 
 let mainWindow = null;
-const runtime = new DesktopRuntime({ repoRoot, appRoot });
+let runtime = null;
+
+function getRuntime() {
+  if (!runtime) {
+    throw new Error('Desktop runtime not initialized');
+  }
+  return runtime;
+}
+
+function resolveProjectsRoot() {
+  const override = process.env.SW_PROJECTS_ROOT?.trim();
+  if (override) {
+    return path.resolve(override);
+  }
+  if (!app.isPackaged) {
+    return path.join(repoRoot, 'projects');
+  }
+  const documentsRoot = app.getPath('documents') || app.getPath('userData');
+  return path.join(documentsRoot, 'ScreenWire Projects');
+}
+
+function resolveBackendRoot() {
+  if (!app.isPackaged) {
+    return repoRoot;
+  }
+  return path.join(process.resourcesPath, 'backend');
+}
 
 async function createProjectWindow() {
   mainWindow = new BrowserWindow({
@@ -43,27 +69,27 @@ async function createProjectWindow() {
 }
 
 ipcMain.handle('screenwire:list-projects', async () => {
-  return runtime.listProjects();
+  return getRuntime().listProjects();
 });
 
 ipcMain.handle('screenwire:create-project', async (_event, payload) => {
-  return runtime.createProject(payload);
+  return getRuntime().createProject(payload);
 });
 
 ipcMain.handle('screenwire:select-project', async (_event, projectId) => {
-  return runtime.startBackend(projectId);
+  return getRuntime().startBackend(projectId);
 });
 
 ipcMain.handle('screenwire:return-to-projects', async () => {
-  return runtime.returnToProjects();
+  return getRuntime().returnToProjects();
 });
 
 ipcMain.handle('screenwire:get-backend-state', async () => {
-  return runtime.getBackendState();
+  return getRuntime().getBackendState();
 });
 
 ipcMain.handle('screenwire:open-project-folder', async (_event, projectId) => {
-  const targetDir = path.join(runtime.projectsRoot, projectId);
+  const targetDir = path.join(getRuntime().projectsRoot, projectId);
   if (!existsSync(targetDir)) {
     throw new Error(`Project not found: ${projectId}`);
   }
@@ -81,6 +107,24 @@ ipcMain.handle('screenwire:choose-file', async () => {
 });
 
 app.whenReady().then(async () => {
+  runtime = new DesktopRuntime({
+    backendRoot: resolveBackendRoot(),
+    appRoot,
+    projectsRoot: resolveProjectsRoot(),
+  });
+  if (app.isPackaged) {
+    const issues = await runtime.collectRuntimeIssues();
+    if (issues.length > 0) {
+      await dialog.showMessageBox({
+        type: 'warning',
+        title: 'Additional setup required',
+        message: 'ScreenWire Studio needs local runtime tools before project generation can start.',
+        detail: `${issues.join('\n')}\n\nOnce the required tools are installed, relaunch the app.`,
+        buttons: ['Continue'],
+        defaultId: 0,
+      });
+    }
+  }
   await createProjectWindow();
 
   app.on('activate', async () => {
@@ -91,7 +135,7 @@ app.whenReady().then(async () => {
 });
 
 app.on('window-all-closed', async () => {
-  await runtime.stopBackend();
+  await runtime?.stopBackend();
   if (process.platform !== 'darwin') {
     app.quit();
   }

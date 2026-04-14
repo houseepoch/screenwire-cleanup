@@ -29,7 +29,8 @@ from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
-load_dotenv(Path(__file__).resolve().parent / ".env")
+APP_DIR = Path(os.getenv("SCREENWIRE_APP_ROOT", Path(__file__).resolve().parent)).resolve()
+load_dotenv(APP_DIR / ".env")
 
 from graph.feature_flags import ENABLE_STORYBOARD_GUIDANCE
 from llm.xai_client import (
@@ -120,8 +121,7 @@ signal.signal(signal.SIGTERM, _shutdown_handler)
 # Configuration
 # ---------------------------------------------------------------------------
 
-APP_DIR = Path(__file__).resolve().parent
-PROJECTS_DIR = APP_DIR / "projects"
+PROJECTS_DIR = Path(os.getenv("SCREENWIRE_PROJECTS_ROOT", APP_DIR / "projects")).resolve()
 PROJECT_DIR: Path | None = None  # Set in main() via --project
 PROMPTS_DIR = APP_DIR / "agent_prompts"
 SKILLS_DIR = APP_DIR / "skills"

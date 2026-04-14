@@ -6,5 +6,7 @@ python-dotenv
 httpx
 aiofiles
 pydantic
+pillow
+python-multipart
 openai>=1.35.0
 xai-sdk

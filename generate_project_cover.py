@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 import sys
 
@@ -20,8 +21,9 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    repo_root = Path(__file__).resolve().parent
-    project_dir = repo_root / "projects" / args.project
+    repo_root = Path(os.getenv("SCREENWIRE_APP_ROOT", Path(__file__).resolve().parent)).resolve()
+    projects_root = Path(os.getenv("SCREENWIRE_PROJECTS_ROOT", repo_root / "projects")).resolve()
+    project_dir = projects_root / args.project
     if not project_dir.exists():
         print(f"Project not found: {project_dir}", file=sys.stderr)
         return 1
