@@ -1,0 +1,59 @@
+name: Build Desktop Installers
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "desktop-v*"
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            command: npm run dist:linux
+          - os: windows-latest
+            command: npm run dist:win
+          - os: macos-latest
+            command: npm run dist:mac
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: apps/morpheus-studio/package-lock.json
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install frontend dependencies
+        working-directory: apps/morpheus-studio
+        run: npm ci
+
+      - name: Install icon generation dependency
+        run: python -m pip install pillow
+
+      - name: Generate installer icons
+        working-directory: apps/morpheus-studio
+        run: python scripts/generate_installer_icons.py
+
+      - name: Build desktop installers
+        working-directory: apps/morpheus-studio
+        run: ${{ matrix.command }}
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenwire-${{ runner.os }}-installers
+          path: apps/morpheus-studio/release/*
