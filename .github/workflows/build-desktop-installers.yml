@@ -20,10 +20,19 @@ jobs:
             command: npm run dist:mac
 
     runs-on: ${{ matrix.os }}
+    env:
+      REPLICATE_API_TOKEN: ${{ secrets.REPLICATE_API_TOKEN }}
+      XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+
+      - name: Verify required backend secrets
+        shell: bash
+        run: |
+          test -n "$REPLICATE_API_TOKEN"
+          test -n "$XAI_API_KEY"
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
