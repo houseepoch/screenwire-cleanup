@@ -142,13 +142,11 @@ export function Navigation() {
       </div>
 
       <div className="nav-center">
-        {!showProjectChrome || !currentProject ? (
-          <div className="nav-runtime-pill">Local desktop orchestration</div>
-        ) : (
+        {showProjectChrome && currentProject ? (
           <div className="nav-runtime-pill">
             {PROJECT_STATUS_LABELS[currentProject.status] ?? currentProject.status}
           </div>
-        )}
+        ) : null}
       </div>
 
       <div className="nav-actions">
@@ -156,12 +154,12 @@ export function Navigation() {
           {!showProjectChrome || !currentProject ? (
             <button
               className="btn-accent nav-create-btn"
-              aria-label="Create new project"
-              title="Create new project"
+              aria-label="Apply to be a Beta Tester"
+              title="Apply to be a Beta Tester"
               onClick={handleStartCreating}
             >
               <Plus size={16} />
-              New Project
+              Beta Access
             </button>
           ) : (
             <>

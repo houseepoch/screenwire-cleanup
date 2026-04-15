@@ -37,10 +37,11 @@ function runCommand(bin, args, options = {}) {
 }
 
 export class DesktopRuntime {
-  constructor({ backendRoot, appRoot, projectsRoot, pythonBin = process.env.SW_PYTHON_BIN || '', pythonArgs = process.env.SW_PYTHON_ARGS || '', preferredBackendPort = Number(process.env.SW_ELECTRON_PORT || '8000') }) {
+  constructor({ backendRoot, appRoot, projectsRoot, isPackaged = false, pythonBin = process.env.SW_PYTHON_BIN || '', pythonArgs = process.env.SW_PYTHON_ARGS || '', preferredBackendPort = Number(process.env.SW_ELECTRON_PORT || '8000') }) {
     this.backendRoot = backendRoot;
     this.appRoot = appRoot;
     this.projectsRoot = projectsRoot;
+    this.isPackaged = isPackaged;
     this.templateRoot = path.join(backendRoot, 'projects', '_template');
     this.createProjectScript = path.join(backendRoot, 'create_project.py');
     this.projectCoverScript = path.join(backendRoot, 'generate_project_cover.py');
@@ -60,6 +61,21 @@ export class DesktopRuntime {
     this.pendingProjectCoverJobs = new Map();
     this.projectCoverRetryAt = new Map();
     this.projectCoverCooldownMs = 15 * 60 * 1000;
+  }
+
+  killBackendProcess(proc, signal) {
+    if (!proc) {
+      return;
+    }
+    if (process.platform !== 'win32' && typeof proc.pid === 'number') {
+      try {
+        process.kill(-proc.pid, signal);
+        return;
+      } catch {
+        // Fall through to direct child kill if the process group is gone.
+      }
+    }
+    proc.kill(signal);
   }
 
   buildPythonEnv(extraEnv = {}) {
@@ -409,7 +425,7 @@ export class DesktopRuntime {
     }
 
     const proc = this.backendProc;
-    proc.kill('SIGTERM');
+    this.killBackendProcess(proc, 'SIGTERM');
 
     await new Promise((resolve) => {
       proc.once('exit', () => {
@@ -420,7 +436,7 @@ export class DesktopRuntime {
       });
       setTimeout(() => {
         if (proc.exitCode === null && !proc.killed) {
-          proc.kill('SIGKILL');
+          this.killBackendProcess(proc, 'SIGKILL');
         }
         resolve();
       }, 5000);
@@ -442,13 +458,29 @@ export class DesktopRuntime {
     const pythonCommand = await this.resolvePythonCommand();
     this.setBackendPort(await this.findAvailablePort(Number(process.env.SW_ELECTRON_PORT || '8000')));
 
-    this.backendProc = spawn(pythonCommand.bin, [...pythonCommand.args, this.serverScript], {
+    const useReloadingBackend = !this.isPackaged && process.env.SW_DISABLE_BACKEND_RELOAD !== '1';
+    const backendArgs = useReloadingBackend
+      ? [
+          ...pythonCommand.args,
+          '-m',
+          'uvicorn',
+          'server:app',
+          '--host',
+          '127.0.0.1',
+          '--port',
+          String(this.backendPort),
+          '--reload',
+        ]
+      : [...pythonCommand.args, this.serverScript];
+
+    this.backendProc = spawn(pythonCommand.bin, backendArgs, {
       cwd: this.backendRoot,
       env: this.buildPythonEnv({
         PROJECT_DIR: projectDir,
         SW_PORT: String(this.backendPort),
       }),
       stdio: 'pipe',
+      detached: process.platform !== 'win32',
     });
 
     const procRef = this.backendProc;

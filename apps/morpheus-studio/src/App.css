@@ -337,6 +337,14 @@
   padding: 0 20px 32px;
 }
 
+.project-directory-invite {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  color: var(--accent-strong);
+}
+
 .hero-section {
   position: relative;
   min-height: min(82vh, 760px);
@@ -931,6 +939,14 @@
   margin-top: 10px;
 }
 
+.project-directory-contact-link {
+  color: var(--accent-strong);
+}
+
+.project-directory-contact-link:hover {
+  color: var(--text-primary);
+}
+
 .project-directory-actions {
   display: flex;
   flex-wrap: wrap;
@@ -1503,6 +1519,18 @@
 .modal-subtitle {
   color: var(--text-secondary);
   font-size: 14px;
+}
+
+@media (min-width: 981px) {
+  .navigation {
+    left: 64px;
+    right: 64px;
+  }
+
+  .home-screen {
+    padding-left: 64px;
+    padding-right: 64px;
+  }
 }
 
 .modal-form-group {

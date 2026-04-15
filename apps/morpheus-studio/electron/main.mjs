@@ -111,6 +111,7 @@ app.whenReady().then(async () => {
     backendRoot: resolveBackendRoot(),
     appRoot,
     projectsRoot: resolveProjectsRoot(),
+    isPackaged: app.isPackaged,
   });
   if (app.isPackaged) {
     const issues = await runtime.collectRuntimeIssues();
