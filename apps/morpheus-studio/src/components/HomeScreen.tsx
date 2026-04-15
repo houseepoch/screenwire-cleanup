@@ -5,9 +5,11 @@ import {
   ChevronDown,
   ChevronUp,
   Clock3,
+  FolderOpen,
   Plus,
   Sparkles,
 } from 'lucide-react';
+import { HowItWorksModal } from './HowItWorksModal';
 import { desktopService } from '../services';
 import type { Project } from '../types';
 
@@ -28,6 +30,18 @@ const PROJECT_COVERS = [
   '/timeline-03.jpg',
 ];
 
+const PROJECT_STATUS_LABELS: Record<Project['status'], string> = {
+  draft: 'Draft',
+  onboarding: 'Setup',
+  skeleton_review: 'Building Review Pack',
+  generating_assets: 'Building Review Pack',
+  reference_review: 'Reference Review',
+  generating_frames: 'Generating Frames',
+  timeline_review: 'Timeline Review',
+  generating_video: 'Rendering Video',
+  complete: 'Complete',
+};
+
 function getStoredProjectId(key: string): string | null {
   if (typeof window === 'undefined') {
     return null;
@@ -36,13 +50,13 @@ function getStoredProjectId(key: string): string | null {
 }
 
 export function HomeScreen() {
-  const { projects, selectProject } = useMorpheusStore();
+  const { projects, selectProject, setCurrentView } = useMorpheusStore();
   const [showNewProjectModal, setShowNewProjectModal] = useState(false);
-  const [authEmail, setAuthEmail] = useState('');
-  const [emailIntent, setEmailIntent] = useState<'newsletter' | 'beta'>('beta');
+  const [showHowItWorks, setShowHowItWorks] = useState(false);
+  const [newProjectName, setNewProjectName] = useState('');
+  const [newProjectDescription, setNewProjectDescription] = useState('');
   const [displayProjects, setDisplayProjects] = useState<Project[]>(projects);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [modalError, setModalError] = useState<string | null>(null);
   const [showAllProjects, setShowAllProjects] = useState(false);
   const [lastOpenedProjectId, setLastOpenedProjectId] = useState<string | null>(() =>
     getStoredProjectId(LAST_OPENED_PROJECT_KEY),
@@ -62,16 +76,9 @@ export function HomeScreen() {
     }
   };
 
-  const openCreateProjectModal = (intent: 'newsletter' | 'beta' = 'beta') => {
-    setModalError(null);
-    setEmailIntent(intent);
+  const openCreateProjectModal = () => {
+    setActionError(null);
     setShowNewProjectModal(true);
-  };
-
-  const closeCreateProjectModal = () => {
-    setShowNewProjectModal(false);
-    setAuthEmail('');
-    setModalError(null);
   };
 
   useEffect(() => {
@@ -141,31 +148,48 @@ export function HomeScreen() {
   }, [showSplash]);
 
   const handleCreateProject = async () => {
-    setModalError(null);
-    const email = authEmail.trim();
-    if (!email) {
+    setActionError(null);
+    if (!newProjectName.trim()) {
       return;
     }
-    const isValidEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
-    if (!isValidEmail) {
-      setModalError('Enter a valid email address.');
+    if (desktopService.isElectronHost() && !desktopService.isAvailable()) {
+      setActionError('Desktop bridge unavailable. Fully restart Morpheus and try again.');
       return;
     }
-
-    const subject =
-      emailIntent === 'newsletter'
-        ? 'ScreenWire newsletter signup'
-        : 'ScreenWire beta tester application';
-    const body =
-      emailIntent === 'newsletter'
-        ? `Please add ${email} to the ScreenWire newsletter.`
-        : `Please use ${email} to log in or register me for the ScreenWire beta.`;
-
-    if (typeof window !== 'undefined') {
-      window.location.href = `mailto:info@houseepoch.com?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    if (desktopService.isAvailable()) {
+      try {
+        const created = await desktopService.createProject({
+          name: newProjectName,
+          description: newProjectDescription,
+          creativityLevel: 'balanced',
+          frameBudget: 'auto',
+          mediaStyle: 'live_clear',
+        });
+        if (!created) {
+          setActionError('Project creation returned no project. Restart Morpheus and try again.');
+          return;
+        }
+        const selected = await desktopService.selectProject(created.id);
+        if (!selected) {
+          setActionError('Project backend failed to start. Check the local backend logs and try again.');
+          return;
+        }
+        rememberProject(created.id);
+        setDisplayProjects((prev) => [created, ...prev.filter((project) => project.id !== created.id)]);
+        selectProject(created);
+        setCurrentView('onboarding');
+      } catch (error) {
+        console.error('Failed to create desktop project:', error);
+        setActionError(error instanceof Error ? error.message : 'Failed to create project.');
+        return;
+      }
+    } else {
+      setActionError('Desktop backend is unavailable. Launch Morpheus through Electron to create a project.');
+      return;
     }
-
-    closeCreateProjectModal();
+    setShowNewProjectModal(false);
+    setNewProjectName('');
+    setNewProjectDescription('');
   };
 
   const handleProjectClick = async (project: Project) => {
@@ -235,6 +259,14 @@ export function HomeScreen() {
     project.description ||
     'Open the workspace to continue shaping cast, scenes, and timeline output.';
 
+  const activeProjects = sortedProjects.filter((project) => project.status !== 'complete').length;
+  const completedProjects = sortedProjects.filter((project) => project.status === 'complete').length;
+  const averageProgress = sortedProjects.length
+    ? Math.round(
+        sortedProjects.reduce((sum, project) => sum + project.progress, 0) / sortedProjects.length,
+      )
+    : 0;
+
   const renderProjectCard = (project: Project, index: number) => (
     <button
       type="button"
@@ -246,6 +278,20 @@ export function HomeScreen() {
       <div className="directory-project-card-cover">
         <img src={coverForProject(project, index)} alt={project.name} className="directory-project-card-image" />
         <div className="directory-project-card-gradient" />
+        <div className="directory-project-card-status">
+          <span
+            className="status-dot"
+            style={{
+              background:
+                project.status === 'complete'
+                  ? 'var(--success)'
+                  : project.status.includes('generating')
+                    ? 'var(--accent)'
+                    : 'var(--warning)',
+            }}
+          />
+          <span>{PROJECT_STATUS_LABELS[project.status]}</span>
+        </div>
       </div>
       <div className="directory-project-card-body">
         <div className="directory-project-card-head">
@@ -270,10 +316,10 @@ export function HomeScreen() {
           </div>
           <div className="home-splash-vignette" />
           <div className="home-splash-copy">
-            <span className="hero-eyebrow">Invite Only:</span>
-            <h1 className="home-splash-title">Natural Language Production Suite.</h1>
+            <span className="hero-eyebrow">Morpheus Studio</span>
+            <h1 className="home-splash-title">Build the visual world before the first final render.</h1>
             <p className="home-splash-subtitle">
-              Longform Video Generation with natural language.
+              Loading your project directory, recent work, and cover art.
             </p>
             <div className="home-splash-progress" aria-hidden="true">
               <span className="home-splash-progress-bar" />
@@ -285,13 +331,10 @@ export function HomeScreen() {
       <section className={`project-directory ${showSplash ? 'is-obscured' : 'is-ready'}`.trim()}>
         <div className="project-directory-header">
           <div className="project-directory-title-block">
-            <p className="project-directory-invite">Invite Only:</p>
-            <h1 className="project-directory-title">Natural Language Production Suite.</h1>
+            <span className="section-kicker">Project Directory</span>
+            <h1 className="project-directory-title">Projects first, workspace one click away.</h1>
             <p className="project-directory-description">
-              Longform Video Generation with natural language.
-            </p>
-            <p className="project-directory-description">
-              To stay up to date with roadmap and developer note releases subscribe to our newsletter and be the first to know.
+              The latest project stays on top, recent productions stay centered, and the full directory opens only when you want it.
             </p>
           </div>
           <div className="project-directory-actions">
@@ -299,19 +342,19 @@ export function HomeScreen() {
               type="button"
               className="btn-secondary project-directory-action"
               data-testid="home-see-how-it-works"
-              onClick={() => openCreateProjectModal('newsletter')}
+              onClick={() => setShowHowItWorks(true)}
             >
               <Sparkles size={15} />
-              Subscribe to newsletter
+              How it works
             </button>
             <button
               type="button"
               className="btn-accent project-directory-action"
               data-testid="home-start-creating"
-              onClick={() => openCreateProjectModal('beta')}
+              onClick={openCreateProjectModal}
             >
               <Plus size={15} />
-              Apply to be a Beta Tester
+              New project
             </button>
           </div>
         </div>
@@ -336,6 +379,14 @@ export function HomeScreen() {
                   className="directory-feature-image"
                 />
                 <div className="directory-feature-gradient" />
+                <div className="directory-feature-badges">
+                  <span className="directory-feature-chip">
+                    {featuredProject.id === lastOpenedProjectId ? 'Last opened' : 'Latest update'}
+                  </span>
+                  <span className="directory-feature-chip is-muted">
+                    {PROJECT_STATUS_LABELS[featuredProject.status]}
+                  </span>
+                </div>
               </div>
               <div className="directory-feature-body">
                 <span className="directory-feature-kicker">Resume first</span>
@@ -357,43 +408,43 @@ export function HomeScreen() {
             </button>
 
             <aside className="directory-stats-panel glass-panel">
-              <h2 className="directory-section-title">Apply to be a Beta Tester.</h2>
-              <p className="directory-section-description">
-                To stay up to date with roadmap and developer note releases subscribe to our newsletter and be the first to know.
-              </p>
-              <p className="directory-section-description">
-                Want to learn more? Contact us.{' '}
-                <a className="project-directory-contact-link" href="mailto:info@houseepoch.com">
-                  info@houseepoch.com
-                </a>
-              </p>
-              <div className="project-directory-actions">
-                <button
-                  type="button"
-                  className="btn-secondary project-directory-action"
-                  onClick={() => openCreateProjectModal('newsletter')}
-                >
-                  <Sparkles size={15} />
-                  Subscribe to newsletter
-                </button>
-                <button
-                  type="button"
-                  className="btn-accent project-directory-action"
-                  onClick={() => openCreateProjectModal('beta')}
-                >
-                  <Plus size={15} />
-                  Apply to be a Beta Tester
-                </button>
+              <span className="section-kicker">Overview</span>
+              <div className="directory-stats-grid">
+                <div className="directory-stat">
+                  <strong>{sortedProjects.length}</strong>
+                  <span>projects tracked</span>
+                </div>
+                <div className="directory-stat">
+                  <strong>{activeProjects}</strong>
+                  <span>in progress</span>
+                </div>
+                <div className="directory-stat">
+                  <strong>{completedProjects}</strong>
+                  <span>completed</span>
+                </div>
+                <div className="directory-stat">
+                  <strong>{averageProgress}%</strong>
+                  <span>average readiness</span>
+                </div>
               </div>
+              <button
+                type="button"
+                className="directory-folder-link"
+                onClick={() => void handleProjectClick(featuredProject)}
+              >
+                <FolderOpen size={15} />
+                Jump back into the last opened project
+              </button>
             </aside>
           </div>
         ) : (
           <div className="directory-empty-state glass-panel">
-            <h2>Invite Only.</h2>
-            <p>Natural Language Production Suite. Longform Video Generation with natural language.</p>
-            <button type="button" className="btn-accent" onClick={() => openCreateProjectModal('beta')}>
+            <span className="workspace-empty-kicker">Fresh directory</span>
+            <h2>No projects yet.</h2>
+            <p>Start a project and Morpheus will generate the workspace, directory cover art, and the first review pack from here.</p>
+            <button type="button" className="btn-accent" onClick={openCreateProjectModal}>
               <Plus size={15} />
-              Apply to be a Beta Tester
+              Create the first project
             </button>
           </div>
         )}
@@ -401,6 +452,7 @@ export function HomeScreen() {
         <section className="directory-recent-section glass-panel">
           <div className="directory-section-header">
             <div>
+              <span className="section-kicker">Recent Projects</span>
               <h2 className="directory-section-title">Recent projects stay centered.</h2>
               <p className="directory-section-description">
                 Keep the current work visible without scrolling through duplicate layouts.
@@ -436,37 +488,46 @@ export function HomeScreen() {
           data-testid="create-project-modal"
           onClick={(event) => {
             if (event.target === event.currentTarget) {
-              closeCreateProjectModal();
+              setShowNewProjectModal(false);
             }
           }}
         >
           <div className="modal-content create-project-modal" data-testid="create-project-dialog">
             <div className="modal-header">
-              <h3 className="modal-title">Enter Email to login in or register.</h3>
+              <h3 className="modal-title">Create New Project</h3>
               <p className="modal-subtitle">
-                Want to learn more? Contact us.{' '}
-                <a className="project-directory-contact-link" href="mailto:info@houseepoch.com">
-                  info@houseepoch.com
-                </a>
+                Start your creative journey. You can always change these details later.
               </p>
             </div>
 
-            {modalError ? (
+            {actionError ? (
               <div className="inline-alert" data-testid="create-project-error">
-                {modalError}
+                {actionError}
               </div>
             ) : null}
 
             <div className="modal-form-group">
-              <label className="field-label">Email</label>
+              <label className="field-label">Project Name *</label>
               <input
-                type="email"
+                type="text"
                 className="input-field"
                 data-testid="create-project-name"
-                placeholder="you@company.com"
-                value={authEmail}
-                onChange={(event) => setAuthEmail(event.target.value)}
+                placeholder="e.g., The Lighthouse"
+                value={newProjectName}
+                onChange={(event) => setNewProjectName(event.target.value)}
                 autoFocus
+              />
+            </div>
+
+            <div className="modal-form-group">
+              <label className="field-label">Description</label>
+              <textarea
+                className="input-field textarea-field"
+                data-testid="create-project-description"
+                placeholder="Brief description of your project..."
+                value={newProjectDescription}
+                onChange={(event) => setNewProjectDescription(event.target.value)}
+                rows={3}
               />
             </div>
 
@@ -475,7 +536,7 @@ export function HomeScreen() {
                 type="button"
                 className="btn-secondary"
                 data-testid="create-project-cancel"
-                onClick={closeCreateProjectModal}
+                onClick={() => setShowNewProjectModal(false)}
               >
                 Cancel
               </button>
@@ -484,14 +545,16 @@ export function HomeScreen() {
                 className="btn-accent"
                 data-testid="create-project-submit"
                 onClick={() => void handleCreateProject()}
-                disabled={!authEmail.trim()}
+                disabled={!newProjectName.trim()}
               >
-                Continue
+                Create Project
               </button>
             </div>
           </div>
         </div>
       ) : null}
+
+      <HowItWorksModal isOpen={showHowItWorks} onClose={() => setShowHowItWorks(false)} />
     </div>
   );
 }
