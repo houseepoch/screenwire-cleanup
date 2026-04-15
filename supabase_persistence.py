@@ -13,6 +13,15 @@ from urllib.parse import quote
 
 import httpx
 
+SCREENWIRE_PROJECTS_TABLE = "screenwire_projects"
+SCREENWIRE_PROJECT_MEMBERSHIPS_TABLE = "screenwire_project_memberships"
+SCREENWIRE_PROJECT_ASSETS_TABLE = "screenwire_project_assets"
+SCREENWIRE_PROJECT_EXPORTS_TABLE = "screenwire_project_exports"
+SCREENWIRE_PIPELINE_JOBS_TABLE = "screenwire_pipeline_jobs"
+SCREENWIRE_GRAPH_SNAPSHOTS_TABLE = "screenwire_project_graph_snapshots"
+SCREENWIRE_GRAPH_OPS_TABLE = "screenwire_project_graph_ops"
+SCREENWIRE_CLAIM_PIPELINE_JOB_RPC = "claim_screenwire_pipeline_job"
+
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -211,7 +220,7 @@ class SupabasePersistence:
 
     async def ensure_project(self, project_dir: Path, *, include_graph_snapshot: bool = False) -> dict[str, Any]:
         payload = project_metadata_from_dir(project_dir)
-        rows = await self.upsert_rows("projects", payload, on_conflict="id")
+        rows = await self.upsert_rows(SCREENWIRE_PROJECTS_TABLE, payload, on_conflict="id")
         if include_graph_snapshot and (project_dir / "graph" / "narrative_graph.json").exists():
             await self.upsert_graph_snapshot(project_dir, reason="project_ensure")
         manifest = _read_json(project_dir / "project_manifest.json", {})
@@ -224,7 +233,7 @@ class SupabasePersistence:
 
     async def fetch_project(self, project_id: str) -> dict[str, Any] | None:
         rows = await self.select_rows(
-            "projects",
+            SCREENWIRE_PROJECTS_TABLE,
             filters={"id": f"eq.{project_id}", "limit": "1"},
         )
         return rows[0] if rows else None
@@ -250,7 +259,7 @@ class SupabasePersistence:
             },
             "updated_at": _utc_now(),
         }
-        rows = await self.upsert_rows("project_graph_snapshots", payload, on_conflict="project_id,snapshot_kind")
+        rows = await self.upsert_rows(SCREENWIRE_GRAPH_SNAPSHOTS_TABLE, payload, on_conflict="project_id,snapshot_kind")
         return rows[0] if rows else payload
 
     async def record_graph_op(
@@ -265,7 +274,7 @@ class SupabasePersistence:
     ) -> dict[str, Any]:
         response = await self._request(
             "POST",
-            "/rest/v1/project_graph_ops",
+            f"/rest/v1/{SCREENWIRE_GRAPH_OPS_TABLE}",
             headers=self._headers({"Prefer": "return=representation"}),
             json={
                 "project_id": project_id,
@@ -282,7 +291,7 @@ class SupabasePersistence:
 
     async def get_asset_by_rel_path(self, project_id: str, rel_path: str) -> dict[str, Any] | None:
         rows = await self.select_rows(
-            "project_assets",
+            SCREENWIRE_PROJECT_ASSETS_TABLE,
             filters={
                 "project_id": f"eq.{project_id}",
                 "logical_path": f"eq.{_normalize_rel_path(rel_path)}",
@@ -293,7 +302,7 @@ class SupabasePersistence:
 
     async def list_project_assets(self, project_id: str) -> list[dict[str, Any]]:
         return await self.select_rows(
-            "project_assets",
+            SCREENWIRE_PROJECT_ASSETS_TABLE,
             filters={"project_id": f"eq.{project_id}", "order": "logical_path.asc"},
         )
 
@@ -390,7 +399,7 @@ class SupabasePersistence:
             "metadata": metadata or {},
             "updated_at": _utc_now(),
         }
-        rows = await self.upsert_rows("project_assets", asset_payload, on_conflict="project_id,logical_path")
+        rows = await self.upsert_rows(SCREENWIRE_PROJECT_ASSETS_TABLE, asset_payload, on_conflict="project_id,logical_path")
         asset_row = rows[0] if rows else asset_payload
 
         if asset_kind == "video_export":
@@ -406,7 +415,7 @@ class SupabasePersistence:
                 "metadata": metadata or {},
                 "updated_at": _utc_now(),
             }
-            await self.upsert_rows("project_exports", export_payload, on_conflict="project_id,logical_path")
+            await self.upsert_rows(SCREENWIRE_PROJECT_EXPORTS_TABLE, export_payload, on_conflict="project_id,logical_path")
 
         return asset_row
 
@@ -474,7 +483,7 @@ class SupabasePersistence:
         return project_dir
 
     async def claim_pipeline_job(self, worker_name: str) -> dict[str, Any] | None:
-        data = await self.rpc("claim_pipeline_job", {"target_worker": worker_name})
+        data = await self.rpc(SCREENWIRE_CLAIM_PIPELINE_JOB_RPC, {"target_worker": worker_name})
         if isinstance(data, list):
             return data[0] if data else None
         return data or None
@@ -485,7 +494,7 @@ class SupabasePersistence:
         else:
             status_filter = "in.(queued,running)"
         return await self.select_rows(
-            "pipeline_jobs",
+            SCREENWIRE_PIPELINE_JOBS_TABLE,
             filters={
                 "project_id": f"eq.{project_id}",
                 "status": status_filter,
@@ -495,7 +504,7 @@ class SupabasePersistence:
 
     async def get_pipeline_job(self, project_id: str, job_key: str) -> dict[str, Any] | None:
         rows = await self.select_rows(
-            "pipeline_jobs",
+            SCREENWIRE_PIPELINE_JOBS_TABLE,
             filters={
                 "project_id": f"eq.{project_id}",
                 "job_key": f"eq.{job_key}",
@@ -535,7 +544,7 @@ class SupabasePersistence:
             "completed_at": _utc_now() if status in {"complete", "error"} else None,
             "updated_at": _utc_now(),
         }
-        rows = await self.upsert_rows("pipeline_jobs", row, on_conflict="project_id,job_key")
+        rows = await self.upsert_rows(SCREENWIRE_PIPELINE_JOBS_TABLE, row, on_conflict="project_id,job_key")
         return rows[0] if rows else row
 
 

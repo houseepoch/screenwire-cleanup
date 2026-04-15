@@ -73,7 +73,10 @@ from workspace_api import (
     save_workspace_state,
     write_ui_phase_report,
 )
-from supabase_persistence import get_supabase_persistence, should_persist_rel_path
+from supabase_persistence import (
+    get_supabase_persistence,
+    should_persist_rel_path,
+)
 
 from handlers import (
     get_handler,
@@ -1376,26 +1379,20 @@ async def _sync_job_state_to_supabase(job: dict[str, Any]) -> None:
         return
     try:
         await persistence.ensure_project(PROJECT_DIR)
-        await persistence.upsert_rows(
-            "pipeline_jobs",
-            {
-                "project_id": PROJECT_DIR.name,
-                "job_key": str(job.get("id") or ""),
-                "status": str(job.get("status") or "queued"),
-                "target_phase": int(job.get("targetPhase") or 0) or None,
-                "active_phase": int(job.get("activePhase") or 0) or None,
-                "progress": int(job.get("progress") or 0),
-                "message": str(job.get("message") or ""),
-                "payload": {
-                    "phaseNumbers": list(job.get("phaseNumbers") or []),
-                    "cancelRequested": bool(job.get("cancelRequested")),
-                },
-                "result": {},
-                "started_at": job.get("startedAt"),
-                "completed_at": datetime.now(timezone.utc).isoformat() if str(job.get("status") or "") in {"complete", "error"} else None,
-                "updated_at": datetime.now(timezone.utc).isoformat(),
+        await persistence.update_pipeline_job(
+            project_id=PROJECT_DIR.name,
+            job_key=str(job.get("id") or ""),
+            status=str(job.get("status") or "queued"),
+            progress=int(job.get("progress") or 0),
+            message=str(job.get("message") or ""),
+            active_phase=int(job.get("activePhase") or 0) or None,
+            target_phase=int(job.get("targetPhase") or 0) or None,
+            cancel_requested=bool(job.get("cancelRequested")),
+            payload={
+                "phaseNumbers": list(job.get("phaseNumbers") or []),
+                "cancelRequested": bool(job.get("cancelRequested")),
             },
-            on_conflict="project_id,job_key",
+            worker_name=str(job.get("workerName") or ""),
         )
     except Exception as exc:
         log("SupabasePersistence", f"Job sync failed for {job.get('id')}: {exc}")

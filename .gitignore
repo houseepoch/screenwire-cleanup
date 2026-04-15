@@ -23,6 +23,7 @@ projects/*/
 # Runtime artifacts
 logs/
 dispatch/
+supabase/.temp/
 
 # Prompt verifier outputs (runtime generated)
 prompt_composition_verifier_*.md
