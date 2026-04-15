@@ -9,12 +9,15 @@ Usage:
 """
 
 import argparse
+import asyncio
 import json
 import os
 import shutil
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+from dotenv import load_dotenv
 
 from screenwire_contracts import (
     FRAME_BUDGET_PRESETS,
@@ -24,6 +27,7 @@ from screenwire_contracts import (
 )
 
 APP_DIR = Path(os.getenv("SCREENWIRE_APP_ROOT", Path(__file__).resolve().parent)).resolve()
+load_dotenv(APP_DIR / ".env")
 PROJECTS_DIR = Path(os.getenv("SCREENWIRE_PROJECTS_ROOT", APP_DIR / "projects")).resolve()
 TEMPLATE_DIR = Path(os.getenv("SCREENWIRE_TEMPLATE_ROOT", PROJECTS_DIR / "_template")).resolve()
 
@@ -182,6 +186,15 @@ def create_project(
     print(f"\nNext steps:")
     print(f"  1. Add your source material to {project_dir}/source_files/")
     print(f"  2. Run: python3 run_pipeline.py --project {project_id}")
+
+    try:
+        from supabase_persistence import get_supabase_persistence
+
+        persistence = get_supabase_persistence()
+        if persistence is not None:
+            asyncio.run(persistence.sync_project_tree(project_dir))
+    except Exception as exc:
+        print(f"  Supabase sync skipped: {exc}")
 
     return project_dir
 

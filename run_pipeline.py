@@ -546,6 +546,30 @@ def mark_project_complete(export_path: str,
     manifest["version"] = manifest.get("version", 1) + 1
     write_manifest(manifest)
 
+    try:
+        from supabase_persistence import get_supabase_persistence
+
+        persistence = get_supabase_persistence()
+        if persistence is not None:
+            export_target = PROJECT_DIR / export_path
+            if export_target.exists():
+                import asyncio as _asyncio
+
+                _asyncio.run(
+                    persistence.ensure_asset_synced(
+                        PROJECT_DIR,
+                        export_path,
+                        local_path=export_target,
+                        metadata={
+                            "duration": round(export_duration, 2),
+                            "codec": export_codec,
+                            "resolution": export_resolution,
+                        },
+                    )
+                )
+    except Exception as exc:
+        log_warn(f"Supabase export sync skipped: {exc}")
+
 
 # ---------------------------------------------------------------------------
 # Phase report saving

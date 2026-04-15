@@ -23,8 +23,19 @@ const runtimeHost =
   typeof window !== 'undefined' && window.location.hostname
     ? window.location.hostname
     : 'localhost';
-let apiBaseUrl = import.meta.env.VITE_API_URL || `http://${runtimeHost}:8000`;
-let wsBaseUrl = import.meta.env.VITE_WS_URL || `ws://${runtimeHost}:8000/ws`;
+const browserOrigin = typeof window !== 'undefined' ? window.location.origin : '';
+const browserHost = typeof window !== 'undefined' ? window.location.host : '';
+const isBrowserLocalhost =
+  typeof window !== 'undefined' &&
+  ['localhost', '127.0.0.1', '0.0.0.0'].includes(window.location.hostname);
+let apiBaseUrl =
+  import.meta.env.VITE_API_URL ||
+  (browserOrigin && !isBrowserLocalhost ? browserOrigin : `http://${runtimeHost}:8000`);
+let wsBaseUrl =
+  import.meta.env.VITE_WS_URL ||
+  (browserHost && !isBrowserLocalhost
+    ? `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${browserHost}/ws`
+    : `ws://${runtimeHost}:8000/ws`);
 const preloadedImageUrls = new Set<string>();
 const preloadedVideoUrls = new Set<string>();
 

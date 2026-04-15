@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from supabase_persistence import schedule_graph_persistence
+
 
 def load_json(path: Path, fallback: Any) -> Any:
     if not path.exists():
@@ -123,6 +125,14 @@ def patch_graph_node(
         provenance.last_modified_by = modified_by
     collection[node_id] = updated_model
     save_graph_projection(graph, project_dir, store=store)
+    schedule_graph_persistence(
+        project_dir,
+        operation="patch",
+        node_type=node_type,
+        node_id=node_id,
+        actor=modified_by,
+        payload={"updates": updates},
+    )
     if collection_name in {"cast", "locations", "props"}:
         record_review_entity_change(project_dir, node_type, node_id, action="updated")
         mark_pipeline_invalidation(
@@ -253,6 +263,14 @@ def create_graph_node(
         },
     )
     save_graph_projection(graph, project_dir, store=store)
+    schedule_graph_persistence(
+        project_dir,
+        operation="create",
+        node_type=normalized_type,
+        node_id=node_id,
+        actor=modified_by,
+        payload={"node": getattr(graph, collection_name)[node_id].model_dump()},
+    )
     record_review_entity_change(project_dir, normalized_type, node_id, action="created")
     mark_pipeline_invalidation(
         project_dir,
@@ -310,6 +328,14 @@ def delete_graph_node(
     ]
     registry.pop(node_id, None)
     save_graph_projection(graph, project_dir, store=store)
+    schedule_graph_persistence(
+        project_dir,
+        operation="delete",
+        node_type=normalized_type,
+        node_id=node_id,
+        actor=modified_by,
+        payload={},
+    )
     record_review_entity_change(project_dir, normalized_type, node_id, action="deleted")
     mark_pipeline_invalidation(
         project_dir,
@@ -1407,6 +1433,10 @@ def _resolve_existing_rel_path(project_dir: Path, candidates: list[str], declare
         resolved = _resolve_path_with_variants(project_dir, rel)
         if resolved:
             return resolved
+    if declared:
+        normalized = Path(declared).as_posix().lstrip("./")
+        if normalized:
+            return normalized
     return None
 
 

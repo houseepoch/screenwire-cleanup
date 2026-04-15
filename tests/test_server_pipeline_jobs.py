@@ -582,6 +582,70 @@ def test_cancel_project_workers_route_stops_running_video_generation(tmp_path: P
     assert "timelineApprovedAt" not in state["approvals"]
 
 
+def test_spawn_pipeline_job_queues_remote_work_when_execution_mode_is_queue(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("SCREENWIRE_EXECUTION_MODE", "queue")
+    server = _load_server(monkeypatch, tmp_path)
+
+    class _FakePersistence:
+        def __init__(self) -> None:
+            self.updated: list[dict[str, object]] = []
+
+        async def list_pipeline_jobs(self, _project_id: str, *, include_terminal: bool = True):
+            return []
+
+        async def update_pipeline_job(self, **kwargs):
+            self.updated.append(kwargs)
+            return kwargs
+
+    persistence = _FakePersistence()
+    monkeypatch.setattr(server, "get_supabase_persistence", lambda *_args, **_kwargs: persistence)
+    server.ui_pipeline_jobs.clear()
+
+    job = asyncio.run(server._spawn_pipeline_phase_job("frame_generation", 4, display_name="Frame Generation"))
+
+    assert job["status"] == "queued"
+    assert job["id"] == "frame_generation"
+    assert server.ui_pipeline_jobs == {}
+    assert persistence.updated
+    assert persistence.updated[0]["status"] == "queued"
+    assert persistence.updated[0]["job_key"] == "frame_generation"
+
+
+def test_ensure_pipeline_catchup_does_not_duplicate_remote_queue_jobs(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("SCREENWIRE_EXECUTION_MODE", "queue")
+    server = _load_server(monkeypatch, tmp_path)
+
+    class _FakePersistence:
+        async def list_pipeline_jobs(self, _project_id: str, *, include_terminal: bool = True):
+            return [
+                {
+                    "job_key": "frame_generation",
+                    "status": "queued",
+                    "progress": 40,
+                    "message": "Queued: Generating approved frames...",
+                    "target_phase": 4,
+                    "active_phase": 4,
+                }
+            ]
+
+    spawn_calls: list[tuple[str, int]] = []
+
+    async def _fake_spawn(job_name: str, target_phase: int, **_kwargs):
+        spawn_calls.append((job_name, target_phase))
+        return {}
+
+    monkeypatch.setattr(server, "get_supabase_persistence", lambda *_args, **_kwargs: _FakePersistence())
+    monkeypatch.setattr(server, "_spawn_pipeline_phase_job", _fake_spawn)
+
+    asyncio.run(server._ensure_pipeline_catchup(tmp_path.name))
+
+    assert spawn_calls == []
+
+
 def test_timeline_approval_starts_video_preflight_repair_when_direction_is_missing(
     tmp_path: Path, monkeypatch
 ) -> None:

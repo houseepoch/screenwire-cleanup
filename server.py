@@ -26,7 +26,7 @@ from dotenv import load_dotenv
 import httpx
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from PIL import Image, ImageOps, UnidentifiedImageError
 from pydantic import BaseModel, Field
 from tenacity import (
@@ -73,6 +73,7 @@ from workspace_api import (
     save_workspace_state,
     write_ui_phase_report,
 )
+from supabase_persistence import get_supabase_persistence, should_persist_rel_path
 
 from handlers import (
     get_handler,
@@ -105,6 +106,7 @@ PROJECT_DIR = Path(_project_dir_env)
 REPLICATE_API_TOKEN = os.getenv("REPLICATE_API_TOKEN", "")
 XAI_API_KEY = os.getenv("XAI_API_KEY", "")
 ENABLE_MANIFEST_QUEUE = os.getenv("SCREENWIRE_ENABLE_MANIFEST_QUEUE", "").strip().lower() in {"1", "true", "yes", "on"}
+SCREENWIRE_EXECUTION_MODE = str(os.getenv("SCREENWIRE_EXECUTION_MODE") or "local").strip().lower()
 THUMBNAIL_CACHE_DIR = ".cache/thumbnails"
 THUMBNAIL_SUPPORTED_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
 THUMBNAIL_FORMAT_MAP = {
@@ -117,6 +119,10 @@ THUMBNAIL_FORMAT_MAP = {
 
 def log(module: str, message: str) -> None:
     print(f"[{datetime.now().isoformat()}] [{module}] {message}")
+
+
+def _queue_execution_enabled() -> bool:
+    return SCREENWIRE_EXECUTION_MODE in {"queue", "worker", "supabase"} and get_supabase_persistence(http_client) is not None
 
 
 def _parse_asset_event(path: Path) -> dict[str, Any] | None:
@@ -526,7 +532,7 @@ class AgentProcessManager:
 reconciler = ManifestReconciler(PROJECT_DIR)
 sentinel = Sentinel(PROJECT_DIR)
 agent_mgr = AgentProcessManager()
-http_client: httpx.AsyncClient  # initialized in lifespan
+http_client: httpx.AsyncClient | None = None  # initialized in lifespan
 ui_pipeline_jobs: dict[str, dict[str, Any]] = {}
 server_loop: asyncio.AbstractEventLoop | None = None
 project_asset_revision = 0
@@ -716,6 +722,7 @@ async def lifespan(app: FastAPI):
     global http_client, server_loop
     http_client = httpx.AsyncClient(timeout=None)
     server_loop = asyncio.get_running_loop()
+    persistence = get_supabase_persistence(http_client)
 
     reconciler.load_manifest()
     if ENABLE_MANIFEST_QUEUE:
@@ -727,6 +734,12 @@ async def lifespan(app: FastAPI):
 
     # Sentinel
     sentinel.start()
+    if persistence is not None:
+        try:
+            await persistence.ensure_project(PROJECT_DIR, include_graph_snapshot=True)
+            log("Engine", f"Supabase persistence enabled for project {PROJECT_DIR.name}")
+        except Exception as exc:
+            log("Engine", f"Supabase persistence bootstrap failed: {exc}")
 
     log("Engine", f"ScreenWire AI engine started — project: {PROJECT_DIR}")
 
@@ -737,6 +750,8 @@ async def lifespan(app: FastAPI):
         await reconciler.stop()
     sentinel.stop()
     await agent_mgr.kill_all()
+    if persistence is not None:
+        await persistence.aclose()
     await http_client.aclose()
     server_loop = None
     log("Engine", "Engine shut down cleanly")
@@ -843,7 +858,7 @@ def _assert_project(project_id: str) -> Path:
 def _workspace_snapshot(project_id: str) -> dict[str, Any]:
     _assert_project(project_id)
     snapshot = build_workspace_snapshot(project_id, PROJECT_DIR)
-    workers = _project_workers_payload()
+    workers = _local_project_workers_payload()
     snapshot["workers"] = workers
 
     active_jobs = [
@@ -860,6 +875,26 @@ def _workspace_snapshot(project_id: str) -> dict[str, Any]:
             int(project.get("progress") or 0),
             int(active_job.get("progress") or 0),
         )
+        snapshot["project"] = project
+
+    return snapshot
+
+
+async def _workspace_snapshot_async(project_id: str) -> dict[str, Any]:
+    snapshot = _workspace_snapshot(project_id)
+    workers = await _project_workers_payload_async(project_id)
+    snapshot["workers"] = workers
+
+    active_workers = [
+        worker
+        for worker in workers
+        if str(worker.get("status") or "") in {"running", "idle"}
+    ]
+    if active_workers:
+        active_worker = max(active_workers, key=lambda worker: int(worker.get("targetPhase") or 0))
+        project = dict(snapshot.get("project") or {})
+        project["status"] = _pipeline_status_for_phase(int(active_worker.get("targetPhase") or 0))
+        project["progress"] = max(int(project.get("progress") or 0), int(active_worker.get("progress") or 0))
         snapshot["project"] = project
 
     return snapshot
@@ -976,6 +1011,52 @@ def _project_file_url(rel_path: str | Path | None) -> str | None:
         stat = target.stat()
         return f"{url}?v={stat.st_mtime_ns}"
     return url
+
+
+async def _sync_project_asset_if_needed(project_dir: Path, rel_path: str | Path) -> None:
+    normalized = Path(rel_path).as_posix().lstrip("./")
+    if not normalized or not should_persist_rel_path(normalized):
+        return
+    persistence = get_supabase_persistence(http_client)
+    if persistence is None:
+        return
+    target = (project_dir / normalized).resolve()
+    if not target.exists() or not target.is_file():
+        return
+    try:
+        await persistence.ensure_asset_synced(project_dir, normalized, local_path=target)
+    except Exception as exc:
+        log("SupabasePersistence", f"Asset sync failed for {project_dir.name}/{normalized}: {exc}")
+
+
+async def _project_file_response(project_dir: Path, requested_path: str):
+    normalized = Path(requested_path).as_posix().lstrip("./")
+    target = (project_dir / normalized).resolve()
+    if not str(target).startswith(str(project_dir.resolve())):
+        raise HTTPException(status_code=403, detail="Requested path escapes project root")
+
+    persistence = get_supabase_persistence(http_client)
+    if persistence is not None and should_persist_rel_path(normalized):
+        try:
+            signed_url = await persistence.get_signed_url_for_rel_path(project_dir, normalized)
+            return RedirectResponse(signed_url, status_code=307)
+        except FileNotFoundError:
+            pass
+        except Exception as exc:
+            log("SupabasePersistence", f"Signed URL resolution failed for {project_dir.name}/{normalized}: {exc}")
+
+    if not target.exists() or not target.is_file():
+        raise HTTPException(status_code=404, detail="Project file not found")
+
+    return FileResponse(
+        target,
+        media_type=mimetypes.guess_type(str(target))[0] or "application/octet-stream",
+        headers={
+            "Cache-Control": "no-store, no-cache, max-age=0, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
+    )
 
 
 def _sanitize_thumbnail_dimension(value: int | None, fallback: int) -> int:
@@ -1226,7 +1307,7 @@ def _redistribute_dialogue_frames(
         _set_timeline_frame_duration(frame_id, duration, overrides)
 
 
-def _project_workers_payload() -> list[dict[str, Any]]:
+def _local_project_workers_payload() -> list[dict[str, Any]]:
     workers: list[dict[str, Any]] = []
     for job in ui_pipeline_jobs.values():
         workers.append(
@@ -1243,6 +1324,89 @@ def _project_workers_payload() -> list[dict[str, Any]]:
             }
         )
     return workers
+
+
+def _supabase_job_to_worker_payload(row: dict[str, Any]) -> dict[str, Any]:
+    status = str(row.get("status") or "queued").strip().lower()
+    worker_status = "idle"
+    if status == "running":
+        worker_status = "running"
+    elif status == "complete":
+        worker_status = "complete"
+    elif status in {"error", "cancel_requested"}:
+        worker_status = "error"
+
+    target_phase = int(row.get("target_phase") or 0)
+    message = str(row.get("message") or "").strip()
+    if status == "queued" and not message:
+        message = "Queued for background execution..."
+    elif status == "cancel_requested":
+        message = message or "Stopping background execution..."
+
+    return {
+        "id": str(row.get("job_key") or row.get("id") or ""),
+        "name": _default_job_name(str(row.get("job_key") or "job"), target_phase),
+        "status": worker_status,
+        "progress": int(row.get("progress") or 0),
+        "message": message,
+        "targetPhase": target_phase,
+        "cancellable": bool(status == "running" and target_phase >= 4 and not bool(row.get("cancel_requested"))),
+    }
+
+
+async def _project_workers_payload_async(project_id: str) -> list[dict[str, Any]]:
+    if not _queue_execution_enabled():
+        return _local_project_workers_payload()
+
+    persistence = get_supabase_persistence(http_client)
+    if persistence is None:
+        return _local_project_workers_payload()
+
+    try:
+        rows = await persistence.list_pipeline_jobs(project_id, include_terminal=True)
+    except Exception as exc:
+        log("SupabasePersistence", f"Worker list failed for {project_id}: {exc}")
+        return _local_project_workers_payload()
+    return [_supabase_job_to_worker_payload(row) for row in rows]
+
+
+async def _sync_job_state_to_supabase(job: dict[str, Any]) -> None:
+    persistence = get_supabase_persistence(http_client)
+    if persistence is None:
+        return
+    try:
+        await persistence.ensure_project(PROJECT_DIR)
+        await persistence.upsert_rows(
+            "pipeline_jobs",
+            {
+                "project_id": PROJECT_DIR.name,
+                "job_key": str(job.get("id") or ""),
+                "status": str(job.get("status") or "queued"),
+                "target_phase": int(job.get("targetPhase") or 0) or None,
+                "active_phase": int(job.get("activePhase") or 0) or None,
+                "progress": int(job.get("progress") or 0),
+                "message": str(job.get("message") or ""),
+                "payload": {
+                    "phaseNumbers": list(job.get("phaseNumbers") or []),
+                    "cancelRequested": bool(job.get("cancelRequested")),
+                },
+                "result": {},
+                "started_at": job.get("startedAt"),
+                "completed_at": datetime.now(timezone.utc).isoformat() if str(job.get("status") or "") in {"complete", "error"} else None,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            },
+            on_conflict="project_id,job_key",
+        )
+    except Exception as exc:
+        log("SupabasePersistence", f"Job sync failed for {job.get('id')}: {exc}")
+
+
+def _schedule_job_sync(job: dict[str, Any]) -> None:
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    loop.create_task(_sync_job_state_to_supabase(job))
 
 
 def _pipeline_status_for_phase(phase_number: int) -> str:
@@ -1497,6 +1661,7 @@ async def _cancel_ui_pipeline_job(job: dict[str, Any], *, reason: str = "Stopped
 
     job["status"] = "error"
     job["message"] = reason
+    _schedule_job_sync(job)
     ui_pipeline_jobs.pop(str(job.get("id") or ""), None)
 
 
@@ -1506,6 +1671,59 @@ def _running_cancellable_jobs() -> list[dict[str, Any]]:
         for job in ui_pipeline_jobs.values()
         if job.get("status") == "running" and _job_stop_phase_and_approvals(job) is not None
     ]
+
+
+async def _active_queue_jobs(project_id: str) -> list[dict[str, Any]]:
+    persistence = get_supabase_persistence(http_client)
+    if persistence is None:
+        return []
+    try:
+        return await persistence.list_pipeline_jobs(project_id, include_terminal=False)
+    except Exception as exc:
+        log("SupabasePersistence", f"Active queue job lookup failed for {project_id}: {exc}")
+        return []
+
+
+def _queue_job_stop_phase_and_approvals(job: dict[str, Any]) -> tuple[int, tuple[str, ...]] | None:
+    target_phase = int(job.get("target_phase") or 0)
+    if target_phase >= 5:
+        return 5, ("timelineApprovedAt", "videoApprovedAt")
+    if target_phase == 4:
+        return 4, ("referencesApprovedAt", "timelineApprovedAt", "videoApprovedAt")
+    return None
+
+
+async def _cancel_queue_job(job: dict[str, Any], *, reason: str = "Stopped by user") -> None:
+    persistence = get_supabase_persistence(http_client)
+    if persistence is None:
+        raise RuntimeError("Supabase persistence is required to cancel queued jobs.")
+
+    stop_state = _queue_job_stop_phase_and_approvals(job)
+    if stop_state is not None:
+        start_phase, clear_approvals = stop_state
+        mark_pipeline_invalidation(
+            PROJECT_DIR,
+            start_phase,
+            "stopped_by_user",
+            source=str(job.get("job_key") or "ui_stop"),
+            subject_type="workflow",
+            subject_id=str(job.get("job_key") or ""),
+            clear_approvals=clear_approvals,
+        )
+
+    await persistence.update_pipeline_job(
+        project_id=PROJECT_DIR.name,
+        job_key=str(job.get("job_key") or ""),
+        status="cancel_requested",
+        progress=int(job.get("progress") or 0),
+        message=reason,
+        active_phase=int(job.get("active_phase") or 0) or None,
+        target_phase=int(job.get("target_phase") or 0) or None,
+        cancel_requested=True,
+        payload=dict(job.get("payload") or {}),
+        result=dict(job.get("result") or {}),
+        worker_name=str(job.get("worker_name") or job.get("claimed_by") or ""),
+    )
 
 
 async def _repair_video_preflight_blockers(job: dict[str, Any] | None = None) -> None:
@@ -1633,6 +1851,7 @@ async def _spawn_video_preflight_repair_job() -> dict[str, Any]:
         "startedAt": datetime.now(timezone.utc).isoformat(),
     }
     ui_pipeline_jobs[job_name] = job
+    _schedule_job_sync(job)
 
     async def _watch() -> None:
         try:
@@ -1643,6 +1862,7 @@ async def _spawn_video_preflight_repair_job() -> dict[str, Any]:
             job["progress"] = 100
             job["activePhase"] = 5
             job["message"] = "Video prep repaired. Resuming clip generation..."
+            _schedule_job_sync(job)
             await _ensure_pipeline_catchup(PROJECT_DIR.name)
         except asyncio.CancelledError:
             return
@@ -1655,6 +1875,7 @@ async def _spawn_video_preflight_repair_job() -> dict[str, Any]:
             job["status"] = "error"
             job["progress"] = 100
             job["message"] = f"Video Prep Repair failed: {exc}"
+            _schedule_job_sync(job)
 
     job["task"] = asyncio.create_task(_watch())
     return job
@@ -1681,12 +1902,15 @@ async def _ensure_pipeline_catchup(project_id: str) -> None:
             await _spawn_video_preflight_repair_job()
             return
 
-    active_jobs = [
-        job
-        for job in ui_pipeline_jobs.values()
-        if job.get("status") == "running"
-        and (job.get("process") is None or job["process"].returncode is None)
-    ]
+    if _queue_execution_enabled():
+        active_jobs = await _active_queue_jobs(project_id)
+    else:
+        active_jobs = [
+            job
+            for job in ui_pipeline_jobs.values()
+            if job.get("status") == "running"
+            and (job.get("process") is None or job["process"].returncode is None)
+        ]
     if active_jobs:
         return
 
@@ -2055,6 +2279,76 @@ async def _spawn_pipeline_phase_job(
     phases = [int(phase_numbers)] if isinstance(phase_numbers, int) else [int(phase) for phase in phase_numbers]
     target_phase = max(phases)
     started_at = datetime.now(timezone.utc)
+
+    if _queue_execution_enabled():
+        persistence = get_supabase_persistence(http_client)
+        if persistence is None:
+            raise RuntimeError("Supabase persistence is required for queue execution mode.")
+
+        existing_rows = await _active_queue_jobs(PROJECT_DIR.name)
+        existing = next(
+            (row for row in existing_rows if str(row.get("job_key") or "") == job_name),
+            None,
+        )
+        if existing is not None:
+            return {
+                "id": str(existing.get("job_key") or job_name),
+                "name": display_name or _default_job_name(job_name, target_phase),
+                "status": str(existing.get("status") or "queued"),
+                "progress": int(existing.get("progress") or 0),
+                "message": str(existing.get("message") or ""),
+                "phaseNumbers": phases,
+                "activePhase": int(existing.get("active_phase") or 0),
+                "targetPhase": int(existing.get("target_phase") or target_phase),
+                "startedAt": str(existing.get("started_at") or existing.get("created_at") or started_at.isoformat()),
+            }
+
+        dirty_preproduction_phase = _dirty_preproduction_start_phase(target_phase)
+        if dirty_preproduction_phase is not None:
+            rewind_manifest_phases(
+                PROJECT_DIR,
+                dirty_preproduction_phase,
+                "preproduction_resume_requested",
+                source=job_name,
+            )
+
+        active_phase, progress = _job_checkpoint_progress(target_phase)
+        job = {
+            "id": job_name,
+            "name": display_name or _default_job_name(job_name, target_phase),
+            "status": "queued",
+            "progress": progress,
+            "message": running_message or _default_job_running_message(job_name, target_phase, active_phase),
+            "phaseNumbers": phases,
+            "activePhase": active_phase,
+            "targetPhase": target_phase,
+            "startedAt": started_at.isoformat(),
+        }
+
+        if prelaunch is not None:
+            job["progress"] = max(int(job.get("progress") or 0), 10)
+            job["message"] = prelaunch_message or f"Preparing {job['name'].lower()}..."
+            await prelaunch(job)
+
+        queue_message = f"Queued: {running_message or _default_job_running_message(job_name, target_phase, int(job.get('activePhase') or active_phase))}"
+        await persistence.update_pipeline_job(
+            project_id=PROJECT_DIR.name,
+            job_key=job_name,
+            status="queued",
+            progress=int(job.get("progress") or 0),
+            message=queue_message,
+            active_phase=int(job.get("activePhase") or active_phase),
+            target_phase=target_phase,
+            cancel_requested=False,
+            payload={
+                "phaseNumbers": phases,
+                "cancelRequested": False,
+            },
+            worker_name="",
+        )
+        job["message"] = queue_message
+        return job
+
     existing = ui_pipeline_jobs.get(job_name)
     if existing and existing.get("status") == "running" and (
         existing.get("process") is None or existing["process"].returncode is None
@@ -2087,6 +2381,7 @@ async def _spawn_pipeline_phase_job(
         "startedAt": started_at.isoformat(),
     }
     ui_pipeline_jobs[job_name] = job
+    _schedule_job_sync(job)
 
     async def _watch() -> None:
         try:
@@ -2125,6 +2420,7 @@ async def _spawn_pipeline_phase_job(
                 job["status"] = "error"
                 job["progress"] = 100
                 job["message"] = f"{job['name']} failed before phase {target_phase} completed"
+                _schedule_job_sync(job)
                 return
 
             job["process"] = None
@@ -2136,6 +2432,7 @@ async def _spawn_pipeline_phase_job(
             job["progress"] = 100
             job["activePhase"] = target_phase
             job["message"] = completion_message or _default_job_complete_message(job_name, target_phase)
+            _schedule_job_sync(job)
             await _ensure_pipeline_catchup(PROJECT_DIR.name)
         except asyncio.CancelledError:
             return
@@ -2145,6 +2442,7 @@ async def _spawn_pipeline_phase_job(
             job["progress"] = 100
             job["message"] = f"{job['name']} failed: {exc}"
             log("UIJob", f"{job['name']} failed: {type(exc).__name__}: {exc}")
+            _schedule_job_sync(job)
 
     job["task"] = asyncio.create_task(_watch())
     return job
@@ -2170,20 +2468,7 @@ async def get_current_project():
 
 @app.get("/api/project/file/{requested_path:path}")
 async def get_project_file(requested_path: str):
-    target = (PROJECT_DIR / requested_path).resolve()
-    if not str(target).startswith(str(PROJECT_DIR.resolve())):
-        raise HTTPException(status_code=403, detail="Requested path escapes project root")
-    if not target.exists() or not target.is_file():
-        raise HTTPException(status_code=404, detail="Project file not found")
-    return FileResponse(
-        target,
-        media_type=mimetypes.guess_type(str(target))[0] or "application/octet-stream",
-        headers={
-            "Cache-Control": "no-store, no-cache, max-age=0, must-revalidate",
-            "Pragma": "no-cache",
-            "Expires": "0",
-        },
-    )
+    return await _project_file_response(PROJECT_DIR, requested_path)
 
 
 @app.get("/api/project/thumbnail/{requested_path:path}")
@@ -2194,9 +2479,20 @@ async def get_project_thumbnail(
     fit: str = Query(default="cover"),
     format: str = Query(default="webp"),
 ):
+    normalized = Path(requested_path).as_posix().lstrip("./")
+    target = (PROJECT_DIR / normalized).resolve()
+    if (
+        not target.exists()
+        and get_supabase_persistence(http_client) is not None
+        and should_persist_rel_path(normalized)
+    ):
+        try:
+            target = await get_supabase_persistence(http_client).mirror_remote_asset_to_cache(PROJECT_DIR, normalized)  # type: ignore[union-attr]
+        except FileNotFoundError:
+            pass
     return _thumbnail_response(
-        PROJECT_DIR,
-        requested_path,
+        PROJECT_DIR if target == (PROJECT_DIR / normalized).resolve() else PROJECT_DIR / ".cache" / "supabase_mirror",
+        normalized if target == (PROJECT_DIR / normalized).resolve() else normalized,
         width=w,
         height=h,
         fit=fit,
@@ -2207,20 +2503,7 @@ async def get_project_thumbnail(
 @app.get("/api/projects/{project_id}/file/{requested_path:path}")
 async def get_project_scoped_file(project_id: str, requested_path: str):
     project_dir = _assert_project(project_id)
-    target = (project_dir / requested_path).resolve()
-    if not str(target).startswith(str(project_dir.resolve())):
-        raise HTTPException(status_code=403, detail="Requested path escapes project root")
-    if not target.exists() or not target.is_file():
-        raise HTTPException(status_code=404, detail="Project file not found")
-    return FileResponse(
-        target,
-        media_type=mimetypes.guess_type(str(target))[0] or "application/octet-stream",
-        headers={
-            "Cache-Control": "no-store, no-cache, max-age=0, must-revalidate",
-            "Pragma": "no-cache",
-            "Expires": "0",
-        },
-    )
+    return await _project_file_response(project_dir, requested_path)
 
 
 @app.get("/api/projects/{project_id}/thumbnail/{requested_path:path}")
@@ -2233,9 +2516,20 @@ async def get_project_scoped_thumbnail(
     format: str = Query(default="webp"),
 ):
     project_dir = _assert_project(project_id)
+    normalized = Path(requested_path).as_posix().lstrip("./")
+    target = (project_dir / normalized).resolve()
+    if (
+        not target.exists()
+        and get_supabase_persistence(http_client) is not None
+        and should_persist_rel_path(normalized)
+    ):
+        try:
+            target = await get_supabase_persistence(http_client).mirror_remote_asset_to_cache(project_dir, normalized)  # type: ignore[union-attr]
+        except FileNotFoundError:
+            pass
     return _thumbnail_response(
-        project_dir,
-        requested_path,
+        project_dir if target == (project_dir / normalized).resolve() else project_dir / ".cache" / "supabase_mirror",
+        normalized if target == (project_dir / normalized).resolve() else normalized,
         width=w,
         height=h,
         fit=fit,
@@ -2246,7 +2540,7 @@ async def get_project_scoped_thumbnail(
 @app.get("/api/projects/{project_id}/workspace")
 async def get_workspace(project_id: str):
     await _ensure_pipeline_catchup(project_id)
-    return _workspace_snapshot(project_id)
+    return await _workspace_snapshot_async(project_id)
 
 
 @app.get("/api/projects/{project_id}/diagnostics")
@@ -2296,12 +2590,14 @@ async def set_project_concept(project_id: str, payload: dict[str, Any]):
         onboarding["creativeFreedom"] = str(payload["creativityLevel"]).strip()
     onboarding_path.write_text(json.dumps(onboarding, indent=2) + "\n", encoding="utf-8")
     mark_project_file_change(PROJECT_DIR, onboarding_path.relative_to(PROJECT_DIR), source="ui_concept_update")
+    await _sync_project_asset_if_needed(PROJECT_DIR, onboarding_path.relative_to(PROJECT_DIR))
 
     pitch_path = PROJECT_DIR / "source_files" / "pitch.md"
     source_text = payload.get("sourceText") or payload.get("synopsis") or ""
     if source_text:
         pitch_path.write_text(str(source_text).strip() + "\n", encoding="utf-8")
         mark_project_file_change(PROJECT_DIR, pitch_path.relative_to(PROJECT_DIR), source="ui_concept_update")
+        await _sync_project_asset_if_needed(PROJECT_DIR, pitch_path.relative_to(PROJECT_DIR))
 
     await _ensure_pipeline_catchup(project_id)
     return _workspace_snapshot(project_id)["creativeConcept"]
@@ -2315,6 +2611,7 @@ async def upload_project_concept_file(project_id: str, file: UploadFile = File(.
     target = source_dir / (file.filename or "upload.bin")
     content = await file.read()
     target.write_bytes(content)
+    await _sync_project_asset_if_needed(PROJECT_DIR, target.relative_to(PROJECT_DIR))
 
     extracted_text = ""
     if target.suffix.lower() in {".md", ".txt", ".json"}:
@@ -2356,7 +2653,7 @@ async def approve_project_skeleton(project_id: str):
         3,
         display_name="Preproduction Build",
     )
-    return _workspace_snapshot(project_id)
+    return await _workspace_snapshot_async(project_id)
 
 
 @app.post("/api/projects/{project_id}/approve")
@@ -2373,7 +2670,7 @@ async def approve_project_gate(project_id: str, req: UIApprovalRequest):
         preflight_error = _video_generation_preflight_error()
         if preflight_error:
             await _spawn_video_preflight_repair_job()
-            return _workspace_snapshot(project_id)
+            return await _workspace_snapshot_async(project_id)
 
     if gate == "skeleton":
         await _spawn_pipeline_phase_job(
@@ -2396,7 +2693,7 @@ async def approve_project_gate(project_id: str, req: UIApprovalRequest):
             display_name="Video Generation",
         )
 
-    return _workspace_snapshot(project_id)
+    return await _workspace_snapshot_async(project_id)
 
 
 @app.post("/api/projects/{project_id}/request-changes")
@@ -2578,7 +2875,7 @@ async def patch_project_graph_node(project_id: str, node_type: str, node_id: str
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=f"{node_type}:{node_id} not found") from exc
     await _ensure_pipeline_catchup(project_id)
-    return _workspace_snapshot(project_id)
+    return await _workspace_snapshot_async(project_id)
 
 
 @app.post("/api/projects/{project_id}/entities/{entity_id}/upload")
@@ -2589,6 +2886,7 @@ async def upload_entity_image(project_id: str, entity_id: str, image: UploadFile
     target = entity_upload_path(PROJECT_DIR, entity_id, entity["type"], image.filename or ".png")
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_bytes(await image.read())
+    await _sync_project_asset_if_needed(PROJECT_DIR, target.relative_to(PROJECT_DIR))
     attach_entity_image(PROJECT_DIR, entity["type"], entity_id, target, modified_by="ui_upload")
     await _ensure_pipeline_catchup(project_id)
     return {"imageUrl": _project_file_url(target.relative_to(PROJECT_DIR))}
@@ -2605,6 +2903,7 @@ async def upload_storyboard_frame(project_id: str, frame_id: str, image: UploadF
     target = frame_upload_path(PROJECT_DIR, frame_id, image.filename or ".png")
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_bytes(await image.read())
+    await _sync_project_asset_if_needed(PROJECT_DIR, target.relative_to(PROJECT_DIR))
     _mark_frame_regeneration_dirty("storyboard_reference_uploaded", source="ui_storyboard_upload", subject_id=frame_id)
     await _ensure_pipeline_catchup(project_id)
     return {"imageUrl": _project_file_url(target.relative_to(PROJECT_DIR))}
@@ -2863,6 +3162,7 @@ async def upload_timeline_frame(project_id: str, frame_id: str, image: UploadFil
     target = frame_upload_path(PROJECT_DIR, frame_id, image.filename or ".png")
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_bytes(await image.read())
+    await _sync_project_asset_if_needed(PROJECT_DIR, target.relative_to(PROJECT_DIR))
     overrides = _timeline_overrides()
     for item in overrides.get("expandedFrames") or []:
         if item.get("id") == frame_id:
@@ -2878,13 +3178,21 @@ async def upload_timeline_frame(project_id: str, frame_id: str, image: UploadFil
 async def get_project_workers(project_id: str):
     _assert_project(project_id)
     await _ensure_pipeline_catchup(project_id)
-    return _project_workers_payload()
+    return await _project_workers_payload_async(project_id)
 
 
 @app.post("/api/projects/{project_id}/workers/cancel")
 async def cancel_project_workers(project_id: str):
     _assert_project(project_id)
     cancelled_ids: list[str] = []
+    if _queue_execution_enabled():
+        for job in await _active_queue_jobs(project_id):
+            if _queue_job_stop_phase_and_approvals(job) is None:
+                continue
+            await _cancel_queue_job(job)
+            cancelled_ids.append(str(job.get("job_key") or ""))
+        return {"cancelled": cancelled_ids}
+
     for job in list(_running_cancellable_jobs()):
         await _cancel_ui_pipeline_job(job)
         cancelled_ids.append(str(job.get("id") or ""))
@@ -2893,6 +3201,19 @@ async def cancel_project_workers(project_id: str):
 
 @app.post("/api/workers/{worker_id}/cancel")
 async def cancel_worker(worker_id: str):
+    if _queue_execution_enabled():
+        persistence = get_supabase_persistence(http_client)
+        if persistence is None:
+            raise HTTPException(status_code=503, detail="Queue persistence is unavailable")
+        job = await persistence.get_pipeline_job(PROJECT_DIR.name, worker_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail=f"Worker '{worker_id}' not found")
+        status = str(job.get("status") or "")
+        if status not in {"queued", "running"} or _queue_job_stop_phase_and_approvals(job) is None:
+            raise HTTPException(status_code=409, detail=f"Worker '{worker_id}' cannot be stopped")
+        await _cancel_queue_job(job)
+        return {"cancelled": worker_id}
+
     job = ui_pipeline_jobs.get(worker_id)
     if job is None:
         raise HTTPException(status_code=404, detail=f"Worker '{worker_id}' not found")
@@ -2956,9 +3277,10 @@ async def project_events_socket(websocket: WebSocket, project_id: str):
     await websocket.accept()
     try:
         await websocket.send_json({"type": "connected", "data": {"projectId": project_id}})
-        snapshot = _workspace_snapshot(project_id)
+        snapshot = await _workspace_snapshot_async(project_id)
+        worker_snapshot = await _project_workers_payload_async(project_id)
         await websocket.send_json({"type": "workspace_update", "data": snapshot})
-        await websocket.send_json({"type": "worker_snapshot", "data": _project_workers_payload()})
+        await websocket.send_json({"type": "worker_snapshot", "data": worker_snapshot})
         await websocket.send_json({"type": "project_update", "data": snapshot["project"]})
         last_asset_revision = project_asset_revision
         last_full_push = time.monotonic()
@@ -2968,9 +3290,10 @@ async def project_events_socket(websocket: WebSocket, project_id: str):
             except asyncio.TimeoutError:
                 if project_asset_revision != last_asset_revision:
                     last_asset_revision = project_asset_revision
-                    snapshot = _workspace_snapshot(project_id)
+                    snapshot = await _workspace_snapshot_async(project_id)
+                    worker_snapshot = await _project_workers_payload_async(project_id)
                     await websocket.send_json({"type": "workspace_update", "data": snapshot})
-                    await websocket.send_json({"type": "worker_snapshot", "data": _project_workers_payload()})
+                    await websocket.send_json({"type": "worker_snapshot", "data": worker_snapshot})
                     await websocket.send_json({"type": "project_update", "data": snapshot["project"]})
                     if project_asset_event is not None:
                         await websocket.send_json(project_asset_event)
@@ -2978,11 +3301,12 @@ async def project_events_socket(websocket: WebSocket, project_id: str):
                     continue
                 if time.monotonic() - last_full_push < 5.0:
                     continue
-                snapshot = _workspace_snapshot(project_id)
+                snapshot = await _workspace_snapshot_async(project_id)
+                worker_snapshot = await _project_workers_payload_async(project_id)
                 await websocket.send_json({"type": "workspace_update", "data": snapshot})
-                await websocket.send_json({"type": "worker_snapshot", "data": _project_workers_payload()})
+                await websocket.send_json({"type": "worker_snapshot", "data": worker_snapshot})
                 await websocket.send_json({"type": "project_update", "data": snapshot["project"]})
-                for worker in _project_workers_payload():
+                for worker in worker_snapshot:
                     await websocket.send_json({"type": "worker_update", "data": worker})
                 last_full_push = time.monotonic()
     except WebSocketDisconnect:
