@@ -7,8 +7,10 @@ agent process management, and Layer 1 programmatic gateways.
 import asyncio
 import atexit
 import base64
+import contextvars
 import hashlib
 import json
+import logging
 import math
 import mimetypes
 import os
@@ -17,6 +19,7 @@ import shutil
 import signal
 import sys
 import time
+import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -27,6 +30,7 @@ import httpx
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from PIL import Image, ImageOps, UnidentifiedImageError
 from pydantic import BaseModel, Field
 from tenacity import (
@@ -42,6 +46,7 @@ from watchdog.observers import Observer
 from llm.xai_client import DEFAULT_REASONING_MODEL, XAIClient
 from llm.project_tools import build_project_tools, make_project_tool_executor
 from llm.xai_client import SyncXAIClient
+from runtime_logging import configure_logging, log_event
 from telemetry import activate_run_context, current_phase, current_run_id, emit_event
 from workspace_api import (
     append_ui_event,
@@ -99,12 +104,86 @@ from handlers import (
 APP_DIR = Path(__file__).resolve().parent
 load_dotenv(APP_DIR / ".env")
 
-_project_dir_env = os.getenv("PROJECT_DIR")
-if not _project_dir_env:
-    print("ERROR: PROJECT_DIR environment variable is required. "
-          "Set it to the project directory path, or let run_pipeline.py pass it.")
-    sys.exit(1)
-PROJECT_DIR = Path(_project_dir_env)
+LOGGER = configure_logging("screenwire-web")
+
+_project_dir_env = str(os.getenv("PROJECT_DIR") or "").strip()
+SINGLE_PROJECT_DIR = Path(_project_dir_env).resolve() if _project_dir_env else None
+PROJECTS_ROOT = Path(os.getenv("SCREENWIRE_PROJECTS_ROOT") or (APP_DIR / "projects")).resolve()
+DEFAULT_PROJECT_ID = str(os.getenv("SCREENWIRE_DEFAULT_PROJECT_ID") or "").strip()
+HOSTED_MODE = SINGLE_PROJECT_DIR is None
+WEB_DIST_DIR = Path(os.getenv("SCREENWIRE_WEB_DIST_DIR") or (APP_DIR / "apps" / "morpheus-studio" / "dist")).resolve()
+
+_request_id_var: contextvars.ContextVar[str | None] = contextvars.ContextVar("screenwire_request_id", default=None)
+_project_dir_var: contextvars.ContextVar[Path | None] = contextvars.ContextVar("screenwire_project_dir", default=SINGLE_PROJECT_DIR)
+
+
+def _sanitize_project_id(project_id: str) -> str:
+    normalized = str(project_id or "").strip()
+    if not normalized or not re.fullmatch(r"[A-Za-z0-9._-]+", normalized):
+        raise HTTPException(status_code=400, detail="Invalid project id")
+    return normalized
+
+
+def _iter_local_project_dirs() -> list[Path]:
+    if SINGLE_PROJECT_DIR is not None:
+        return [SINGLE_PROJECT_DIR]
+    if not PROJECTS_ROOT.exists():
+        return []
+    return sorted(
+        [path for path in PROJECTS_ROOT.iterdir() if path.is_dir() and path.name != "_template"],
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+
+
+def _default_project_dir() -> Path | None:
+    if SINGLE_PROJECT_DIR is not None:
+        return SINGLE_PROJECT_DIR
+    if DEFAULT_PROJECT_ID:
+        return PROJECTS_ROOT / _sanitize_project_id(DEFAULT_PROJECT_ID)
+    local_projects = _iter_local_project_dirs()
+    return local_projects[0] if local_projects else None
+
+
+def _current_project_dir() -> Path:
+    project_dir = _project_dir_var.get() or _default_project_dir()
+    if project_dir is None:
+        raise HTTPException(status_code=503, detail="No active project is available for this backend session")
+    return project_dir.resolve()
+
+
+def _current_project_id() -> str:
+    return _current_project_dir().name
+
+
+def _set_project_context(project_dir: Path) -> contextvars.Token[Path | None]:
+    return _project_dir_var.set(project_dir.resolve())
+
+
+class _ProjectDirProxy:
+    def _path(self) -> Path:
+        return _current_project_dir()
+
+    def __fspath__(self) -> str:
+        return os.fspath(self._path())
+
+    def __str__(self) -> str:
+        return str(self._path())
+
+    def __repr__(self) -> str:
+        return repr(self._path())
+
+    def __truediv__(self, other: Any) -> Path:
+        return self._path() / other
+
+    def __rtruediv__(self, other: Any) -> Path:
+        return Path(other) / self._path()
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._path(), name)
+
+
+PROJECT_DIR = _ProjectDirProxy()
 
 REPLICATE_API_TOKEN = os.getenv("REPLICATE_API_TOKEN", "")
 XAI_API_KEY = os.getenv("XAI_API_KEY", "")
@@ -120,8 +199,71 @@ THUMBNAIL_FORMAT_MAP = {
 }
 
 
-def log(module: str, message: str) -> None:
-    print(f"[{datetime.now().isoformat()}] [{module}] {message}")
+def _parse_allowed_origins() -> list[str]:
+    raw = str(os.getenv("SCREENWIRE_ALLOWED_ORIGINS") or "").strip()
+    if raw:
+        return [item.strip() for item in raw.split(",") if item.strip()]
+    return [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:4173",
+        "http://127.0.0.1:4173",
+    ]
+
+
+ALLOWED_ORIGINS = _parse_allowed_origins()
+ALLOW_CREDENTIALS = "*" not in ALLOWED_ORIGINS
+
+
+def log(module: str, message: str, **fields: Any) -> None:
+    logger = logging.getLogger(module)
+    request_id = fields.pop("request_id", None) or _request_id_var.get()
+    project_id = fields.pop("project_id", None) or (_project_dir_var.get().name if _project_dir_var.get() else None)
+    log_event(
+        logger,
+        logging.INFO,
+        module,
+        message=message,
+        request_id=request_id,
+        project_id=project_id,
+        **fields,
+    )
+
+
+async def _ensure_project_dir_async(project_id: str) -> Path:
+    normalized = _sanitize_project_id(project_id)
+    if SINGLE_PROJECT_DIR is not None:
+        if normalized != SINGLE_PROJECT_DIR.name:
+            raise HTTPException(status_code=404, detail=f"Project '{normalized}' is not active in this backend session")
+        return SINGLE_PROJECT_DIR
+
+    project_dir = (PROJECTS_ROOT / normalized).resolve()
+    if project_dir.exists():
+        return project_dir
+
+    persistence = get_supabase_persistence(http_client)
+    if persistence is not None:
+        row = await persistence.fetch_project(normalized)
+        if row is not None:
+            hydrated = await persistence.hydrate_project_tree(normalized, PROJECTS_ROOT)
+            log("ProjectResolver", "Hydrated project from Supabase storage", project_id=normalized, path=str(hydrated))
+            return hydrated.resolve()
+
+    raise HTTPException(status_code=404, detail=f"Project '{normalized}' was not found")
+
+
+async def _ensure_default_project_dir_async() -> Path:
+    project_dir = _default_project_dir()
+    if project_dir is None:
+        raise HTTPException(status_code=503, detail="No default project is configured for this backend session")
+    if SINGLE_PROJECT_DIR is None and not project_dir.exists():
+        return await _ensure_project_dir_async(project_dir.name)
+    return project_dir.resolve()
+
+
+def _extract_project_id_from_path(path: str) -> str | None:
+    match = re.match(r"^/api/projects/([^/]+)(?:/|$)", str(path or ""))
+    return match.group(1) if match else None
 
 
 def _queue_execution_enabled() -> bool:
@@ -532,8 +674,8 @@ class AgentProcessManager:
 # Singletons
 # ---------------------------------------------------------------------------
 
-reconciler = ManifestReconciler(PROJECT_DIR)
-sentinel = Sentinel(PROJECT_DIR)
+reconciler = ManifestReconciler(SINGLE_PROJECT_DIR) if SINGLE_PROJECT_DIR is not None else None
+sentinel = Sentinel(SINGLE_PROJECT_DIR) if SINGLE_PROJECT_DIR is not None else None
 agent_mgr = AgentProcessManager()
 http_client: httpx.AsyncClient | None = None  # initialized in lifespan
 ui_pipeline_jobs: dict[str, dict[str, Any]] = {}
@@ -727,31 +869,52 @@ async def lifespan(app: FastAPI):
     server_loop = asyncio.get_running_loop()
     persistence = get_supabase_persistence(http_client)
 
-    reconciler.load_manifest()
-    if ENABLE_MANIFEST_QUEUE:
-        reconciler.start_watcher()
-        await reconciler.start_writer()
-        log("Engine", "Manifest queue reconciler enabled")
-    else:
-        log("Engine", "Manifest queue reconciler disabled; graph materialization is authoritative")
+    PROJECTS_ROOT.mkdir(parents=True, exist_ok=True)
+    log(
+        "Engine",
+        "ScreenWire AI engine starting",
+        hosted_mode=HOSTED_MODE,
+        projects_root=str(PROJECTS_ROOT),
+        single_project_dir=str(SINGLE_PROJECT_DIR) if SINGLE_PROJECT_DIR is not None else None,
+        execution_mode=SCREENWIRE_EXECUTION_MODE,
+    )
 
-    # Sentinel
-    sentinel.start()
+    if reconciler is not None:
+        reconciler.load_manifest()
+        if ENABLE_MANIFEST_QUEUE:
+            reconciler.start_watcher()
+            await reconciler.start_writer()
+            log("Engine", "Manifest queue reconciler enabled", project_id=reconciler.project_dir.name)
+        else:
+            log("Engine", "Manifest queue reconciler disabled; graph materialization is authoritative", project_id=reconciler.project_dir.name)
+    else:
+        log("Engine", "Hosted mode enabled; manifest watcher is disabled")
+
+    if sentinel is not None:
+        sentinel.start()
+    else:
+        log("Engine", "Hosted mode enabled; filesystem sentinel is disabled")
+
     if persistence is not None:
         try:
-            await persistence.ensure_project(PROJECT_DIR, include_graph_snapshot=True)
-            log("Engine", f"Supabase persistence enabled for project {PROJECT_DIR.name}")
+            bootstrap_dir = _default_project_dir()
+            if bootstrap_dir is not None and bootstrap_dir.exists():
+                await persistence.ensure_project(bootstrap_dir, include_graph_snapshot=True)
+                log("Engine", "Supabase persistence bootstrap succeeded", project_id=bootstrap_dir.name)
+            else:
+                log("Engine", "Supabase persistence enabled without a bootstrap project")
         except Exception as exc:
-            log("Engine", f"Supabase persistence bootstrap failed: {exc}")
+            logging.getLogger("Engine").exception("Supabase persistence bootstrap failed", extra={"event": "supabase_bootstrap_failed"})
 
-    log("Engine", f"ScreenWire AI engine started — project: {PROJECT_DIR}")
+    log("Engine", "ScreenWire AI engine started")
 
     yield
 
     # Shutdown
-    if ENABLE_MANIFEST_QUEUE:
+    if ENABLE_MANIFEST_QUEUE and reconciler is not None:
         await reconciler.stop()
-    sentinel.stop()
+    if sentinel is not None:
+        sentinel.stop()
     await agent_mgr.kill_all()
     if persistence is not None:
         await persistence.aclose()
@@ -763,8 +926,8 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="ScreenWire AI Engine", version="0.1.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=ALLOW_CREDENTIALS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -775,16 +938,41 @@ async def ui_route_audit_middleware(request: Request, call_next):
     path = request.url.path
     is_ui_route = path.startswith("/api/projects/")
     started = datetime.now(timezone.utc)
+    request_id = request.headers.get("x-request-id") or uuid.uuid4().hex
+    request_token = _request_id_var.set(request_id)
+    project_token: contextvars.Token[Path | None] | None = None
+    project_id = _extract_project_id_from_path(path)
+    project_dir: Path | None = None
 
     try:
+        if project_id is not None:
+            project_dir = await _ensure_project_dir_async(project_id)
+            project_token = _set_project_context(project_dir)
+        elif path.startswith("/api/project/"):
+            project_dir = await _ensure_default_project_dir_async()
+            project_token = _set_project_context(project_dir)
+    except Exception:
+        _request_id_var.reset(request_token)
+        raise
+
+    try:
+        log(
+            "HTTP",
+            "Handling request",
+            request_id=request_id,
+            method=request.method,
+            path=path,
+            query=str(request.url.query or ""),
+            project_id=project_id or (project_dir.name if project_dir is not None else None),
+        )
         response = await call_next(request)
     except Exception as exc:
         if is_ui_route:
             duration_ms = (datetime.now(timezone.utc) - started).total_seconds() * 1000.0
             append_ui_event(
-                PROJECT_DIR,
+                _current_project_dir(),
                 {
-                    "projectId": PROJECT_DIR.name,
+                    "projectId": _current_project_id(),
                     "method": request.method,
                     "path": path,
                     "gate": classify_ui_gate(path),
@@ -794,15 +982,30 @@ async def ui_route_audit_middleware(request: Request, call_next):
                     "error": str(exc),
                 },
             )
-            write_ui_phase_report(PROJECT_DIR.name, PROJECT_DIR)
+            write_ui_phase_report(_current_project_id(), _current_project_dir())
+        logging.getLogger("HTTP").exception(
+            "Request failed",
+            extra={
+                "event": "http_request_failed",
+                "request_id": request_id,
+                "project_id": project_id or (project_dir.name if project_dir is not None else None),
+                "fields": {
+                    "method": request.method,
+                    "path": path,
+                },
+            },
+        )
+        if project_token is not None:
+            _project_dir_var.reset(project_token)
+        _request_id_var.reset(request_token)
         raise
 
     if is_ui_route:
         duration_ms = (datetime.now(timezone.utc) - started).total_seconds() * 1000.0
         append_ui_event(
-            PROJECT_DIR,
+            _current_project_dir(),
             {
-                "projectId": PROJECT_DIR.name,
+                "projectId": _current_project_id(),
                 "method": request.method,
                 "path": path,
                 "gate": classify_ui_gate(path),
@@ -811,7 +1014,23 @@ async def ui_route_audit_middleware(request: Request, call_next):
                 "durationMs": round(duration_ms, 2),
             },
         )
-        write_ui_phase_report(PROJECT_DIR.name, PROJECT_DIR)
+        write_ui_phase_report(_current_project_id(), _current_project_dir())
+
+    duration_ms = (datetime.now(timezone.utc) - started).total_seconds() * 1000.0
+    response.headers["x-request-id"] = request_id
+    log(
+        "HTTP",
+        "Completed request",
+        request_id=request_id,
+        method=request.method,
+        path=path,
+        status_code=response.status_code,
+        duration_ms=round(duration_ms, 2),
+        project_id=project_id or (project_dir.name if project_dir is not None else None),
+    )
+    if project_token is not None:
+        _project_dir_var.reset(project_token)
+    _request_id_var.reset(request_token)
 
     return response
 
@@ -822,7 +1041,7 @@ async def ui_route_audit_middleware(request: Request, call_next):
 
 def _sync_shutdown() -> None:
     """atexit handler — best-effort cleanup."""
-    log("Engine", "atexit shutdown triggered")
+    return None
 
 
 atexit.register(_sync_shutdown)
@@ -850,23 +1069,32 @@ def _resolve_output(output_path: str) -> Path:
 
 
 def _assert_project(project_id: str) -> Path:
-    if project_id != PROJECT_DIR.name:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Project '{project_id}' is not active in this backend session",
-        )
-    return PROJECT_DIR
+    normalized = _sanitize_project_id(project_id)
+    project_dir = _current_project_dir()
+    if normalized != project_dir.name:
+        if SINGLE_PROJECT_DIR is not None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Project '{normalized}' is not active in this backend session",
+            )
+        candidate = (PROJECTS_ROOT / normalized).resolve()
+        if candidate.exists():
+            _set_project_context(candidate)
+            return candidate
+        raise HTTPException(status_code=404, detail=f"Project '{normalized}' was not found")
+    return project_dir
 
 
 def _workspace_snapshot(project_id: str) -> dict[str, Any]:
-    _assert_project(project_id)
-    snapshot = build_workspace_snapshot(project_id, PROJECT_DIR)
+    project_dir = _assert_project(project_id)
+    snapshot = build_workspace_snapshot(project_id, project_dir)
     workers = _local_project_workers_payload()
     snapshot["workers"] = workers
 
     active_jobs = [
         job
         for job in ui_pipeline_jobs.values()
+        if str(job.get("projectId") or project_id) == project_id
         if job.get("status") == "running"
         and (job.get("process") is None or job["process"].returncode is None)
     ]
@@ -1312,7 +1540,10 @@ def _redistribute_dialogue_frames(
 
 def _local_project_workers_payload() -> list[dict[str, Any]]:
     workers: list[dict[str, Any]] = []
+    current_project_id = _current_project_id()
     for job in ui_pipeline_jobs.values():
+        if str(job.get("projectId") or current_project_id) != current_project_id:
+            continue
         workers.append(
             {
                 "id": job["id"],
@@ -1378,9 +1609,11 @@ async def _sync_job_state_to_supabase(job: dict[str, Any]) -> None:
     if persistence is None:
         return
     try:
-        await persistence.ensure_project(PROJECT_DIR)
+        project_id = str(job.get("projectId") or _current_project_id())
+        project_dir = _assert_project(project_id)
+        await persistence.ensure_project(project_dir)
         await persistence.update_pipeline_job(
-            project_id=PROJECT_DIR.name,
+            project_id=project_id,
             job_key=str(job.get("id") or ""),
             status=str(job.get("status") or "queued"),
             progress=int(job.get("progress") or 0),
@@ -1502,7 +1735,7 @@ def _build_pipeline_job_command(target_phase: int) -> list[str]:
         sys.executable,
         str(APP_DIR / "run_pipeline.py"),
         "--project",
-        PROJECT_DIR.name,
+        _current_project_id(),
     ]
     # Post-approval catch-up should resume from the approved gate itself rather
     # than rewinding earlier "complete" phases based on reuse warnings.
@@ -1694,12 +1927,14 @@ async def _cancel_queue_job(job: dict[str, Any], *, reason: str = "Stopped by us
     persistence = get_supabase_persistence(http_client)
     if persistence is None:
         raise RuntimeError("Supabase persistence is required to cancel queued jobs.")
+    project_id = str(job.get("project_id") or job.get("projectId") or _current_project_id())
+    project_dir = _assert_project(project_id)
 
     stop_state = _queue_job_stop_phase_and_approvals(job)
     if stop_state is not None:
         start_phase, clear_approvals = stop_state
         mark_pipeline_invalidation(
-            PROJECT_DIR,
+            project_dir,
             start_phase,
             "stopped_by_user",
             source=str(job.get("job_key") or "ui_stop"),
@@ -1709,7 +1944,7 @@ async def _cancel_queue_job(job: dict[str, Any], *, reason: str = "Stopped by us
         )
 
     await persistence.update_pipeline_job(
-        project_id=PROJECT_DIR.name,
+        project_id=project_id,
         job_key=str(job.get("job_key") or ""),
         status="cancel_requested",
         progress=int(job.get("progress") or 0),
@@ -1721,6 +1956,7 @@ async def _cancel_queue_job(job: dict[str, Any], *, reason: str = "Stopped by us
         result=dict(job.get("result") or {}),
         worker_name=str(job.get("worker_name") or job.get("claimed_by") or ""),
     )
+    log("Queue", "Cancellation requested for pipeline job", project_id=project_id, job_key=str(job.get("job_key") or ""), reason=reason)
 
 
 async def _repair_video_preflight_blockers(job: dict[str, Any] | None = None) -> None:
@@ -1833,8 +2069,10 @@ async def _spawn_video_preflight_repair_job() -> dict[str, Any]:
     if existing and existing.get("status") == "running":
         return existing
 
+    project_id = _current_project_id()
     job = {
         "id": job_name,
+        "projectId": project_id,
         "name": "Video Prep Repair",
         "status": "running",
         "progress": 8,
@@ -1860,7 +2098,7 @@ async def _spawn_video_preflight_repair_job() -> dict[str, Any]:
             job["activePhase"] = 5
             job["message"] = "Video prep repaired. Resuming clip generation..."
             _schedule_job_sync(job)
-            await _ensure_pipeline_catchup(PROJECT_DIR.name)
+            await _ensure_pipeline_catchup(project_id)
         except asyncio.CancelledError:
             return
         except Exception as exc:
@@ -1909,13 +2147,16 @@ async def _ensure_pipeline_catchup(project_id: str) -> None:
             and (job.get("process") is None or job["process"].returncode is None)
         ]
     if active_jobs:
+        log("PipelineCatchup", "Skipped catch-up because active jobs are already running", project_id=project_id, active_job_count=len(active_jobs))
         return
 
     next_target = _next_pipeline_target(manifest, approvals, artifact_progress, invalidations)
     if next_target is None:
+        log("PipelineCatchup", "No pipeline catch-up needed", project_id=project_id)
         return
 
     job_name, target_phase = next_target
+    log("PipelineCatchup", "Scheduling pipeline catch-up", project_id=project_id, job_name=job_name, target_phase=target_phase)
     spawn_kwargs: dict[str, Any] = {}
     if job_name == "frame_generation":
         spawn_kwargs = {
@@ -1972,15 +2213,19 @@ async def _run_project_script(*args: str, label: str, job: dict[str, Any] | None
         stderr=asyncio.subprocess.PIPE,
         env=env,
     )
+    log("ProjectScript", "Running project script", label=label, command=cmd, project_id=_current_project_id())
     if job is not None:
         job["process"] = proc
     stdout_data, stderr_data = await proc.communicate()
     if job is not None and job.get("process") is proc:
         job["process"] = None
     if stdout_data:
-        log(label, stdout_data.decode(errors="ignore"))
+        log(label, stdout_data.decode(errors="ignore"), project_id=_current_project_id())
     if stderr_data:
-        log(label, stderr_data.decode(errors="ignore"))
+        logging.getLogger(label).warning(
+            stderr_data.decode(errors="ignore"),
+            extra={"event": label, "project_id": _current_project_id(), "request_id": _request_id_var.get()},
+        )
     if proc.returncode != 0:
         raise RuntimeError(f"{label} failed with exit {proc.returncode}")
 
@@ -2276,13 +2521,15 @@ async def _spawn_pipeline_phase_job(
     phases = [int(phase_numbers)] if isinstance(phase_numbers, int) else [int(phase) for phase in phase_numbers]
     target_phase = max(phases)
     started_at = datetime.now(timezone.utc)
+    project_id = _current_project_id()
+    project_dir = _assert_project(project_id)
 
     if _queue_execution_enabled():
         persistence = get_supabase_persistence(http_client)
         if persistence is None:
             raise RuntimeError("Supabase persistence is required for queue execution mode.")
 
-        existing_rows = await _active_queue_jobs(PROJECT_DIR.name)
+        existing_rows = await _active_queue_jobs(project_id)
         existing = next(
             (row for row in existing_rows if str(row.get("job_key") or "") == job_name),
             None,
@@ -2303,7 +2550,7 @@ async def _spawn_pipeline_phase_job(
         dirty_preproduction_phase = _dirty_preproduction_start_phase(target_phase)
         if dirty_preproduction_phase is not None:
             rewind_manifest_phases(
-                PROJECT_DIR,
+                project_dir,
                 dirty_preproduction_phase,
                 "preproduction_resume_requested",
                 source=job_name,
@@ -2312,6 +2559,7 @@ async def _spawn_pipeline_phase_job(
         active_phase, progress = _job_checkpoint_progress(target_phase)
         job = {
             "id": job_name,
+            "projectId": project_id,
             "name": display_name or _default_job_name(job_name, target_phase),
             "status": "queued",
             "progress": progress,
@@ -2329,7 +2577,7 @@ async def _spawn_pipeline_phase_job(
 
         queue_message = f"Queued: {running_message or _default_job_running_message(job_name, target_phase, int(job.get('activePhase') or active_phase))}"
         await persistence.update_pipeline_job(
-            project_id=PROJECT_DIR.name,
+            project_id=project_id,
             job_key=job_name,
             status="queued",
             progress=int(job.get("progress") or 0),
@@ -2343,6 +2591,7 @@ async def _spawn_pipeline_phase_job(
             },
             worker_name="",
         )
+        log("Queue", "Queued pipeline job", project_id=project_id, job_name=job_name, target_phase=target_phase, phases=phases)
         job["message"] = queue_message
         return job
 
@@ -2365,6 +2614,7 @@ async def _spawn_pipeline_phase_job(
 
     job = {
         "id": job_name,
+        "projectId": project_id,
         "name": display_name or _default_job_name(job_name, target_phase),
         "status": "running",
         "progress": progress,
@@ -2388,6 +2638,7 @@ async def _spawn_pipeline_phase_job(
                 await prelaunch(job)
 
             cmd = _build_pipeline_job_command(target_phase)
+            log("UIJob", "Launching local pipeline job", project_id=project_id, job_name=job_name, target_phase=target_phase, command=cmd)
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 cwd=str(APP_DIR),
@@ -2430,7 +2681,7 @@ async def _spawn_pipeline_phase_job(
             job["activePhase"] = target_phase
             job["message"] = completion_message or _default_job_complete_message(job_name, target_phase)
             _schedule_job_sync(job)
-            await _ensure_pipeline_catchup(PROJECT_DIR.name)
+            await _ensure_pipeline_catchup(project_id)
         except asyncio.CancelledError:
             return
         except Exception as exc:
@@ -2451,21 +2702,37 @@ async def _spawn_pipeline_phase_job(
 
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    return {
+        "status": "ok",
+        "mode": "hosted" if HOSTED_MODE else "single-project",
+        "executionMode": SCREENWIRE_EXECUTION_MODE,
+        "projectsRoot": str(PROJECTS_ROOT),
+    }
 
 
 @app.get("/api/project/current")
 async def get_current_project():
-    if reconciler.manifest_path.exists():
-        reconciler.manifest = json.loads(
-            reconciler.manifest_path.read_text(encoding="utf-8")
-        )
-    return reconciler.manifest
+    project_dir = await _ensure_default_project_dir_async()
+    token = _set_project_context(project_dir)
+    try:
+        if reconciler is not None and reconciler.project_dir == project_dir and reconciler.manifest_path.exists():
+            reconciler.manifest = json.loads(
+                reconciler.manifest_path.read_text(encoding="utf-8")
+            )
+            return reconciler.manifest
+        return load_json(project_dir / "project_manifest.json", {})
+    finally:
+        _project_dir_var.reset(token)
 
 
 @app.get("/api/project/file/{requested_path:path}")
 async def get_project_file(requested_path: str):
-    return await _project_file_response(PROJECT_DIR, requested_path)
+    project_dir = await _ensure_default_project_dir_async()
+    token = _set_project_context(project_dir)
+    try:
+        return await _project_file_response(project_dir, requested_path)
+    finally:
+        _project_dir_var.reset(token)
 
 
 @app.get("/api/project/thumbnail/{requested_path:path}")
@@ -2476,25 +2743,30 @@ async def get_project_thumbnail(
     fit: str = Query(default="cover"),
     format: str = Query(default="webp"),
 ):
-    normalized = Path(requested_path).as_posix().lstrip("./")
-    target = (PROJECT_DIR / normalized).resolve()
-    if (
-        not target.exists()
-        and get_supabase_persistence(http_client) is not None
-        and should_persist_rel_path(normalized)
-    ):
-        try:
-            target = await get_supabase_persistence(http_client).mirror_remote_asset_to_cache(PROJECT_DIR, normalized)  # type: ignore[union-attr]
-        except FileNotFoundError:
-            pass
-    return _thumbnail_response(
-        PROJECT_DIR if target == (PROJECT_DIR / normalized).resolve() else PROJECT_DIR / ".cache" / "supabase_mirror",
-        normalized if target == (PROJECT_DIR / normalized).resolve() else normalized,
-        width=w,
-        height=h,
-        fit=fit,
-        fmt=format,
-    )
+    project_dir = await _ensure_default_project_dir_async()
+    token = _set_project_context(project_dir)
+    try:
+        normalized = Path(requested_path).as_posix().lstrip("./")
+        target = (project_dir / normalized).resolve()
+        if (
+            not target.exists()
+            and get_supabase_persistence(http_client) is not None
+            and should_persist_rel_path(normalized)
+        ):
+            try:
+                target = await get_supabase_persistence(http_client).mirror_remote_asset_to_cache(project_dir, normalized)  # type: ignore[union-attr]
+            except FileNotFoundError:
+                pass
+        return _thumbnail_response(
+            project_dir if target == (project_dir / normalized).resolve() else project_dir / ".cache" / "supabase_mirror",
+            normalized if target == (project_dir / normalized).resolve() else normalized,
+            width=w,
+            height=h,
+            fit=fit,
+            fmt=format,
+        )
+    finally:
+        _project_dir_var.reset(token)
 
 
 @app.get("/api/projects/{project_id}/file/{requested_path:path}")
@@ -3202,7 +3474,7 @@ async def cancel_worker(worker_id: str):
         persistence = get_supabase_persistence(http_client)
         if persistence is None:
             raise HTTPException(status_code=503, detail="Queue persistence is unavailable")
-        job = await persistence.get_pipeline_job(PROJECT_DIR.name, worker_id)
+        job = await persistence.find_pipeline_job_by_key(worker_id)
         if job is None:
             raise HTTPException(status_code=404, detail=f"Worker '{worker_id}' not found")
         status = str(job.get("status") or "")
@@ -3270,9 +3542,11 @@ async def clear_project_chat(project_id: str):
 
 @app.websocket("/ws/projects/{project_id}")
 async def project_events_socket(websocket: WebSocket, project_id: str):
-    _assert_project(project_id)
+    project_dir = await _ensure_project_dir_async(project_id)
+    token = _set_project_context(project_dir)
     await websocket.accept()
     try:
+        log("WebSocket", "Accepted project websocket", project_id=project_id)
         await websocket.send_json({"type": "connected", "data": {"projectId": project_id}})
         snapshot = await _workspace_snapshot_async(project_id)
         worker_snapshot = await _project_workers_payload_async(project_id)
@@ -3307,7 +3581,16 @@ async def project_events_socket(websocket: WebSocket, project_id: str):
                     await websocket.send_json({"type": "worker_update", "data": worker})
                 last_full_push = time.monotonic()
     except WebSocketDisconnect:
+        log("WebSocket", "Project websocket disconnected", project_id=project_id)
         return
+    except Exception:
+        logging.getLogger("WebSocket").exception(
+            "Project websocket failed",
+            extra={"event": "websocket_failed", "project_id": project_id},
+        )
+        return
+    finally:
+        _project_dir_var.reset(token)
 
 
 @app.post("/api/images/tag-all")
@@ -4862,6 +5145,34 @@ async def _download_file(url: str, output: Path) -> None:
                 f.write(chunk)
     os.replace(tmp, output)
     log("Download", f"Saved {output}")
+
+
+# ---------------------------------------------------------------------------
+# Static web hosting
+# ---------------------------------------------------------------------------
+
+if WEB_DIST_DIR.exists():
+    assets_dir = WEB_DIST_DIR / "assets"
+    if assets_dir.exists():
+        app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="web-assets")
+
+    @app.get("/", include_in_schema=False)
+    async def serve_root_index():
+        return FileResponse(WEB_DIST_DIR / "index.html")
+
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def serve_web_app(full_path: str):
+        normalized = str(full_path or "").lstrip("/")
+        if (
+            normalized.startswith(("api/", "internal/", "ws/", "health"))
+            or normalized == "health"
+        ):
+            raise HTTPException(status_code=404, detail="Route not found")
+        candidate = (WEB_DIST_DIR / normalized).resolve()
+        if str(candidate).startswith(str(WEB_DIST_DIR)) and candidate.exists() and candidate.is_file():
+            return FileResponse(candidate)
+        return FileResponse(WEB_DIST_DIR / "index.html")
 
 
 # ---------------------------------------------------------------------------

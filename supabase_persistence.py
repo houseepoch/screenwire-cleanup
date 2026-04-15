@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import mimetypes
 import os
 from dataclasses import dataclass
@@ -12,6 +13,10 @@ from typing import Any
 from urllib.parse import quote
 
 import httpx
+
+from runtime_logging import configure_logging
+
+configure_logging("screenwire-runtime")
 
 SCREENWIRE_PROJECTS_TABLE = "screenwire_projects"
 SCREENWIRE_PROJECT_MEMBERSHIPS_TABLE = "screenwire_project_memberships"
@@ -513,6 +518,16 @@ class SupabasePersistence:
         )
         return rows[0] if rows else None
 
+    async def find_pipeline_job_by_key(self, job_key: str) -> dict[str, Any] | None:
+        rows = await self.select_rows(
+            SCREENWIRE_PIPELINE_JOBS_TABLE,
+            filters={
+                "job_key": f"eq.{job_key}",
+                "limit": "1",
+            },
+        )
+        return rows[0] if rows else None
+
     async def update_pipeline_job(
         self,
         *,
@@ -590,7 +605,19 @@ def schedule_graph_persistence(
             )
             await persistence.upsert_graph_snapshot(project_dir, reason=operation)
         except Exception as exc:
-            print(f"[SupabasePersistence] graph persistence failed for {project_dir.name}:{node_type}:{node_id}: {exc}")
+            logging.getLogger("SupabasePersistence").exception(
+                "graph persistence failed",
+                extra={
+                    "event": "graph_persistence_failed",
+                    "project_id": project_dir.name,
+                    "fields": {
+                        "node_type": node_type,
+                        "node_id": node_id,
+                        "operation": operation,
+                        "actor": actor,
+                    },
+                },
+            )
 
     try:
         loop = asyncio.get_running_loop()

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import socket
 import sys
@@ -10,6 +11,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from runtime_logging import configure_logging, log_event
 
 APP_DIR = Path(os.getenv("SCREENWIRE_APP_ROOT", Path(__file__).resolve().parents[1])).resolve()
 if str(APP_DIR) not in sys.path:
@@ -18,6 +20,7 @@ if str(APP_DIR) not in sys.path:
 PROJECTS_DIR = Path(os.getenv("SCREENWIRE_PROJECTS_ROOT", APP_DIR / "projects")).resolve()
 POLL_INTERVAL_SECONDS = float(os.getenv("SCREENWIRE_WORKER_POLL_SECONDS", "2"))
 WORKER_NAME = os.getenv("SCREENWIRE_WORKER_NAME") or f"{socket.gethostname()}:{os.getpid()}"
+LOGGER = configure_logging("screenwire-worker")
 
 from supabase_persistence import get_supabase_persistence
 
@@ -62,6 +65,33 @@ async def _current_job_row(persistence, project_id: str, job_key: str) -> dict |
     return await persistence.get_pipeline_job(project_id, job_key)
 
 
+async def _stream_subprocess_output(
+    stream: asyncio.StreamReader | None,
+    *,
+    level: int,
+    event: str,
+    project_id: str,
+    job_key: str,
+) -> None:
+    if stream is None:
+        return
+    while True:
+        line = await stream.readline()
+        if not line:
+            return
+        text = line.decode(errors="ignore").rstrip()
+        if not text:
+            continue
+        log_event(
+            LOGGER,
+            level,
+            event,
+            project_id=project_id,
+            job_key=job_key,
+            line=text,
+        )
+
+
 async def run_claimed_job(job: dict) -> None:
     persistence = get_supabase_persistence()
     if persistence is None:
@@ -73,12 +103,15 @@ async def run_claimed_job(job: dict) -> None:
     if not project_id or not job_key:
         return
 
+    log_event(LOGGER, logging.INFO, "worker_job_start", project_id=project_id, job_key=job_key, target_phase=target_phase)
     project_dir = await persistence.hydrate_project_tree(project_id, PROJECTS_DIR)
+    log_event(LOGGER, logging.INFO, "worker_project_hydrated", project_id=project_id, job_key=job_key, project_dir=str(project_dir))
     env = dict(os.environ)
     env["SCREENWIRE_APP_ROOT"] = str(APP_DIR)
     env["SCREENWIRE_PROJECTS_ROOT"] = str(PROJECTS_DIR)
 
     command = _build_pipeline_command(project_id, target_phase)
+    log_event(LOGGER, logging.INFO, "worker_pipeline_spawn", project_id=project_id, job_key=job_key, command=command)
     proc = await asyncio.create_subprocess_exec(
         *command,
         cwd=str(APP_DIR),
@@ -87,9 +120,27 @@ async def run_claimed_job(job: dict) -> None:
         stderr=asyncio.subprocess.PIPE,
     )
 
-    communicate_task = asyncio.create_task(proc.communicate())
+    stdout_task = asyncio.create_task(
+        _stream_subprocess_output(
+            proc.stdout,
+            level=logging.INFO,
+            event="worker_pipeline_stdout",
+            project_id=project_id,
+            job_key=job_key,
+        )
+    )
+    stderr_task = asyncio.create_task(
+        _stream_subprocess_output(
+            proc.stderr,
+            level=logging.WARNING,
+            event="worker_pipeline_stderr",
+            project_id=project_id,
+            job_key=job_key,
+        )
+    )
+    wait_task = asyncio.create_task(proc.wait())
     try:
-        while not communicate_task.done():
+        while not wait_task.done():
             current = await _current_job_row(persistence, project_id, job_key)
             if current and bool(current.get("cancel_requested")):
                 proc.terminate()
@@ -109,6 +160,7 @@ async def run_claimed_job(job: dict) -> None:
                     cancel_requested=True,
                     worker_name=WORKER_NAME,
                 )
+                log_event(LOGGER, logging.WARNING, "worker_job_cancelled", project_id=project_id, job_key=job_key)
                 return
 
             active_phase, progress, message = _project_manifest_progress(project_dir, target_phase)
@@ -128,11 +180,8 @@ async def run_claimed_job(job: dict) -> None:
             )
             await asyncio.sleep(2)
 
-        stdout_data, stderr_data = await communicate_task
-        if stdout_data:
-            print(stdout_data.decode(errors="ignore"))
-        if stderr_data:
-            print(stderr_data.decode(errors="ignore"), file=sys.stderr)
+        await wait_task
+        await asyncio.gather(stdout_task, stderr_task)
 
         if proc.returncode == 0:
             await persistence.sync_project_tree(project_dir)
@@ -147,6 +196,7 @@ async def run_claimed_job(job: dict) -> None:
                 target_phase=target_phase,
                 worker_name=WORKER_NAME,
             )
+            log_event(LOGGER, logging.INFO, "worker_job_complete", project_id=project_id, job_key=job_key, return_code=proc.returncode)
         else:
             await persistence.sync_project_tree(project_dir)
             await persistence.update_pipeline_job(
@@ -159,10 +209,13 @@ async def run_claimed_job(job: dict) -> None:
                 target_phase=target_phase,
                 worker_name=WORKER_NAME,
             )
+            log_event(LOGGER, logging.ERROR, "worker_job_failed", project_id=project_id, job_key=job_key, return_code=proc.returncode)
     finally:
         if proc.returncode is None:
             proc.kill()
             await proc.wait()
+        stdout_task.cancel()
+        stderr_task.cancel()
 
 
 async def main() -> None:
@@ -172,14 +225,29 @@ async def main() -> None:
         raise SystemExit("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required.")
 
     PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
-    print(f"[supabase-worker] starting as {WORKER_NAME}")
+    log_event(
+        LOGGER,
+        logging.INFO,
+        "worker_start",
+        worker_name=WORKER_NAME,
+        projects_root=str(PROJECTS_DIR),
+        poll_interval_seconds=POLL_INTERVAL_SECONDS,
+    )
 
     while True:
         job = await persistence.claim_pipeline_job(WORKER_NAME)
         if not job:
             await asyncio.sleep(POLL_INTERVAL_SECONDS)
             continue
-        print(f"[supabase-worker] claimed {job.get('job_key')} for {job.get('project_id')}")
+        log_event(
+            LOGGER,
+            logging.INFO,
+            "worker_job_claimed",
+            worker_name=WORKER_NAME,
+            job_key=str(job.get("job_key") or ""),
+            project_id=str(job.get("project_id") or ""),
+            target_phase=int(job.get("target_phase") or 0),
+        )
         try:
             await run_claimed_job(job)
         except Exception as exc:
@@ -196,7 +264,17 @@ async def main() -> None:
                     target_phase=int(job.get("target_phase") or 0),
                     worker_name=WORKER_NAME,
                 )
-            print(f"[supabase-worker] job failed: {exc}", file=sys.stderr)
+            LOGGER.exception(
+                "Queued worker job failed",
+                extra={
+                    "event": "worker_job_exception",
+                    "project_id": project_id or None,
+                    "fields": {
+                        "job_key": job_key,
+                        "worker_name": WORKER_NAME,
+                    },
+                },
+            )
 
 
 if __name__ == "__main__":
