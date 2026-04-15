@@ -59,15 +59,7 @@ def _build_pipeline_command(project_id: str, target_phase: int) -> list[str]:
 
 
 async def _current_job_row(persistence, project_id: str, job_key: str) -> dict | None:
-    rows = await persistence.select_rows(
-        "pipeline_jobs",
-        filters={
-            "project_id": f"eq.{project_id}",
-            "job_key": f"eq.{job_key}",
-            "limit": "1",
-        },
-    )
-    return rows[0] if rows else None
+    return await persistence.get_pipeline_job(project_id, job_key)
 
 
 async def run_claimed_job(job: dict) -> None:
